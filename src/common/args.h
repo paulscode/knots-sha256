@@ -26,6 +26,7 @@ class ArgsManager;
 
 extern const char * const BITCOIN_CONF_FILENAME;
 extern const char * const BITCOIN_SETTINGS_FILENAME;
+extern const char * const BITCOIN_RW_CONF_FILENAME;
 
 // Return true if -datadir option points to a valid directory or is not specified.
 bool CheckDataDirOption(const ArgsManager& args);
@@ -103,6 +104,8 @@ std::optional<Int> SettingTo(const common::SettingsValue&);
 bool SettingToBool(const common::SettingsValue&, bool);
 std::optional<bool> SettingToBool(const common::SettingsValue&);
 
+void ModifyRWConfigStream(std::istream& stream_in, std::ostream& stream_out, const std::map<std::string, std::string>& settings_to_change);
+
 class ArgsManager
 {
 public:
@@ -150,6 +153,7 @@ private:
     bool m_accept_any_command GUARDED_BY(cs_args){true};
     std::list<SectionInfo> m_config_sections GUARDED_BY(cs_args);
     std::optional<fs::path> m_config_path GUARDED_BY(cs_args);
+    mutable std::optional<fs::path> m_rwconf_path GUARDED_BY(cs_args);
     mutable fs::path m_cached_blocks_path GUARDED_BY(cs_args);
     mutable fs::path m_cached_datadir_path GUARDED_BY(cs_args);
     mutable fs::path m_cached_network_datadir_path GUARDED_BY(cs_args);
@@ -195,7 +199,13 @@ public:
      */
     fs::path GetConfigFilePath() const EXCLUSIVE_LOCKS_REQUIRED(!cs_args);
     void SetConfigFilePath(fs::path) EXCLUSIVE_LOCKS_REQUIRED(!cs_args);
+    fs::path GetRWConfigFilePath() const EXCLUSIVE_LOCKS_REQUIRED(!cs_args);
     [[nodiscard]] bool ReadConfigFiles(std::string& error, bool ignore_invalid_keys = false) EXCLUSIVE_LOCKS_REQUIRED(!cs_args);
+
+    void ModifyRWConfigFile(const std::map<std::string, std::string>& settings_to_change) EXCLUSIVE_LOCKS_REQUIRED(!cs_args);
+    void ModifyRWConfigFile(const std::string& setting_to_change, const std::string& new_value) EXCLUSIVE_LOCKS_REQUIRED(!cs_args);
+    //! Move bitcoin_rw.conf aside to bitcoin_rw.conf.reset. Returns false (and keeps the file) if that fails.
+    bool EraseRWConfigFile() EXCLUSIVE_LOCKS_REQUIRED(!cs_args);
 
     /**
      * Log warnings for options in m_section_only_args when
@@ -456,6 +466,7 @@ private:
     common::SettingsValue GetSetting_(const std::string& arg) const EXCLUSIVE_LOCKS_REQUIRED(cs_args);
     std::optional<unsigned int> GetArgFlags_(const std::string& name) const EXCLUSIVE_LOCKS_REQUIRED(cs_args);
     fs::path GetPathArg_(std::string arg, const fs::path& default_value = {}) const EXCLUSIVE_LOCKS_REQUIRED(cs_args);
+    fs::path GetRWConfigFilePath_() const EXCLUSIVE_LOCKS_REQUIRED(cs_args);
 
     /**
      * Get data directory path

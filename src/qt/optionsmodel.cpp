@@ -278,7 +278,7 @@ static void BackupSettings(const fs::path& filename, const QSettings& src)
     CopySettings(dst, src);
 }
 
-void OptionsModel::Reset()
+bool OptionsModel::Reset()
 {
     // Backup and reset settings.json
     node().resetSettings();
@@ -292,6 +292,9 @@ void OptionsModel::Reset()
     QString dataDir = GUIUtil::getDefaultDataDirectory();
     dataDir = settings.value("strDataDir", dataDir).toString();
 
+    // Remove rw config file
+    const bool rwconf_reset{gArgs.EraseRWConfigFile()};
+
     // Remove all entries from our QSettings object
     settings.clear();
 
@@ -304,6 +307,8 @@ void OptionsModel::Reset()
     // default setting for OptionsModel::StartAtStartup - disabled
     if (GUIUtil::GetStartOnSystemStartup())
         GUIUtil::SetStartOnSystemStartup(false);
+
+    return rwconf_reset;
 }
 
 int OptionsModel::rowCount(const QModelIndex & parent) const
