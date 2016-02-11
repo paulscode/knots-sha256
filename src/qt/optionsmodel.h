@@ -86,7 +86,8 @@ public:
     static QFont getFontForChoice(const FontChoice& fc);
 
     bool Init(bilingual_str& error);
-    void Reset();
+    //! Returns false if bitcoin_rw.conf could not be reset (it is then kept unchanged).
+    bool Reset();
 
     int rowCount(const QModelIndex & parent = QModelIndex()) const override;
     QVariant data(const QModelIndex & index, int role = Qt::DisplayRole) const override;
