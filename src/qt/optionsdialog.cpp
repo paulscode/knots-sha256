@@ -28,6 +28,7 @@
 #include <QDataWidgetMapper>
 #include <QDir>
 #include <QFontDialog>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIntValidator>
 #include <QLabel>
@@ -38,6 +39,7 @@
 #include <QStringList>
 #include <QSystemTrayIcon>
 #include <QTimer>
+#include <QVBoxLayout>
 #include <QWidget>
 
 void OptionsDialog::FixTabOrder(QWidget * const o)
