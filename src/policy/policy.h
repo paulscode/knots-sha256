@@ -26,9 +26,9 @@ struct MemPoolOptions;
 };
 
 /** Default for -blockmaxsize, which controls the maximum size of block the mining code will create **/
-static const unsigned int DEFAULT_BLOCK_MAX_SIZE = MAX_BLOCK_SERIALIZED_SIZE;
+static const unsigned int DEFAULT_BLOCK_MAX_SIZE = 300000;
 /** Default for -blockmaxweight, which controls the range of block weights the mining code will create **/
-static constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{MAX_BLOCK_WEIGHT};
+static constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{DEFAULT_BLOCK_MAX_SIZE * WITNESS_SCALE_FACTOR};
 /** Default for BlockCreateOptions.block_reserved_size **/
 static constexpr unsigned int DEFAULT_BLOCK_RESERVED_SIZE{1000};
 /** Default for -blockreservedweight **/
@@ -80,7 +80,7 @@ static constexpr bool DEFAULT_PERMITBAREANCHOR{true};
 /** Default for -permitbarepubkey */
 static constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
 /** Default for -permitbaremultisig */
-static constexpr bool DEFAULT_PERMIT_BAREMULTISIG{true};
+static constexpr bool DEFAULT_PERMIT_BAREMULTISIG{false};
 /** Default for -rejectparasites */
 static constexpr bool DEFAULT_REJECT_PARASITES{false};
 /** The maximum number of witness stack items in a standard P2WSH script */
@@ -115,13 +115,14 @@ static constexpr unsigned int DEFAULT_DESCENDANT_LIMIT{25};
 /** Default for -datacarrier */
 static const bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
- * Default setting for -datacarriersize in vbytes.
+ * Default setting for -datacarriersize. 40 bytes of data, +1 for OP_RETURN,
+ * +1 for the pushdata opcode.
  */
 /** Default for -permitbaredatacarrier */
 static const bool DEFAULT_PERMITBAREDATACARRIER{true};
 /** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
 static constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
-static const unsigned int MAX_OP_RETURN_RELAY = MAX_STANDARD_TX_WEIGHT / WITNESS_SCALE_FACTOR;
+static constexpr unsigned int MAX_OP_RETURN_RELAY{42};
 /** Default for -datacarrierfullcount */
 static constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{false};
 /**
