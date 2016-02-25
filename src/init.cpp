@@ -173,6 +173,7 @@ using util::ReplaceAll;
 using util::ToString;
 using util::TrimStringView;
 
+static constexpr bool DEFAULT_COREPOLICY{false};
 static constexpr bool DEFAULT_PROXYRANDOMIZE{true};
 static constexpr bool DEFAULT_REST_ENABLE{false};
 static constexpr bool DEFAULT_I2P_ACCEPT_INCOMING{true};
@@ -543,6 +544,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-coinstatsindex", strprintf("Maintain coinstats index used by the gettxoutsetinfo RPC (default: %u)", DEFAULT_COINSTATSINDEX), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-conf=<file>", strprintf("Specify path to read-only configuration file. Relative paths will be prefixed by datadir location (only useable from command line, not configuration file) (default: %s)", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-confrw=<file>", strprintf("Specify read/write configuration file. Relative paths will be prefixed by the network-specific datadir location (default: %s)", BITCOIN_RW_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-corepolicy", strprintf("Use Bitcoin Core policy defaults (default: %u)", DEFAULT_COREPOLICY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-datadir=<dir>", "Specify data directory", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbbatchsize", strprintf("Maximum database write batch size in bytes (default: %u)", DEFAULT_DB_CACHE_BATCH), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbcache=<n>", strprintf("Maximum database cache size <n> MiB (minimum %d, default: %d). Make sure you have enough RAM. In addition, unused memory allocated to the mempool is shared with this cache (see -maxmempool).", MIN_DBCACHE_BYTES / 1_MiB, node::GetDefaultDBCache() / 1_MiB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -912,6 +914,17 @@ void InitParameterInteraction(ArgsManager& args)
 {
     // Before any SoftSetArg so we get the actual user-set value
     g_pcp_warn_for_unauthorized = args.GetBoolArg("-natpmp", false);
+    if (args.GetBoolArg("-corepolicy", DEFAULT_COREPOLICY)) {
+        args.SoftSetArg("-bytespersigopstrict", "0");
+        args.SoftSetArg("-permitbaremultisig", "1");
+        args.SoftSetArg("-datacarriersize", "100000");
+        args.SoftSetArg("-datacarriermultiple", "1");
+
+        args.SoftSetArg("-spkreuse", "allow");
+        args.SoftSetArg("-blockmaxsize", "4000000");
+        args.SoftSetArg("-blockmaxweight", "4000000");
+    }
+
 
     // when specifying an explicit binding address, you want to listen on it
     // even when -connect or -proxy is specified

@@ -30,6 +30,7 @@
 #include <QFontDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QIntValidator>
 #include <QLabel>
 #include <QLocale>
