@@ -288,6 +288,7 @@ BASE_SCRIPTS = [
     'mempool_accept.py',
     'p2p_addr_selfannouncement.py',
     'mempool_expiry.py',
+    'rpc_sort_multisig.py',
     'wallet_importdescriptors.py',
     'wallet_crosschain.py',
     'mining_basic.py',
