@@ -16,6 +16,7 @@ add_library(bitcoin_util STATIC EXCLUDE_FROM_ALL
   fs_helpers.cpp
   hasher.cpp
   mempressure.cpp
+  ioprio.cpp
   moneystr.cpp
   rbf.cpp
   readwritefile.cpp
@@ -38,13 +39,6 @@ add_library(bitcoin_util STATIC EXCLUDE_FROM_ALL
   ../support/lockedpool.cpp
   ../sync.cpp
 )
-
-if(HAVE_IOPRIO_SYSCALL)
-  target_sources(bitcoin_util
-    PRIVATE
-      ioprio.cpp
-  )
-endif()
 
 target_link_libraries(bitcoin_util
   PRIVATE
