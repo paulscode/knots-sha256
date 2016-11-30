@@ -1101,6 +1101,8 @@ BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& p
         return util::Unexpected{ReadRawError::IO};
     }
 
+    if (lowprio) filein.SetIdlePriority();
+
     try {
         MessageStartChars blk_start;
         unsigned int blk_size;

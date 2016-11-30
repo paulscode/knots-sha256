@@ -444,6 +444,8 @@ public:
     /** Wrapper around FileCommit(). */
     bool Commit();
 
+    void SetIdlePriority();
+
     /** Wrapper around TruncateFile(). */
     bool Truncate(uint64_t size);
 
