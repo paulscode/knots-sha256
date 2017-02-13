@@ -285,7 +285,7 @@ public:
     std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> GetChildren(const CTxMemPoolEntry &entry) const;
     std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> GetParents(const CTxMemPoolEntry &entry) const;
 
-    SPKStates_t mapUsedSPK;
+    std::map<uint160, std::pair<const CTransaction *, const CTransaction *>> mapUsedSPK;
 
 private:
     std::vector<indexed_transaction_set::const_iterator> GetSortedScoreWithTopology() const EXCLUSIVE_LOCKS_REQUIRED(cs);
