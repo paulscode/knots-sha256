@@ -180,6 +180,7 @@ BASE_SCRIPTS = [
     'interface_bitcoin_cli.py',
     'feature_bind_extra.py',
     'mempool_resurrect.py',
+    'wallet_sweepprivkeys.py',
     'wallet_txn_doublespend.py --mineblock',
     'tool_bitcoin_chainstate.py',
     'tool_wallet.py',
