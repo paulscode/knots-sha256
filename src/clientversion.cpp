@@ -9,7 +9,9 @@
 #include <util/string.h>
 #include <util/translation.h>
 
+#include <common/args.h>
 #include <tinyformat.h>
+#include <util/time.h>
 
 #include <string>
 #include <vector>
@@ -100,4 +102,13 @@ std::string LicenseInfo()
            _("This is experimental software.") + "\n" +
            strprintf(_("Distributed under the MIT software license, see the accompanying file %s or %s"), "COPYING", "<https://opensource.org/license/MIT>").translated +
            "\n";
+}
+
+bool IsThisSoftwareExpired(int64_t nTime)
+{
+    int64_t nSoftwareExpiry = gArgs.GetIntArg("-softwareexpiry", DEFAULT_SOFTWARE_EXPIRY);
+    if (nSoftwareExpiry <= 0) {
+        nSoftwareExpiry = std::numeric_limits<int64_t>::max();
+    }
+    return (nTime > nSoftwareExpiry);
 }

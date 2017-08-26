@@ -168,6 +168,11 @@ class TestNode():
                 self.ipc_socket_path = self.ipc_tmp_dir / "node.sock"
                 self.args.append(f"-ipcbind=unix:{self.ipc_socket_path}")
 
+        if self.version is None:
+            self.args += [
+                "-softwareexpiry=0",
+            ]
+
         if self.version_is_at_least(190000):
             self.args.append("-logthreadnames")
         if self.version_is_at_least(219900):
