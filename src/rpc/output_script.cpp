@@ -169,6 +169,9 @@ static RPCHelpMan createmultisig()
             pubkeys.reserve(keys.size());
             for (unsigned int i = 0; i < keys.size(); ++i) {
                 pubkeys.push_back(HexToPubKey(keys[i].get_str()));
+                if (sort && !pubkeys.back().IsCompressed()) {
+                    throw std::runtime_error(strprintf("Compressed key required for BIP67: %s", keys[i].get_str()));
+                }
             }
 
             FlatSigningProvider keystore;
