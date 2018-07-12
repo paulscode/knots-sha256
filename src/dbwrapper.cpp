@@ -4,6 +4,7 @@
 
 #include <dbwrapper.h>
 
+#include <leveldb/c.h>
 #include <leveldb/cache.h>
 #include <leveldb/db.h>
 #include <leveldb/env.h>
@@ -15,6 +16,7 @@
 #include <leveldb/status.h>
 #include <leveldb/write_batch.h>
 #include <logging.h>
+#include <node/interface_ui.h>
 #include <random.h>
 #include <serialize.h>
 #include <span.h>
@@ -24,6 +26,7 @@
 #include <util/log.h>
 #include <util/obfuscation.h>
 #include <util/strencodings.h>
+#include <util/translation.h>
 
 #include <algorithm>
 #include <cassert>
@@ -51,6 +54,22 @@ static void HandleError(const leveldb::Status& status)
     LogError("%s", errmsg);
     LogInfo("You can use -debug=leveldb to get more complete diagnostic messages");
     throw dbwrapper_error(errmsg);
+}
+
+bool dbwrapper_SanityCheck()
+{
+    unsigned long header_version = (leveldb::kMajorVersion << 16) | leveldb::kMinorVersion;
+    unsigned long library_version = (leveldb_major_version() << 16) | leveldb_minor_version();
+
+    if (header_version != library_version) {
+        InitError(Untranslated(strprintf("Compiled with LevelDB %d.%d, but linked with LevelDB %d.%d (incompatible).",
+            leveldb::kMajorVersion, leveldb::kMinorVersion,
+            leveldb_major_version(), leveldb_minor_version()
+        )));
+        return false;
+    }
+
+    return true;
 }
 
 class CBitcoinLevelDBLogger : public leveldb::Logger {
