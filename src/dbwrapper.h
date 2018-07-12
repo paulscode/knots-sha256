@@ -24,6 +24,8 @@
 #include <stdexcept>
 #include <string>
 
+bool dbwrapper_SanityCheck();
+
 namespace leveldb {
 class Env;
 } // namespace leveldb
