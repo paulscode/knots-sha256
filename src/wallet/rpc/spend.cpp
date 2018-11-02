@@ -508,6 +508,7 @@ CreatedTransactionResult FundTransaction(CWallet& wallet, const CMutableTransact
                     {"conf_target", UniValueType(UniValue::VNUM)},
                     {"estimate_mode", UniValueType(UniValue::VSTR)},
                     {"minconf", UniValueType(UniValue::VNUM)},
+                    {"min_conf", UniValueType(UniValue::VNUM)},
                     {"maxconf", UniValueType(UniValue::VNUM)},
                     {"input_weights", UniValueType(UniValue::VARR)},
                     {"max_tx_weight", UniValueType(UniValue::VNUM)},
@@ -569,6 +570,13 @@ CreatedTransactionResult FundTransaction(CWallet& wallet, const CMutableTransact
                 coinControl.m_feerate = CFeeRate(AmountFromValue(options["feeRate"]));
                 coinControl.fOverrideFeeRate = true;
             }
+            if (options.exists("min_conf")) {
+                if (options.exists("minconf")) {
+                    throw JSONRPCError(RPC_INVALID_PARAMETER, "min_conf and minconf options should not both be set. Use minconf (min_conf is deprecated).");
+                }
+                coinControl.m_min_depth = options["min_conf"].getInt<int>();
+            }
+
 
             if (options.exists("replaceable")) {
                 coinControl.m_signal_bip125_rbf = options["replaceable"].get_bool();
