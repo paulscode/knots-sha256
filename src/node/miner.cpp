@@ -114,15 +114,26 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate,
           if (auto result{CheckMiningOptions(options, /*use_argnames=*/false)}; !result) {
               throw std::runtime_error(util::ErrorString(result).original);
           }
-          return FlattenMiningOptions(std::move(options));
+          auto flat_options{FlattenMiningOptions(std::move(options))};
+          // Limit size to between 1K and MAX_BLOCK_SERIALIZED_SIZE-1K for sanity:
+          flat_options.block_max_size = std::clamp<uint64_t>(*flat_options.block_max_size, 1000, MAX_BLOCK_SERIALIZED_SIZE - 1000);
+          return flat_options;
       }()}
 {
+    // Whether we need to account for byte usage (in addition to weight usage)
+    fNeedSizeAccounting = (*m_options.block_max_size < MAX_BLOCK_SERIALIZED_SIZE - 1000);
 }
 
 void BlockAssembler::resetBlock()
 {
     // Reserve space for fixed-size block header, txs count, and coinbase tx.
+    nBlockSize = 1000;
     nBlockWeight = *Assert(m_options.block_reserved_weight);
+    if (fNeedSizeAccounting) {
+        m_last_block_size = nBlockSize;
+    } else {
+        m_last_block_size = std::nullopt;
+    }
     nBlockSigOpsCost = m_options.coinbase_output_max_additional_sigops;
 
     // These counters do not include coinbase tx
@@ -169,6 +180,11 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
     m_last_block_num_txs = nBlockTx;
     m_last_block_weight = nBlockWeight;
+    if (fNeedSizeAccounting) {
+        m_last_block_size = nBlockSize;
+    } else {
+        m_last_block_size = std::nullopt;
+    }
 
     // Create coinbase transaction.
     CMutableTransaction coinbaseTx;
@@ -227,7 +243,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         coinbase_tx.required_outputs.push_back(final_coinbase->vout[witness_index]);
     }
 
-    LogDebug(BCLog::MINING, "CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops %d\n", GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
+    uint64_t nSerializeSize = GetSerializeSize(TX_WITH_WITNESS(*pblock));
+    LogDebug(BCLog::MINING, "CreateNewBlock(): total size: %u block weight: %u txs: %u fees: %ld sigops %d\n", nSerializeSize, GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
 
     // Fill in header
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
@@ -267,9 +284,17 @@ bool BlockAssembler::TestChunkBlockLimits(int64_t chunk_weight, int64_t chunk_si
 // - transaction finality (locktime)
 bool BlockAssembler::TestChunkTransactions(const std::vector<CTxMemPoolEntryRef>& txs) const
 {
+    uint64_t nPotentialBlockSize = nBlockSize; // only used with fNeedSizeAccounting
     for (const auto tx : txs) {
         if (!IsFinalTx(tx.get().GetTx(), nHeight, m_lock_time_cutoff)) {
             return false;
+        }
+        if (fNeedSizeAccounting) {
+            uint64_t nTxSize = ::GetSerializeSize(TX_WITH_WITNESS(tx.get().GetTx()));
+            if (nPotentialBlockSize + nTxSize >= *m_options.block_max_size) {
+                return false;
+            }
+            nPotentialBlockSize += nTxSize;
         }
     }
     return true;
@@ -280,6 +305,9 @@ void BlockAssembler::AddToBlock(const CTxMemPoolEntry& entry)
     pblocktemplate->block.vtx.emplace_back(entry.GetSharedTx());
     pblocktemplate->vTxFees.push_back(entry.GetFee());
     pblocktemplate->vTxSigOpsCost.push_back(entry.GetSigOpCost());
+    if (fNeedSizeAccounting) {
+        nBlockSize += ::GetSerializeSize(TX_WITH_WITNESS(entry.GetTx()));
+    }
     nBlockWeight += entry.GetTxWeight();
     ++nBlockTx;
     nBlockSigOpsCost += entry.GetSigOpCost();
@@ -334,6 +362,10 @@ void BlockAssembler::addChunks()
             if (nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockWeight +
                     BLOCK_FULL_ENOUGH_WEIGHT_DELTA > *m_options.block_max_weight) {
                 // Give up if we're close to full and haven't succeeded in a while
+                return;
+            }
+            if (fNeedSizeAccounting && nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockSize > *m_options.block_max_size - 1000) {
+                // Same, by serialized size when -blockmaxsize is in use
                 return;
             }
         } else {

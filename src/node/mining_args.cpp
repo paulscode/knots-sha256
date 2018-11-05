@@ -16,6 +16,7 @@
 #include <util/result.h>
 #include <util/translation.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -73,6 +74,15 @@ Result<BlockCreateOptions> ReadMiningArgs(const ArgsManager& args)
 
     options.block_reserved_weight = args.GetArg<uint64_t>("-blockreservedweight");
     options.block_max_weight = args.GetArg<uint64_t>("-blockmaxweight");
+    options.block_max_size = args.GetArg<uint64_t>("-blockmaxsize");
+    // If neither -blockmaxsize or -blockmaxweight is given, limit to DEFAULT_BLOCK_MAX_*
+    // If only one is given, only restrict the specified resource.
+    // If both are given, restrict both.
+    if (options.block_max_weight && !options.block_max_size) {
+        options.block_max_size = MAX_BLOCK_SERIALIZED_SIZE;
+    } else if (options.block_max_size && !options.block_max_weight) {
+        options.block_max_weight = std::min<uint64_t>(*options.block_max_size * WITNESS_SCALE_FACTOR, MAX_BLOCK_WEIGHT);
+    }
 
     if (auto result{CheckMiningOptions(options, /*use_argnames=*/true)}; !result) return Error{util::ErrorString(result)};
     return options;
@@ -84,6 +94,7 @@ BlockCreateOptions FlattenMiningOptions(BlockCreateOptions options)
     if (!options.print_modified_fee) options.print_modified_fee = DEFAULT_PRINT_MODIFIED_FEE;
     if (!options.block_reserved_weight) options.block_reserved_weight = DEFAULT_BLOCK_RESERVED_WEIGHT;
     if (!options.block_max_weight) options.block_max_weight = DEFAULT_BLOCK_MAX_WEIGHT;
+    if (!options.block_max_size) options.block_max_size = DEFAULT_BLOCK_MAX_SIZE;
     return options;
 }
 
@@ -93,6 +104,7 @@ BlockCreateOptions MergeMiningOptions(BlockCreateOptions x, const BlockCreateOpt
     if (!x.print_modified_fee) x.print_modified_fee = y.print_modified_fee;
     if (!x.block_reserved_weight) x.block_reserved_weight = y.block_reserved_weight;
     if (!x.block_max_weight) x.block_max_weight = y.block_max_weight;
+    if (!x.block_max_size) x.block_max_size = y.block_max_size;
     return x;
 }
 
