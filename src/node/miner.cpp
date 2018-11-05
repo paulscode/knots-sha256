@@ -84,6 +84,8 @@ static BlockAssembler::Options ClampOptions(BlockAssembler::Options options)
     // Limit weight to between block_reserved_weight and MAX_BLOCK_WEIGHT for sanity:
     // block_reserved_weight can safely exceed -blockmaxweight, but the rest of the block template will be empty.
     options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, *options.block_reserved_weight, MAX_BLOCK_WEIGHT);
+    // Limit size to between 1K and MAX_BLOCK_SERIALIZED_SIZE-1K for sanity:
+    options.nBlockMaxSize = std::clamp<size_t>(options.nBlockMaxSize, 1000, MAX_BLOCK_SERIALIZED_SIZE - 1000);
     return options;
 }
 
@@ -93,12 +95,28 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool
       m_chainstate{chainstate},
       m_options{ClampOptions(options)}
 {
+    // Whether we need to account for byte usage (in addition to weight usage)
+    fNeedSizeAccounting = (options.nBlockMaxSize < MAX_BLOCK_SERIALIZED_SIZE - 1000);
 }
 
 void ApplyArgsManOptions(const ArgsManager& args, BlockAssembler::Options& options)
 {
     // Block resource limits
-    options.nBlockMaxWeight = args.GetIntArg("-blockmaxweight", options.nBlockMaxWeight);
+    // If neither -blockmaxsize or -blockmaxweight is given, limit to DEFAULT_BLOCK_MAX_*
+    // If only one is given, only restrict the specified resource.
+    // If both are given, restrict both.
+    bool fWeightSet = false;
+    if (args.IsArgSet("-blockmaxweight")) {
+        options.nBlockMaxWeight = args.GetIntArg("-blockmaxweight", DEFAULT_BLOCK_MAX_WEIGHT);
+        options.nBlockMaxSize = MAX_BLOCK_SERIALIZED_SIZE;
+        fWeightSet = true;
+    }
+    if (args.IsArgSet("-blockmaxsize")) {
+        options.nBlockMaxSize = args.GetIntArg("-blockmaxsize", DEFAULT_BLOCK_MAX_SIZE);
+        if (!fWeightSet) {
+            options.nBlockMaxWeight = options.nBlockMaxSize * WITNESS_SCALE_FACTOR;
+        }
+    }
     if (const auto blockmintxfee{args.GetArg("-blockmintxfee")}) {
         if (const auto parsed{ParseMoney(*blockmintxfee)}) options.blockMinFeeRate = CFeeRate{*parsed};
     }
@@ -111,7 +129,13 @@ void ApplyArgsManOptions(const ArgsManager& args, BlockAssembler::Options& optio
 void BlockAssembler::resetBlock()
 {
     // Reserve space for fixed-size block header, txs count, and coinbase tx.
+    nBlockSize = 1000;
     nBlockWeight = *Assert(m_options.block_reserved_weight);
+    if (fNeedSizeAccounting) {
+        m_last_block_size = nBlockSize;
+    } else {
+        m_last_block_size = std::nullopt;
+    }
     nBlockSigOpsCost = m_options.coinbase_output_max_additional_sigops;
 
     // These counters do not include coinbase tx
@@ -158,6 +182,11 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
     m_last_block_num_txs = nBlockTx;
     m_last_block_weight = nBlockWeight;
+    if (fNeedSizeAccounting) {
+        m_last_block_size = nBlockSize;
+    } else {
+        m_last_block_size = std::nullopt;
+    }
 
     // Create coinbase transaction.
     CMutableTransaction coinbaseTx;
@@ -212,7 +241,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         coinbase_tx.required_outputs.push_back(final_coinbase->vout[witness_index]);
     }
 
-    LogInfo("CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops %d\n", GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
+    uint64_t nSerializeSize = GetSerializeSize(TX_WITH_WITNESS(*pblock));
+    LogInfo("CreateNewBlock(): total size: %u block weight: %u txs: %u fees: %ld sigops %d\n", nSerializeSize, GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
 
     // Fill in header
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
@@ -251,9 +281,17 @@ bool BlockAssembler::TestChunkBlockLimits(FeePerWeight chunk_feerate, int64_t ch
 // - transaction finality (locktime)
 bool BlockAssembler::TestChunkTransactions(const std::vector<CTxMemPoolEntryRef>& txs) const
 {
+    uint64_t nPotentialBlockSize = nBlockSize; // only used with fNeedSizeAccounting
     for (const auto tx : txs) {
         if (!IsFinalTx(tx.get().GetTx(), nHeight, m_lock_time_cutoff)) {
             return false;
+        }
+        if (fNeedSizeAccounting) {
+            uint64_t nTxSize = ::GetSerializeSize(TX_WITH_WITNESS(tx.get().GetTx()));
+            if (nPotentialBlockSize + nTxSize >= m_options.nBlockMaxSize) {
+                return false;
+            }
+            nPotentialBlockSize += nTxSize;
         }
     }
     return true;
@@ -264,6 +302,9 @@ void BlockAssembler::AddToBlock(const CTxMemPoolEntry& entry)
     pblocktemplate->block.vtx.emplace_back(entry.GetSharedTx());
     pblocktemplate->vTxFees.push_back(entry.GetFee());
     pblocktemplate->vTxSigOpsCost.push_back(entry.GetSigOpCost());
+    if (fNeedSizeAccounting) {
+        nBlockSize += ::GetSerializeSize(TX_WITH_WITNESS(entry.GetTx()));
+    }
     nBlockWeight += entry.GetTxWeight();
     ++nBlockTx;
     nBlockSigOpsCost += entry.GetSigOpCost();
@@ -314,6 +355,10 @@ void BlockAssembler::addChunks()
             if (nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockWeight +
                     BLOCK_FULL_ENOUGH_WEIGHT_DELTA > m_options.nBlockMaxWeight) {
                 // Give up if we're close to full and haven't succeeded in a while
+                return;
+            }
+            if (fNeedSizeAccounting && nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockSize > m_options.nBlockMaxSize - 1000) {
+                // Same, by serialized size when -blockmaxsize is in use
                 return;
             }
         } else {
