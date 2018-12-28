@@ -306,7 +306,7 @@ static void ThreadHTTP(struct event_base* base)
 }
 
 static struct evhttp_bound_socket *
-my_bind_socket_with_handle(struct evhttp *http, const char *address, ev_uint16_t port)
+my_bind_socket_with_handle(struct evhttp *http, const char *address, ev_uint16_t port, bool& ignorable_error)
 {
     evutil_socket_t fd;
     struct evhttp_bound_socket *bound;
@@ -333,7 +333,7 @@ my_bind_socket_with_handle(struct evhttp *http, const char *address, ev_uint16_t
             if (ai_result == EVUTIL_EAI_SYSTEM) {
                 LogWarning("libevent: getaddrinfo");
             } else {
-                LogPrintf("libevent: getaddrinfo: %s\n", strerror(errno));
+                LogWarning("libevent: getaddrinfo: %s", strerror(errno));
             }
             return nullptr;
         }
@@ -410,7 +410,8 @@ static bool HTTPBindAddresses(struct evhttp* http)
     int num_fail = 0;
     for (std::vector<std::pair<std::string, uint16_t> >::iterator i = endpoints.begin(); i != endpoints.end(); ++i) {
         LogInfo("Binding RPC on address %s port %i", i->first, i->second);
-        evhttp_bound_socket *bind_handle = my_bind_socket_with_handle(http, i->first.empty() ? nullptr : i->first.c_str(), i->second);
+        bool ignorable_error = false;
+        evhttp_bound_socket *bind_handle = my_bind_socket_with_handle(http, i->first.empty() ? nullptr : i->first.c_str(), i->second, ignorable_error);
         if (bind_handle) {
             const std::optional<CNetAddr> addr{LookupHost(i->first, false)};
             if (i->first.empty() || (addr.has_value() && addr->IsBindAny())) {
@@ -425,7 +426,7 @@ static bool HTTPBindAddresses(struct evhttp* http)
             boundSockets.push_back(bind_handle);
         } else {
             int err = EVUTIL_SOCKET_ERROR();
-            if (!is_default || (err != EADDRNOTAVAIL && err != ENOENT)) {
+            if (!is_default || (err != EADDRNOTAVAIL && err != ENOENT && err != EOPNOTSUPP && !ignorable_error)) {
                 LogWarning("Binding RPC on address %s port %i failed (Error: %s).", i->first, i->second, NetworkErrorString(err));
                 num_fail += 1;
             } else {
