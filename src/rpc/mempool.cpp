@@ -1071,7 +1071,21 @@ UniValue MempoolInfoToJSON(const CTxMemPool& pool, const std::optional<MempoolHi
         for (const CTxMemPoolEntry& e : pool.mapTx) {
             const CAmount fee{e.GetFee()};
             const uint32_t size{uint32_t(e.GetTxSize())};
-            const CAmount fee_rate{CFeeRate{fee, size}.GetFee(1)};
+
+            // The cluster mempool no longer caches per-entry ancestor/descendant totals; compute them from the
+            // transaction graph (both include the transaction itself, as the cached values did).
+            const auto [ancestor_count, ancestor_size, afees] = pool.CalculateAncestorData(e);
+            const auto [descendant_count, descendant_size, dfees] = pool.CalculateDescendantData(e);
+            const uint32_t asize{uint32_t(ancestor_size)}, dsize{uint32_t(descendant_size)};
+
+            const CAmount fpb{CFeeRate{fee, size}.GetFee(1)};     // Fee rate per byte
+            const CAmount afpb{CFeeRate{afees, asize}.GetFee(1)}; // Fee rate per byte including ancestors
+            const CAmount dfpb{CFeeRate{dfees, dsize}.GetFee(1)}; // Fee rate per byte including descendants
+
+            // Fee rate per byte including ancestors & descendants
+            const CAmount tfpb{CFeeRate{afees + dfees - fee, asize + dsize - size}.GetFee(1)};
+
+            const CAmount fee_rate{std::max(std::min(dfpb, tfpb), std::min(fpb, afpb))};
 
             // Distribute fee rates
             for (size_t i = floors.size(); i-- > 0;) {
