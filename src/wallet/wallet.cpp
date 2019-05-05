@@ -857,7 +857,7 @@ void CWallet::InitialiseAddressBookUsed()
 
 void CWallet::UpdateAddressBookUsed(const CWalletTx& wtx)
 {
-    for (const auto& output : wtx.tx->vout) {
+    for (const auto& output : wtx.GetTx()->vout) {
         CTxDestination dest;
         if (!ExtractDestination(output.scriptPubKey, dest)) continue;
         m_address_book[dest].m_used = true;
@@ -884,8 +884,8 @@ bool CWallet::FindScriptPubKeyUsed(const std::set<CScript>& keys, const std::var
     found_any = false;
     for (const auto& entry : mapWallet) {
         const CWalletTx& wtx = entry.second;
-        for (size_t i = 0; i < wtx.tx->vout.size(); ++i) {
-            const auto& output = wtx.tx->vout[i];
+        for (size_t i = 0; i < wtx.GetTx()->vout.size(); ++i) {
+            const auto& output = wtx.GetTx()->vout[i];
             if (keys.count(output.scriptPubKey)) {
                 found_any = true;
                 const auto callback_type = callback.index();
