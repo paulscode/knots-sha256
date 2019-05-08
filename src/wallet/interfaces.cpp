@@ -260,7 +260,7 @@ public:
         LOCK(m_wallet->cs_wallet);
         return m_wallet->FindScriptPubKeyUsed(AddressesToKeys(addresses), [&callback, this](const CWalletTx& wtx, uint32_t output_index){
             CTxDestination dest;
-            bool success = ExtractDestination(wtx.tx->vout[output_index].scriptPubKey, dest);
+            bool success = ExtractDestination(wtx.GetTx()->vout[output_index].scriptPubKey, dest);
             assert(success);  // It shouldn't be possible to end up here with anything unrecognised
             std::string address = EncodeDestination(dest);
             WalletTx interface_wtx = MakeWalletTx(*m_wallet, wtx);
