@@ -27,10 +27,15 @@ MAX_REPLACEMENT_LIMIT = 100
 
 class ReplaceByFeeTest(BitcoinTestFramework):
     def set_test_params(self):
-        self.num_nodes = 2
+        self.num_nodes = 3
         self.uses_wallet = None
         # both nodes disable full-rbf to test BIP125 signaling (Core 31 has no ancestor/descendant limit options; cluster limits are the defaults)
-        self.extra_args = [["-mempoolfullrbf=0"], ["-mempoolfullrbf=0"]]
+        self.extra_args = [
+            ["-mempoolfullrbf=0"],
+            # second node has default mempool parameters, besides mempoolfullrbf being disabled
+            ["-mempoolfullrbf=0"],
+            ["-acceptnonstdtxn=1", "-mempoolreplacement=0"],
+        ]
         self.supports_cli = False
 
     def run_test(self):
@@ -109,7 +114,9 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         # we use MiniWallet to create a transaction template with inputs correctly set,
         # and modify the output (amount, scriptPubKey) according to our needs
         tx = self.wallet.create_self_transfer(fee_rate=Decimal("0.003"))["tx"]
-        tx1a_txid = self.nodes[0].sendrawtransaction(tx.serialize().hex())
+        tx1a_hex = tx.serialize().hex()
+        tx1a_txid = self.nodes[0].sendrawtransaction(tx1a_hex)
+        assert_equal(tx1a_txid, self.nodes[2].sendrawtransaction(tx1a_hex))
 
         # Should fail because we haven't changed the fee
         tx.vout[0].scriptPubKey[-1] ^= 1
@@ -122,11 +129,14 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         assert_equal(res["reject-reason"], reject_reason)
         assert_equal(res["reject-details"], reject_details)
         assert_raises_rpc_error(-26, f"{reject_details}", self.nodes[0].sendrawtransaction, tx_hex, 0)
-
+        # This will raise an exception due to transaction replacement being disabled
+        assert_raises_rpc_error(-26, "txn-mempool-conflict", self.nodes[2].sendrawtransaction, tx_hex, 0)
 
         # Extra 0.1 BTC fee
         tx.vout[0].nValue -= int(0.1 * COIN)
         tx1b_hex = tx.serialize().hex()
+        # Replacement still disabled even with "enough fee"
+        assert_raises_rpc_error(-26, "txn-mempool-conflict", self.nodes[2].sendrawtransaction, tx1b_hex, 0)
         # Works when enabled
         tx1b_txid = self.nodes[0].sendrawtransaction(tx1b_hex, 0)
 
@@ -136,6 +146,11 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         assert tx1b_txid in mempool
 
         assert_equal(tx1b_hex, self.nodes[0].getrawtransaction(tx1b_txid))
+
+        # Third node is running mempoolreplacement=0, will not replace originally-seen txn
+        mempool = self.nodes[2].getrawmempool()
+        assert tx1a_txid in mempool
+        assert tx1b_txid not in mempool
 
     def test_doublespend_chain(self):
         """Doublespend of a long chain"""
