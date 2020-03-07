@@ -330,10 +330,22 @@ my_bind_socket_with_handle(struct evhttp *http, const char *address, ev_uint16_t
         const std::string strport = strprintf("%d", port);
         ai_result = evutil_getaddrinfo(address, strport.c_str(), &hints, &aitop);
         if (ai_result || !aitop) {
-            if (ai_result == EVUTIL_EAI_SYSTEM) {
+            switch (ai_result) {
+            case 0:
+                break;
+            case EVUTIL_EAI_SYSTEM:
                 LogWarning("libevent: getaddrinfo");
-            } else {
-                LogWarning("libevent: getaddrinfo: %s", strerror(errno));
+                break;
+            case EVUTIL_EAI_NODATA:
+                LogWarning("evutil_getaddrinfo doesn't support IPv6; cannot bind %s:%d", address, port);
+                [[fallthrough]];
+            case EVUTIL_EAI_ADDRFAMILY:
+            case EVUTIL_EAI_FAMILY:
+            case EVUTIL_EAI_SOCKTYPE:
+                ignorable_error = true;
+                break;
+            default:
+                LogWarning("libevent: getaddrinfo: %s", evutil_gai_strerror(ai_result));
             }
             return nullptr;
         }
