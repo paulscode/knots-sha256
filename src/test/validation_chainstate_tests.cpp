@@ -5,6 +5,7 @@
 #include <chain.h>
 #include <chainparams.h>
 #include <coins.h>
+#include <common/system.h>
 #include <consensus/amount.h>
 #include <consensus/validation.h>
 #include <node/blockstorage.h>
@@ -37,6 +38,8 @@ BOOST_FIXTURE_TEST_SUITE(validation_chainstate_tests, ChainTestingSetup)
 //!
 BOOST_AUTO_TEST_CASE(validation_chainstate_resize_caches)
 {
+    g_low_memory_threshold = 0;  // disable to get deterministic flushing
+
     ChainstateManager& manager = *Assert(m_node.chainman);
     CTxMemPool& mempool = *Assert(m_node.mempool);
     Chainstate& c1 = WITH_LOCK(cs_main, return manager.InitializeChainstate(&mempool));
