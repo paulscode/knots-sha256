@@ -1194,27 +1194,39 @@ void ModifyRWConfigStream(std::istream& stream_in, std::ostream& stream_out, con
 
 void ArgsManager::ModifyRWConfigFile(const std::map<std::string, std::string>& settings_to_change)
 {
-    LOCK(cs_args);
-    fs::path rwconf_path{GetRWConfigFilePath_()};
-    fs::path rwconf_new_path{rwconf_path};
-    rwconf_new_path += ".new";
-    try {
-        fs::remove(rwconf_new_path);
-        std::ofstream streamRWConfigOut(rwconf_new_path.std_path(), std::ios_base::out | std::ios_base::trunc);
-        if (fs::exists(rwconf_path)) {
-            std::ifstream streamRWConfig(rwconf_path.std_path());
-            ::ModifyRWConfigStream(streamRWConfig, streamRWConfigOut, settings_to_change);
-        } else {
-            std::istringstream streamIn;
-            ::ModifyRWConfigStream(streamIn, streamRWConfigOut, settings_to_change);
+    {
+        LOCK(cs_args);
+        fs::path rwconf_path{GetRWConfigFilePath_()};
+        fs::path rwconf_new_path{rwconf_path};
+        rwconf_new_path += ".new";
+        try {
+            fs::remove(rwconf_new_path);
+            std::ofstream streamRWConfigOut(rwconf_new_path.std_path(), std::ios_base::out | std::ios_base::trunc);
+            if (fs::exists(rwconf_path)) {
+                std::ifstream streamRWConfig(rwconf_path.std_path());
+                ::ModifyRWConfigStream(streamRWConfig, streamRWConfigOut, settings_to_change);
+            } else {
+                std::istringstream streamIn;
+                ::ModifyRWConfigStream(streamIn, streamRWConfigOut, settings_to_change);
+            }
+        } catch (...) {
+            fs::remove(rwconf_new_path);
+            throw;
         }
-    } catch (...) {
-        fs::remove(rwconf_new_path);
-        throw;
-    }
-    if (!RenameOver(rwconf_new_path, rwconf_path)) {
-        fs::remove(rwconf_new_path);
-        throw std::ios_base::failure(strprintf("Failed to replace %s", fs::PathToString(rwconf_new_path)));
+        if (!RenameOver(rwconf_new_path, rwconf_path)) {
+            fs::remove(rwconf_new_path);
+            throw std::ios_base::failure(strprintf("Failed to replace %s", fs::PathToString(rwconf_new_path)));
+        }
+    } // cs_args is not recursive: IsArgNegated and WriteSettingsFile take it themselves
+    if (!IsArgNegated("-settings")) {
+        // Also save to settings.json for Core (0.21+) compatibility
+        {
+            LOCK(cs_args);
+            for (const auto& setting_change : settings_to_change) {
+                m_settings.rw_settings[setting_change.first] = setting_change.second;
+            }
+        }
+        WriteSettingsFile();
     }
 }
 
