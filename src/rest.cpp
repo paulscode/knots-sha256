@@ -865,7 +865,7 @@ static bool rest_mempool(const std::any& context, HTTPRequest* req, const std::s
             }
             str_json = MempoolToJSON(*mempool, verbose, mempool_sequence).write() + "\n";
         } else {
-            str_json = MempoolInfoToJSON(*mempool).write() + "\n";
+            str_json = MempoolInfoToJSON(*mempool, std::nullopt).write() + "\n";
         }
 
         req->WriteHeader("Cache-Control", REST_CACHE_NO_STORE);
