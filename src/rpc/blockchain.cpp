@@ -3083,7 +3083,7 @@ public:
     TemporaryPruneLock(BlockManager& blockman, int height) : m_blockman(blockman)
     {
         LOCK(::cs_main);
-        m_blockman.UpdatePruneLock(LOCK_NAME, {.desc = "dumptxoutset rollback", .height_first = height});
+        m_blockman.UpdatePruneLock(LOCK_NAME, {.desc = "dumptxoutset rollback", .height_first = static_cast<uint64_t>(height)});
         LogDebug(BCLog::PRUNE, "dumptxoutset: registered prune lock at height %d", height);
     }
     ~TemporaryPruneLock()
