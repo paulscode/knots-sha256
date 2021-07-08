@@ -37,6 +37,8 @@ Documentation for C++ subprocessing library.
 #define BITCOIN_UTIL_SUBPROCESS_H
 
 #include <util/check.h>
+#include <util/fs.h>
+#include <util/strencodings.h>
 #include <util/syserror.h>
 
 #include <algorithm>
@@ -1322,12 +1324,20 @@ namespace detail {
 
       // Close all the inherited fd's except the error write pipe
       if (parent_->close_fds_) {
-        int max_fd = sysconf(_SC_OPEN_MAX);
-        if (max_fd == -1) throw OSError("sysconf failed", errno);
-
-        for (int i = 3; i < max_fd; i++) {
-          if (i == err_wr_pipe_) continue;
-          close(i);
+        try {
+            std::vector<int> fds_to_close;
+            for (const auto& it : fs::directory_iterator("/proc/self/fd")) {
+                const auto fd{ToIntegral<int>(it.path().filename().native())};
+                if (!fd) continue;
+                if (*fd <= 2) continue;  // leave std{in,out,err} alone
+                if (*fd == err_wr_pipe_) continue;
+                fds_to_close.push_back(*fd);
+            }
+            for (const int fd : fds_to_close) {
+                close(fd);
+            }
+        } catch (...) {
+            // TODO: maybe log this - but we're in a child process, so maybe non-trivial!
         }
       }
 
