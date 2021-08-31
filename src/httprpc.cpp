@@ -290,6 +290,8 @@ static bool InitRPCAuthentication()
 
     if (!(gArgs.GetArgs("-rpcauth").empty() && gArgs.GetArgs("-rpcauthfile").empty())) {
         LogInfo("Using rpcauth authentication.\n");
+    }
+    if (gArgs.GetArg("-rpcauth", "") != "") {
         for (const std::string& rpcauth : gArgs.GetArgs("-rpcauth")) {
             if (rpcauth.empty()) continue;
             std::vector<std::string> fields{SplitString(rpcauth, ':')};
@@ -303,6 +305,8 @@ static bool InitRPCAuthentication()
                 return false;
             }
         }
+    }
+    if (gArgs.GetArg("-rpcauthfile", "") != "") {
         for (std::string path : gArgs.GetArgs("-rpcauthfile")) {
             std::ifstream file;
             file.open(path);
