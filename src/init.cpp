@@ -1366,6 +1366,10 @@ static ChainstateLoadResult InitAndLoadChainstate(
         LogInfo("* Flushing caches if available system memory drops below %s MiB", g_low_memory_threshold / 1024 / 1024);
     }
 
+    if (mempool_opts.full_rbf) {
+        g_local_services = ServiceFlags(g_local_services | NODE_REPLACE_BY_FEE);
+    }
+
     ChainstateManager::Options chainman_opts{
         .chainparams = chainparams,
         .datadir = args.GetDataDirNet(),
