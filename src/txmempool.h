@@ -57,6 +57,11 @@ static constexpr uint64_t ACCEPTABLE_COST = 75'000;
  * due to a changeset being applied, a new block being found, or a reorg). */
 static constexpr uint64_t POST_CHANGE_COST = 5 * ACCEPTABLE_COST;
 
+/** Smallest -maxmempool (bytes) that can hold a cluster at the configured cluster size limit. */
+inline int64_t maxmempoolMinimumBytes(const int64_t cluster_size_vbytes) {
+    return cluster_size_vbytes * 40;
+}
+
 /**
  * Test whether the LockPoints height and time are still valid on the current chain
  */
