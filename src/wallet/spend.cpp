@@ -409,6 +409,10 @@ CoinsResult AvailableCoins(const CWallet& wallet,
                 }
             }
 
+            if (coinControl && coinControl->m_segwit_inputs_only && !IsSegWitOutput(*provider, wtx.GetTx()->vout[i].scriptPubKey)) {
+                continue;
+            }
+
             if (only_safe && !safeTx) {
                 continue;
             }
