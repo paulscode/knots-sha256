@@ -410,7 +410,12 @@ CoinsResult AvailableCoins(const CWallet& wallet,
                     if (ancestors > 1) continue;
                 } else {
                     if (wtx.tx->version == TRUC_VERSION) continue;
+
                 }
+            }
+
+            if (coinControl && coinControl->m_segwit_inputs_only && !IsSegWitOutput(*provider, wtx.tx->vout[i].scriptPubKey)) {
+                continue;
             }
 
             if (only_safe && !safeTx) {
