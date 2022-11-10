@@ -1148,7 +1148,7 @@ static RPCHelpMan getmempoolinfo()
                 {RPCResult::Type::NUM, "limitclustercount", "Maximum number of transactions that can be in a cluster (configured by -limitclustercount)"},
                 {RPCResult::Type::NUM, "limitclustersize", "Maximum size of a cluster in virtual bytes (configured by -limitclustersize)"},
                 {RPCResult::Type::BOOL, "optimal", "If the mempool is in a known-optimal transaction ordering"},
-                {RPCResult::Type::OBJ, "fee_histogram", /*optional=*/true, "",
+                {RPCResult::Type::OBJ_DYN, "fee_histogram", /*optional=*/true, "",
                     {
                         {RPCResult::Type::OBJ, "<fee_rate_group>", "Fee rate group named by its lower bound (in " + CURRENCY_ATOM + "/vB), identical to the \"from_feerate\" field below",
                             {
