@@ -289,6 +289,7 @@ BASE_SCRIPTS = [
     'p2p_addr_selfannouncement.py',
     'mempool_expiry.py',
     'wallet_importdescriptors.py',
+    'wallet_importseed.py',
     'wallet_crosschain.py',
     'mining_basic.py',
     'mining_mainnet.py',
