@@ -250,6 +250,12 @@ bool LegacyDataSPKM::CheckDecryptionKey(const CKeyingMaterial& master_key)
     return true;
 }
 
+bool LegacyDataSPKM::IsKeyActive(const CScript& script) const
+{
+    // Legacy wallets exist only to be migrated in Core 31: none of their keys is an active key manager's.
+    return false;
+}
+
 std::unique_ptr<SigningProvider> LegacyDataSPKM::GetSolvingProvider(const CScript& script) const
 {
     return std::make_unique<LegacySigningProvider>(*this);
