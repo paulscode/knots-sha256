@@ -1563,9 +1563,11 @@ private:
      * Try to find an inbound connection to evict.
      * @param[in] evict_tx_relay_peer_only  Whether to only select full relay peers for eviction
      * @param[in] protect_peer              Protect peer with node id
+     * @param[in] force                     Try to evict a random inbound ban-able peer if
+     *                                      all connections are otherwise protected (ForceInbound)
      * @return                              True if a node was marked for disconnect
      */
-    bool AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::optional<NodeId> protect_peer = std::nullopt) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    bool AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::optional<NodeId> protect_peer = std::nullopt, bool force = false) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
     /**
      * Open a new P2P connection.
