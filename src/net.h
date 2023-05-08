@@ -1512,7 +1512,13 @@ private:
      */
     bool AlreadyConnectedToAddress(const CNetAddr& addr) const;
 
-    bool AttemptToEvictConnection();
+    /**
+     * Attempt to disconnect a connected peer.
+     * Used to make room for new inbound connections, returns true if successful.
+     * @param[in] force     Try to evict a random inbound ban-able peer if
+     *                      all connections are otherwise protected.
+     */
+    bool AttemptToEvictConnection(bool force);
 
     /**
      * Open a new P2P connection.
