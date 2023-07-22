@@ -287,7 +287,7 @@ static RPCMethod deriveaddresses()
                 {
                     {"require_checksum", RPCArg::Type::BOOL, RPCArg::Default{true}, "Require a checksum. If a checksum is provided it will be verified regardless of this parameter."},
                 },
-                RPCArgOptions{.oneline_description="\"options\""}
+                RPCArgOptions{.oneline_description="options"}
             },
         },
         {
