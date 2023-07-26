@@ -25,6 +25,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using util::SplitString;
@@ -264,7 +265,7 @@ static bool InitRPCAuthentication()
             cookie_perms = *perm_opt;
         }
 
-        switch (GenerateAuthCookie(cookie_perms, user, pass)) {
+        switch (GenerateAuthCookie(std::make_pair(cookie_perms, bool(cookie_perms_arg)), user, pass)) {
         case AuthCookieResult::Error:
             return false;
         case AuthCookieResult::Disabled:
