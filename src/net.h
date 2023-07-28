@@ -95,6 +95,8 @@ inline constexpr bool DEFAULT_PRIVATE_BROADCAST{false};
 inline constexpr int NUM_FDS_MESSAGE_CAPTURE = 1;
 /** Interval for ASMap Health Check **/
 inline constexpr std::chrono::hours ASMAP_HEALTH_CHECK_INTERVAL{24};
+/** Maximum number of forced inbound connections **/
+inline constexpr int MAX_FORCED_INBOUND_CONNECTIONS{8};
 
 inline constexpr bool DEFAULT_FORCEDNSSEED{false};
 inline constexpr bool DEFAULT_DNSSEED{true};
@@ -676,6 +678,8 @@ struct CNodeOptions
     std::optional<Proxy> proxy_override = {};
     std::unique_ptr<i2p::sam::Session> i2p_sam_session = nullptr;
     bool prefer_evict = false;
+    // True if ForceInbound connection required evicting a peer
+    bool forced_inbound{false};
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
 };
@@ -737,6 +741,7 @@ public:
      */
     std::string cleanSubVer GUARDED_BY(m_subver_mutex){};
     const bool m_prefer_evict{false}; // This peer is preferred for eviction.
+    const bool m_forced_inbound{false}; // This peer forced an inbound connection
     bool HasPermission(NetPermissionFlags permission) const {
         return NetPermissions::HasFlag(m_permission_flags, permission);
     }
