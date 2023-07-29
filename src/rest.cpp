@@ -1241,7 +1241,14 @@ static bool rest_getfee(const std::any& context, HTTPRequest* req, const std::st
 
         // create json for replying
         UniValue feejson(UniValue::VOBJ);
-        feejson.pushKV("feerate", ValueFromAmount(CFeeRate(estimate->feerate).GetFeePerK()));
+        CFeeRate estimatedfee{estimate->feerate};
+        const CTxMemPool* mempool = GetMemPool(context, req);
+        if (mempool) {
+            CFeeRate min_mempool_feerate{mempool->GetMinFee()};
+            CFeeRate min_relay_feerate{mempool->m_opts.min_relay_feerate};
+            estimatedfee = std::max({estimatedfee, min_mempool_feerate, min_relay_feerate});
+        }
+        feejson.pushKV("feerate", ValueFromAmount(estimatedfee.GetFeePerK()));
         feejson.pushKV("blocks", estimate->returned_target);
 
         // reply
