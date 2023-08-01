@@ -469,10 +469,14 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
         txToNonStd4.vin[0].prevout.hash = txFrom.GetHash();
         txToNonStd4.vin[0].scriptSig = op_return_script;
 
+        // Knots rejects it in IsStandardTx, before the inputs are evaluated
+        std::string reason4;
+        BOOST_CHECK(!IsStandardTx(CTransaction(txToNonStd4), reason4));
+        BOOST_CHECK_EQUAL(reason4, "scriptsig-not-pushonly");
         const auto txToNonStd4_res = ::ValidateInputsStandardness(CTransaction(txToNonStd4), coins);
-        BOOST_CHECK(txToNonStd4_res.IsInvalid());
-        BOOST_CHECK_EQUAL(txToNonStd4_res.GetRejectReason(), "bad-txns-input-scriptsig-failure");
-        BOOST_CHECK_EQUAL(txToNonStd4_res.GetDebugMessage(), "p2sh scriptsig malformed (input 0: OP_RETURN was encountered)");
+        // Knots: a non-push-only scriptSig is rejected earlier (IsStandardTx: scriptsig-not-pushonly); unless that is
+        // explicitly ignored, the redeem script is not evaluated here
+        BOOST_CHECK(txToNonStd4_res.IsValid());
     }
 
     // TxoutType::WITNESS_UNKNOWN

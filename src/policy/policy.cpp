@@ -226,9 +226,15 @@ static bool CheckSigopsBIP54(const CTransaction& tx, const CCoinsViewCache& inpu
  *
  * We also check the total number of non-witness sigops across the whole transaction, as per BIP54.
  */
-TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs)
+TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs, const ignore_rejects_type& ignore_rejects)
 {
     TxValidationState state;
+    // Rejects which ignore_rejects may override (by reason name); returns true if the caller must reject
+    const auto maybe_reject{[&](const std::string& reason, const std::string& debug_msg) {
+        if (ignore_rejects.count(reason)) return false;
+        state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, reason, debug_msg);
+        return true;
+    }};
     if (tx.IsCoinBase()) {
         return state; // Coinbases don't use vin normally
     }
@@ -244,32 +250,37 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
         std::vector<std::vector<unsigned char> > vSolutions;
         TxoutType whichType = Solver(prev.scriptPubKey, vSolutions);
         if (whichType == TxoutType::NONSTANDARD) {
-            state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-input-script-unknown", strprintf("input %u script unknown", i));
-            return state;
+            if (maybe_reject("bad-txns-input-script-unknown", strprintf("input %u script unknown", i))) return state;
         } else if (whichType == TxoutType::WITNESS_UNKNOWN) {
             // WITNESS_UNKNOWN failures are typically also caught with a policy
             // flag in the script interpreter, but it can be helpful to catch
             // this type of NONSTANDARD transaction earlier in transaction
             // validation.
-            state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-input-witness-unknown", strprintf("input %u witness program is undefined", i));
-            return state;
+            if (maybe_reject("bad-txns-input-witness-unknown", strprintf("input %u witness program is undefined", i))) return state;
         } else if (whichType == TxoutType::SCRIPTHASH) {
+            if (!tx.vin[i].scriptSig.IsPushOnly()) {
+                // The only way we got this far, is if the user ignored scriptsig-not-pushonly.
+                // However, this case is invalid, and will be caught later on.
+                // But for now, we don't want to run the [possibly expensive] script here.
+                continue;
+            }
             std::vector<std::vector<unsigned char> > stack;
             ScriptError serror;
             // convert the scriptSig into a stack, so we can inspect the redeemScript
             if (!EvalScript(stack, tx.vin[i].scriptSig, SCRIPT_VERIFY_NONE, BaseSignatureChecker(), SigVersion::BASE, &serror)) {
+                // This case is also invalid or a bug
                 state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-input-scriptsig-failure", strprintf("p2sh scriptsig malformed (input %u: %s)", i, ScriptErrorString(serror)));
                 return state;
             }
             if (stack.empty()) {
+                // Also invalid
                 state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-input-scriptcheck-missing", strprintf("input %u P2SH redeemscript missing", i));
                 return state;
             }
             CScript subscript(stack.back().begin(), stack.back().end());
             unsigned int sigop_count = subscript.GetSigOpCount(true);
             if (sigop_count > MAX_P2SH_SIGOPS) {
-                state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-input-scriptcheck-sigops", strprintf("p2sh redeemscript sigops exceed limit (input %u: %u > %u)", i, sigop_count, MAX_P2SH_SIGOPS));
-                return state;
+                if (maybe_reject("bad-txns-input-scriptcheck-sigops", strprintf("p2sh redeemscript sigops exceed limit (input %u: %u > %u)", i, sigop_count, MAX_P2SH_SIGOPS))) return state;
             }
         }
     }
