@@ -96,11 +96,27 @@ bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
     return true;
 }
 
-bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason)
-{
-    if (tx.version > TX_MAX_STANDARD_VERSION || tx.version < TX_MIN_STANDARD_VERSION) {
-        reason = "version";
+static inline bool MaybeReject_(std::string& out_reason, const std::string& reason, const std::string& reason_prefix, const ignore_rejects_type& ignore_rejects) {
+    if (ignore_rejects.count(reason_prefix + reason)) {
         return false;
+    }
+
+    out_reason = reason_prefix + reason;
+    return true;
+}
+
+#define MaybeReject(reason)  do {  \
+    if (MaybeReject_(out_reason, reason, reason_prefix, ignore_rejects)) {  \
+        return false;  \
+    }  \
+} while(0)
+
+bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& out_reason, const ignore_rejects_type& ignore_rejects)
+{
+    const std::string reason_prefix;
+
+    if (tx.version > TX_MAX_STANDARD_VERSION || tx.version < TX_MIN_STANDARD_VERSION) {
+        MaybeReject("version");
     }
 
     // Extremely large transactions with lots of inputs can cost the network
@@ -109,8 +125,7 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
     // to MAX_STANDARD_TX_WEIGHT mitigates CPU exhaustion attacks.
     unsigned int sz = GetTransactionWeight(tx);
     if (sz > MAX_STANDARD_TX_WEIGHT) {
-        reason = "tx-size";
-        return false;
+        MaybeReject("tx-size");
     }
 
     for (const CTxIn& txin : tx.vin)
@@ -124,12 +139,10 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
         // 20-of-20 CHECKMULTISIG scriptPubKey, though such a scriptPubKey
         // is not considered standard.
         if (txin.scriptSig.size() > MAX_STANDARD_SCRIPTSIG_SIZE) {
-            reason = "scriptsig-size";
-            return false;
+            MaybeReject("scriptsig-size");
         }
         if (!txin.scriptSig.IsPushOnly()) {
-            reason = "scriptsig-not-pushonly";
-            return false;
+            MaybeReject("scriptsig-not-pushonly");
         }
     }
 
@@ -137,30 +150,29 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
     TxoutType whichType;
     for (const CTxOut& txout : tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
-            reason = "scriptpubkey";
             if (whichType == TxoutType::WITNESS_UNKNOWN) {
-                reason += "-unknown-witnessversion";
+                MaybeReject("scriptpubkey-unknown-witnessversion");
+            } else {
+                MaybeReject("scriptpubkey");
             }
-            return false;
         }
 
         if (whichType == TxoutType::NULL_DATA) {
             unsigned int size = txout.scriptPubKey.size();
             if (size > datacarrier_bytes_left) {
-                reason = "datacarrier";
-                return false;
+                MaybeReject("datacarrier");
+                datacarrier_bytes_left = 0; // ignored: nothing left for further OP_RETURN outputs
+            } else {
+                datacarrier_bytes_left -= size;
             }
-            datacarrier_bytes_left -= size;
         } else if ((whichType == TxoutType::MULTISIG) && (!permit_bare_multisig)) {
-            reason = "bare-multisig";
-            return false;
+            MaybeReject("bare-multisig");
         }
     }
 
     // Only MAX_DUST_OUTPUTS_PER_TX dust is permitted(on otherwise valid ephemeral dust)
     if (GetDust(tx, dust_relay_fee).size() > MAX_DUST_OUTPUTS_PER_TX) {
-        reason = "dust";
-        return false;
+        MaybeReject("dust");
     }
 
     return true;
