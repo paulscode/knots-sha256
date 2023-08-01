@@ -69,7 +69,7 @@ std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx,
     // process the replacement (though the actual number of clusters we
     // relinearize may be greater than this number, due to cluster splitting).
     auto num_clusters = pool.GetUniqueClusterCount(iters_conflicting);
-    if (num_clusters > MAX_REPLACEMENT_CANDIDATES && !ignore_rejects.count("too-many-replacements")) {
+    if (num_clusters > MAX_REPLACEMENT_CANDIDATES && !ignore_rejects.count("too-many-replacements") && !ignore_rejects.count("too many potential replacements")) {
         return strprintf("rejecting replacement %s; too many conflicting clusters (%u > %d)",
                 tx.GetHash().ToString(),
                 num_clusters,
