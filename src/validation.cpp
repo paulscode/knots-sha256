@@ -668,6 +668,23 @@ private:
         PrecomputedTransactionData m_precomputed_txdata;
     };
 
+    static inline bool MaybeReject_(TxValidationResult reason, const std::string& reason_str, const std::string& debug_msg, const ignore_rejects_type& ignore_rejects, TxValidationState& state) {
+        if (ignore_rejects.count(reason_str)) {
+            return false;
+        }
+
+        state.Invalid(reason, reason_str, debug_msg);
+        return true;
+    }
+
+#define MaybeRejectDbg(reason, reason_str, debug_msg)  do {  \
+    if (MaybeReject_(reason, reason_str, debug_msg, ignore_rejects, state)) {  \
+        return false;  \
+    }  \
+} while(0)
+
+#define MaybeReject(reason, reason_str)  MaybeRejectDbg(reason, reason_str, "")
+
     // Run the policy checks on a given transaction, excluding any script checks.
     // Looks up inputs, calculates feerate, considers replacement, evaluates
     // package limits, etc. As this function can be invoked for "free" by a peer,
@@ -675,9 +692,9 @@ private:
     bool PreChecks(ATMPArgs& args, Workspace& ws) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_pool.cs);
 
     // Run checks for mempool replace-by-fee, only used in AcceptSingleTransaction.
-    bool ReplacementChecks(Workspace& ws) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_pool.cs);
+    bool ReplacementChecks(ATMPArgs& args, Workspace& ws) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_pool.cs);
 
-    bool PackageRBFChecks(const std::vector<CTransactionRef>& txns,
+    bool PackageRBFChecks(const ATMPArgs& args, const std::vector<CTransactionRef>& txns,
                           std::vector<Workspace>& workspaces,
                           int64_t total_vsize,
                           PackageValidationState& package_state) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_pool.cs);
@@ -796,6 +813,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     // Copy/alias what we need out of args
     const int64_t nAcceptTime = args.m_accept_time;
+    const ignore_rejects_type& ignore_rejects = args.m_ignore_rejects;
     std::vector<COutPoint>& coins_to_uncache = args.m_coins_to_uncache;
 
     // Alias what we need out of ws
@@ -817,13 +835,13 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     // Transactions smaller than 65 non-witness bytes are not relayed to mitigate CVE-2017-12842.
     if (::GetSerializeSize(TX_NO_WITNESS(tx)) < MIN_STANDARD_TX_NONWITNESS_SIZE)
-        return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "tx-size-small");
+        MaybeReject(TxValidationResult::TX_NOT_STANDARD, "tx-size-small");
 
     // Only accept nLockTime-using transactions that can be mined in the next
     // block; we don't want our mempool filled up with transactions that can't
     // be mined yet.
     if (!CheckFinalTxAtTip(*Assert(m_active_chainstate.m_chain.Tip()), tx)) {
-        return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "non-final");
+        MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "non-final");
     }
 
     if (m_pool.exists(tx.GetWitnessHash())) {
@@ -890,6 +908,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // Pass in m_view which has all of the relevant inputs cached. Note that, since m_view's
     // backend was removed, it no longer pulls coins from the mempool.
     const std::optional<LockPoints> lock_points{CalculateLockPointsAtTip(m_active_chainstate.m_chain.Tip(), m_view, tx)};
+    // NOTE: The miner doesn't check this again, so for now it may not be overridden.
     if (!lock_points.has_value() || !CheckSequenceLocksAtTip(m_active_chainstate.m_chain.Tip(), *lock_points)) {
         return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "non-BIP68-final");
     }
@@ -905,7 +924,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     // Check for non-standard witnesses.
     if (tx.HasWitness() && m_pool.m_opts.require_standard && !IsWitnessStandard(tx, m_view)) {
-        return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
+        MaybeReject(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
     }
 
     int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
@@ -942,7 +961,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     }
 
     if (nSigOpsCost > MAX_STANDARD_TX_SIGOPS_COST)
-        return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "bad-txns-too-many-sigops",
+        MaybeRejectDbg(TxValidationResult::TX_NOT_STANDARD, "bad-txns-too-many-sigops",
                 strprintf("%d", nSigOpsCost));
 
     // No individual transactions are allowed below the mempool min feerate except from disconnected
@@ -986,7 +1005,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     return true;
 }
 
-bool MemPoolAccept::ReplacementChecks(Workspace& ws)
+bool MemPoolAccept::ReplacementChecks(ATMPArgs& args, Workspace& ws)
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(m_pool.cs);
@@ -1000,7 +1019,7 @@ bool MemPoolAccept::ReplacementChecks(Workspace& ws)
     CTxMemPool::setEntries all_conflicts;
 
     // Calculate all conflicting entries and enforce Rule #5.
-    if (const auto err_string{GetEntriesForConflicts(tx, m_pool, ws.m_iters_conflicting, all_conflicts)}) {
+    if (const auto err_string{GetEntriesForConflicts(tx, m_pool, ws.m_iters_conflicting, all_conflicts, args.m_ignore_rejects)}) {
         return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY,
                              strprintf("too many potential replacements%s", ws.m_sibling_eviction ? " (including sibling eviction)" : ""), *err_string);
     }
@@ -1011,13 +1030,14 @@ bool MemPoolAccept::ReplacementChecks(Workspace& ws)
         m_subpackage.m_conflicting_fees += it->GetModifiedFee();
         m_subpackage.m_conflicting_size += it->GetTxSize();
     }
-
+    if (!args.m_ignore_rejects.count("insufficient fee")) {
     if (const auto err_string{PaysForRBF(m_subpackage.m_conflicting_fees, ws.m_modified_fees, ws.m_vsize,
                                          m_pool.m_opts.incremental_relay_feerate, hash)}) {
         // Result may change in a package context
         return state.Invalid(TxValidationResult::TX_RECONSIDERABLE,
                              strprintf("insufficient fee%s", ws.m_sibling_eviction ? " (including sibling eviction)" : ""), *err_string);
     }
+    }  // ignore_rejects
 
     // Add all the to-be-removed transactions to the changeset.
     for (auto it : all_conflicts) {
@@ -1029,17 +1049,19 @@ bool MemPoolAccept::ReplacementChecks(Workspace& ws)
         return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "too-large-cluster", "");
     }
 
+    if (!args.m_ignore_rejects.count("insufficient fee")) {
     if (const auto err_string{ImprovesFeerateDiagram(*m_subpackage.m_changeset)}) {
         // We checked above for the cluster size limits being respected, so a
         // failure here can only be due to an insufficient fee.
         Assume(err_string->first == DiagramCheckError::FAILURE);
         return state.Invalid(TxValidationResult::TX_RECONSIDERABLE, "replacement-failed", err_string->second);
     }
+    }  // ignore_rejects
 
     return true;
 }
 
-bool MemPoolAccept::PackageRBFChecks(const std::vector<CTransactionRef>& txns,
+bool MemPoolAccept::PackageRBFChecks(const ATMPArgs& args, const std::vector<CTransactionRef>& txns,
                                      std::vector<Workspace>& workspaces,
                                      const int64_t total_vsize,
                                      PackageValidationState& package_state)
@@ -1335,7 +1357,7 @@ MempoolAcceptResult MemPoolAccept::AcceptSingleTransactionInternal(const CTransa
         return MempoolAcceptResult::Failure(ws.m_state);
     }
 
-    if (m_subpackage.m_rbf && !ReplacementChecks(ws)) {
+    if (m_subpackage.m_rbf && !ReplacementChecks(args, ws)) {
         if (ws.m_state.GetResult() == TxValidationResult::TX_RECONSIDERABLE) {
             // Failed for incentives-based fee reasons. Provide the effective feerate and which tx was included.
             return MempoolAcceptResult::FeeFailure(ws.m_state, CFeeRate(ws.m_modified_fees, ws.m_vsize), single_wtxid);
@@ -1517,12 +1539,12 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
     }
 
     // Apply package mempool RBF checks.
-    if (m_subpackage.m_rbf && !PackageRBFChecks(txns, workspaces, m_subpackage.m_total_vsize, package_state)) {
+    if (m_subpackage.m_rbf && !PackageRBFChecks(args, txns, workspaces, m_subpackage.m_total_vsize, package_state)) {
         return PackageMempoolAcceptResult(package_state, std::move(results));
     }
 
     // Check if the transactions would exceed the cluster size limit.
-    if (!m_subpackage.m_changeset->CheckMemPoolPolicyLimits()) {
+    if (!args.m_ignore_rejects.count("package-mempool-limits") && !m_subpackage.m_changeset->CheckMemPoolPolicyLimits()) {
         package_state.Invalid(PackageValidationResult::PCKG_POLICY, "too-large-cluster", "");
         return PackageMempoolAcceptResult(package_state, std::move(results));
     }
