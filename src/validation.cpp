@@ -504,9 +504,9 @@ public:
 
         /** Parameters for test package mempool validation through testmempoolaccept. */
         static ATMPArgs PackageTestAccept(int64_t accept_time,
-                                          std::vector<COutPoint>& coins_to_uncache) {
+                                          const ignore_rejects_type& ignore_rejects, std::vector<COutPoint>& coins_to_uncache) {
             return ATMPArgs{/*accept_time=*/ accept_time,
-                            /*ignore_rejects=*/ empty_ignore_rejects,
+                            /*ignore_rejects=*/ ignore_rejects,
                             /*coins_to_uncache=*/ coins_to_uncache,
                             /*test_accept=*/ true,
                             /*allow_replacement=*/ false,
@@ -519,9 +519,9 @@ public:
 
         /** Parameters for child-with-parents package validation. */
         static ATMPArgs PackageChildWithParents(int64_t accept_time,
-                                                std::vector<COutPoint>& coins_to_uncache, const std::optional<CFeeRate>& client_maxfeerate) {
+                                                std::vector<COutPoint>& coins_to_uncache, const std::optional<CFeeRate>& client_maxfeerate, const ignore_rejects_type& ignore_rejects) {
             return ATMPArgs{/*accept_time=*/ accept_time,
-                            /*ignore_rejects=*/ empty_ignore_rejects,
+                            /*ignore_rejects=*/ ignore_rejects,
                             /*coins_to_uncache=*/ coins_to_uncache,
                             /*test_accept=*/ false,
                             /*allow_replacement=*/ true,
@@ -1823,7 +1823,7 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
 }
 
 PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxMemPool& pool,
-                                                   const Package& package, bool test_accept, const std::optional<CFeeRate>& client_maxfeerate)
+                                                   const Package& package, bool test_accept, const std::optional<CFeeRate>& client_maxfeerate, const ignore_rejects_type& ignore_rejects)
 {
     AssertLockHeld(cs_main);
     assert(!package.empty());
@@ -1833,10 +1833,10 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
     auto result = [&]() EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
         AssertLockHeld(cs_main);
         if (test_accept) {
-            auto args = MemPoolAccept::ATMPArgs::PackageTestAccept(GetTime(), coins_to_uncache);
+            auto args = MemPoolAccept::ATMPArgs::PackageTestAccept(GetTime(), ignore_rejects, coins_to_uncache);
             return MemPoolAccept(pool, active_chainstate).AcceptMultipleTransactionsAndCleanup(package, args);
         } else {
-            auto args = MemPoolAccept::ATMPArgs::PackageChildWithParents(GetTime(), coins_to_uncache, client_maxfeerate);
+            auto args = MemPoolAccept::ATMPArgs::PackageChildWithParents(GetTime(), coins_to_uncache, client_maxfeerate, ignore_rejects);
             return MemPoolAccept(pool, active_chainstate).AcceptPackage(package, args);
         }
     }();
