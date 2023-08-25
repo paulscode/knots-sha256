@@ -122,7 +122,8 @@ static CFeeRate EstimateFeeRate(const CWallet& wallet, const CWalletTx& wtx, con
     // Get the fee rate of the original transaction. This is calculated from
     // the tx fee/vsize, so it may have been rounded down. Add 1 satoshi to the
     // result.
-    int64_t txSize = GetVirtualTransactionSize(*(wtx.GetTx()));
+    // NOTE: Ignoring non-weight vsize is safe because it should only be our own normal tx anyway
+    int64_t txSize = GetVirtualTransactionSize(*(wtx.GetTx()), 0, 0);
     CFeeRate feerate(old_fee, txSize);
     feerate += CFeeRate(1);
 
