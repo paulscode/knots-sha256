@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 class CCoinsViewCache;
 class CFeeRate;
@@ -206,5 +207,7 @@ static inline int64_t GetVirtualTransactionInputSize(const CTxIn& tx)
 int64_t GetSigOpsAdjustedWeight(int64_t weight, int64_t sigop_cost, unsigned int bytes_per_sigop);
 
 static inline FeePerVSize ToFeePerVSize(FeePerWeight feerate) { return {feerate.fee, (feerate.size + WITNESS_SCALE_FACTOR - 1) / WITNESS_SCALE_FACTOR}; }
+
+std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript, const CTxIn&);
 
 #endif // BITCOIN_POLICY_POLICY_H
