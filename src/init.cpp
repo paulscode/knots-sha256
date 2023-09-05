@@ -882,6 +882,8 @@ void InitParameterInteraction(ArgsManager& args)
         args.SoftSetArg("-permitbaremultisig", "1");
         args.SoftSetArg("-datacarriersize", "100000");
         args.SoftSetArg("-datacarriermultiple", "1");
+        args.SoftSetArg("-datacarriercost", "0.25");
+        args.SoftSetArg("-datacarrierfullcount", "0");
 
         args.SoftSetArg("-spkreuse", "allow");
         args.SoftSetArg("-blockmaxsize", "4000000");
