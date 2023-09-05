@@ -476,7 +476,7 @@ std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript
         return std::make_pair(p2sh ? prevScript : txin.scriptSig, WITNESS_SCALE_FACTOR);
     }
 
-    Span stack{txin.scriptWitness.stack};
+    std::span stack{txin.scriptWitness.stack};
 
     if (witnessversion == 0 && witnessprogram.size() == WITNESS_V0_SCRIPTHASH_SIZE) {
         if (stack.empty()) return std::make_pair(CScript(), 0);  // invalid
@@ -497,4 +497,20 @@ std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript
     }
 
     return std::make_pair(CScript(), 0);
+}
+
+size_t DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view)
+{
+    size_t ret{0};
+
+    for (const CTxIn& txin : tx.vin) {
+        const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
+        auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
+        ret += script.DatacarrierBytes();
+    }
+    for (const CTxOut& txout : tx.vout) {
+        ret += txout.scriptPubKey.DatacarrierBytes();
+    }
+
+    return ret;
 }
