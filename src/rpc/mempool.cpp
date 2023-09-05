@@ -111,10 +111,6 @@ static RPCHelpMan sendrawtransaction()
 
             const CFeeRate max_raw_tx_fee_rate{ParseFeeRate(self.Arg<UniValue>("maxfeerate"))};
 
-            // BUG: The virtual size here currently fails to consider sigops, which could potentially result in an incorrectly-low max_raw_tx_fee
-            int64_t virtual_size = GetVirtualTransactionSize(*tx, 0, 0 /* BUG */);
-            CAmount max_raw_tx_fee = max_raw_tx_fee_rate.GetFee(virtual_size);
-
             std::string err_string;
             AssertLockNotHeld(cs_main);
             NodeContext& node = EnsureAnyNodeContext(request.context);
@@ -133,7 +129,7 @@ static RPCHelpMan sendrawtransaction()
             const TransactionError err = BroadcastTransaction(node,
                                                               tx,
                                                               err_string,
-                                                              max_raw_tx_fee,
+                                                              max_raw_tx_fee_rate,
                                                               method,
                                                               /*wait_callback=*/true);
             if (TransactionError::OK != err) {
