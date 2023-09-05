@@ -72,7 +72,10 @@ TransactionError BroadcastTransaction(NodeContext& node,
             wtxid = mempool_tx->GetWitnessHash();
         } else {
             // Transaction is not already in the mempool.
-            const bool check_max_fee{(std::holds_alternative<CAmount>(max_tx_fee) ? std::get<CAmount>(max_tx_fee) : std::get<CFeeRate>(max_tx_fee).GetFeePerK()) > 0};
+            bool check_max_fee{(std::holds_alternative<CAmount>(max_tx_fee) ? std::get<CAmount>(max_tx_fee) : std::get<CFeeRate>(max_tx_fee).GetFeePerK()) > 0};
+            if (ignore_rejects.count("absurdly-high-fee") || ignore_rejects.count("max-fee-exceeded")) {
+                check_max_fee = false;
+            }
             if (check_max_fee || broadcast_method == TxBroadcast::NO_MEMPOOL_PRIVATE_BROADCAST) {
                 // First, call ATMP with test_accept and check the fee. If ATMP
                 // fails here, return error immediately.
