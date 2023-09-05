@@ -986,7 +986,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, reason);
     }
 
-    if (DatacarrierBytes(tx, m_view) > m_pool.m_opts.max_datacarrier_bytes.value_or(0)) {
+    if ((!args.m_ignore_rejects.count("txn-datacarrier-exceeded")) && DatacarrierBytes(tx, m_view) > m_pool.m_opts.max_datacarrier_bytes.value_or(0)) {
         return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "txn-datacarrier-exceeded");
     }
 
