@@ -62,7 +62,7 @@ inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 /** Default for -bytespersigopstrict */
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 /** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
-inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{1};
+inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{4};
 /** Default for -rejecttokens */
 inline constexpr bool DEFAULT_REJECT_TOKENS{false};
 /** Default for -subdustfeepenalty */
@@ -125,7 +125,7 @@ inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{true};
 inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
 inline constexpr unsigned int MAX_OP_RETURN_RELAY{42};
 /** Default for -datacarrierfullcount */
-inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{false};
+inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{true};
 /**
  * An extra transaction can be added to a package, as long as it only has one
  * ancestor and is no larger than this. Not really any reason to make this
