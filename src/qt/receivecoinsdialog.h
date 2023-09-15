@@ -55,8 +55,6 @@ private:
     QSortFilterProxyModel* m_sort_proxy;
     WalletModel* model{nullptr};
     QMenu *contextMenu;
-    QAction* copyURIAction;
-    QAction* copyAddressAction;
     QAction* copyLabelAction;
     QAction* copyMessageAction;
     QAction* copyAmountAction;
