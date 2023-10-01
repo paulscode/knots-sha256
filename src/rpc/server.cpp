@@ -255,9 +255,9 @@ static RPCMethod getrpcwhitelist()
                 RPCResult{
                     RPCResult::Type::OBJ, "", "",
                     {
-                        {RPCResult::Type::ARR, "methods", "List of RPCs that the user is allowed to call",
+                        {RPCResult::Type::OBJ_DYN, "methods", "List of RPCs that the user is allowed to call",
                         {
-                            {RPCResult::Type::STR, "rpc", "rpc command"},
+                            {RPCResult::Type::NONE, "rpc", "Key is name of RPC method, value is null"},
                         }},
                     }
                 },
