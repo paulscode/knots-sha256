@@ -1526,10 +1526,22 @@ void CWallet::transactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRe
 void CWallet::blockConnected(const ChainstateRole& role, const interfaces::BlockInfo& block)
 {
     if (role.historical) {
+        // Background validation of an assumeutxo snapshot: remember how far it got, nothing else to scan here
+        LOCK(cs_wallet);
+        m_background_validation_height = block.height;
         return;
     }
     assert(block.data);
     LOCK(cs_wallet);
+
+    if (!role.validated) {
+        // Assumed-valid chainstate: blocks above the snapshot are not yet validated from genesis
+        if (m_background_validation_height == -1) {
+            m_background_validation_height = 0;
+        }
+    } else {
+        m_background_validation_height = -1;
+    }
 
     // Update the best block in memory first. This will set the best block's height, which is
     // needed by MarkConflicted.
