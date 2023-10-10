@@ -1486,9 +1486,9 @@ static RPCMethod verifychain()
     };
 }
 
-static RPCHelpMan scriptthreadsinfo()
+static RPCMethod scriptthreadsinfo()
 {
-    return RPCHelpMan{"scriptthreadsinfo",
+    return RPCMethod{"scriptthreadsinfo",
                 "Show information about the script verification threads.\n",
                 {},
                 RPCResult{
@@ -1502,7 +1502,7 @@ static RPCHelpMan scriptthreadsinfo()
                     HelpExampleCli("scriptthreadsinfo", "")
             + HelpExampleRpc("scriptthreadsinfo", "")
                 },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman = EnsureAnyChainman(request.context);
     UniValue ret(UniValue::VOBJ);
@@ -1514,9 +1514,9 @@ static RPCHelpMan scriptthreadsinfo()
     };
 }
 
-static RPCHelpMan setscriptthreadsenabled()
+static RPCMethod setscriptthreadsenabled()
 {
-    return RPCHelpMan{"setscriptthreadsenabled",
+    return RPCMethod{"setscriptthreadsenabled",
                 "Disable/enable script verification threads, thereby reducing CPU usage on multicore systems on demand.\n"
                 "Disabling script verification threads may result in a significant slow-down during synchronisation.\n"
                 "Has no effect on single core machines or if started with -par=<-<numcores>\n",
@@ -1528,7 +1528,7 @@ static RPCHelpMan setscriptthreadsenabled()
                     HelpExampleCli("setscriptthreadsenabled", "false")
             + HelpExampleRpc("setscriptthreadsenabled", "false")
                 },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman = EnsureAnyChainman(request.context);
     LOCK(cs_main);
