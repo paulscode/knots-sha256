@@ -738,7 +738,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 #if HAVE_SYSTEM
 static void StartupNotify(const ArgsManager& args)
 {
-    for (std::string command : args.GetArgs("-startupnotify")) {
+    for (const std::string& command : args.GetArgs("-startupnotify")) {
         std::thread t(runCommand, command);
         t.detach(); // thread runs free
     }
