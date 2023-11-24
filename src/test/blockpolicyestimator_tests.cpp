@@ -6,7 +6,6 @@
 #include <policy/fees/estimator_args.h>
 #include <policy/policy.h>
 #include <test/util/setup_common.h>
-#include <test/util/transaction_utils.h>
 #include <test/util/txmempool.h>
 #include <txmempool.h>
 #include <uint256.h>
