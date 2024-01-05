@@ -2917,7 +2917,7 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
         auto bits = m_chainman.m_versionbitscache.CheckUnknownActivations(pindexNew, m_chainman.GetParams());
         for (auto [bit, active] : bits) {
             // Knots: warn as soon as an unknown deployment is LOCKED_IN, not only once it is active
-            const bilingual_str warning = strprintf(_("Unknown new rules activated (versionbit %i)"), bit);
+            const bilingual_str warning = strprintf(_("WARNING: Unknown new rules activated (versionbit %i) - this software is not secure"), bit);
             {
                 warning_messages.push_back(warning);
             }
