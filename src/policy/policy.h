@@ -79,7 +79,7 @@ inline constexpr bool DEFAULT_PERMITEPHEMERAL_ANCHOR{true};
 /** Default for -permitbareanchor */
 inline constexpr bool DEFAULT_PERMITBAREANCHOR{true};
 /** Default for -permitbarepubkey */
-inline constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
+inline constexpr bool DEFAULT_PERMIT_BAREPUBKEY{false};
 /** Default for -permitbaremultisig */
 inline constexpr bool DEFAULT_PERMIT_BAREMULTISIG{false};
 /** Default for -rejectparasites */
