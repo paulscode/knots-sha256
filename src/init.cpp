@@ -879,6 +879,7 @@ void InitParameterInteraction(ArgsManager& args)
     g_pcp_warn_for_unauthorized = args.GetBoolArg("-natpmp", false);
     if (args.GetBoolArg("-corepolicy", DEFAULT_COREPOLICY)) {
         args.SoftSetArg("-bytespersigopstrict", "0");
+        args.SoftSetArg("-permitbarepubkey", "1");
         args.SoftSetArg("-permitbaremultisig", "1");
         args.SoftSetArg("-datacarriersize", "100000");
         args.SoftSetArg("-datacarriermultiple", "1");
