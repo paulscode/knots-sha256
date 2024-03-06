@@ -37,7 +37,7 @@ inline constexpr TRUCPolicy DEFAULT_MEMPOOL_TRUC_POLICY{TRUCPolicy::Enforce};
 /** Whether to fall back to legacy V1 serialization when writing mempool.dat */
 inline constexpr bool DEFAULT_PERSIST_V1_DAT{false};
 /** Default for -acceptnonstddatacarrier */
-inline constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{true};
+inline constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{false};
 /** Default for -acceptnonstdtxn */
 inline constexpr bool DEFAULT_ACCEPT_NON_STD_TXN{false};
 /** Default for -acceptunknownwitness */
