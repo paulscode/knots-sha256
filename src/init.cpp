@@ -878,6 +878,7 @@ void InitParameterInteraction(ArgsManager& args)
     // Before any SoftSetArg so we get the actual user-set value
     g_pcp_warn_for_unauthorized = args.GetBoolArg("-natpmp", false);
     if (args.GetBoolArg("-corepolicy", DEFAULT_COREPOLICY)) {
+        args.SoftSetArg("-acceptnonstddatacarrier", "1");
         args.SoftSetArg("-bytespersigopstrict", "0");
         args.SoftSetArg("-permitbarepubkey", "1");
         args.SoftSetArg("-permitbaremultisig", "1");
