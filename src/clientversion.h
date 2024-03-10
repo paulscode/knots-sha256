@@ -38,6 +38,7 @@ std::string FormatSubVersion(const std::string& name, int nClientVersion, const 
 inline constexpr int64_t SECONDS_PER_YEAR = 31558060;
 inline constexpr int POSIX_EPOCH_YEAR = 1970;
 inline constexpr int64_t DEFAULT_SOFTWARE_EXPIRY = ((COPYRIGHT_YEAR - POSIX_EPOCH_YEAR) * SECONDS_PER_YEAR) + (SECONDS_PER_YEAR * 2);
+extern int64_t g_software_expiry;
 bool IsThisSoftwareExpired(int64_t nTime);
 
 #endif // RC_INVOKED
