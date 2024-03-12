@@ -1552,7 +1552,7 @@ BOOST_AUTO_TEST_CASE(message_verify)
             "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV",
             "signature should be irrelevant",
             "message too"),
-        MessageVerificationResult::ERR_ADDRESS_NO_KEY);
+        MessageVerificationResult::ERR_MALFORMED_SIGNATURE); // P2SH is a valid BIP 137 destination; the placeholder signature is rejected next
 
     BOOST_CHECK_EQUAL(
         MessageVerify(
