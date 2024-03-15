@@ -1337,6 +1337,7 @@ static ChainstateLoadResult InitAndLoadChainstate(
 
     CTxMemPool::Options mempool_opts{
         .estimator = node.fee_estimator.get(),
+        .scheduler = &*node.scheduler,
         .check_ratio = chainparams.DefaultConsistencyChecks() ? 1 : 0,
         .signals = node.validation_signals.get(),
     };
