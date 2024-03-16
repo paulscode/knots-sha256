@@ -38,6 +38,7 @@ TXS_COUNT = 24
 MEMPOOL_HEALTH_WINDOW = 6
 BLOCK_POLICY_ESTIMATOR_ERROR = "Insufficient data or no feerate found"
 BLOCK_POLICY_ESTIMATOR_FILE_PATH = "fees/block_policy_estimates.dat"
+target_success_threshold = 0.8
 
 def small_txpuzzle_randfee(
     wallet, from_node, conflist, unconflist, amount, min_fee, fee_increment, batch_reqs
@@ -161,6 +162,19 @@ def verify_estimate_response(estimate, feerate, errors):
         assert "errors" not in estimate
 
 
+def get_feerate_into_mempool(node, kB):
+    mempool_entries = list(node.getrawmempool(verbose=True).values())
+    for entry in mempool_entries:
+        entry['feerate_BTC/vB'] = entry['fees']['modified'] / entry['vsize']
+    mempool_entries.sort(key=lambda entry: entry['feerate_BTC/vB'], reverse=True)
+    bytes_remaining = kB * 1000
+    for entry in mempool_entries:
+        bytes_remaining -= entry['vsize']
+        if bytes_remaining <= 0:
+            return satoshi_round(entry['feerate_BTC/vB'] * 1000, rounding=ROUND_DOWN)
+    raise AssertionError('Entire mempool is smaller than %s kB' % (kB,))
+
+
 class EstimateFeeTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 3
@@ -263,6 +277,62 @@ class EstimateFeeTest(BitcoinTestFramework):
 
         self.log.info("Final estimates after emptying mempools")
         check_estimates(self.nodes[1], self.fees_per_kb)
+
+    def test_feerate_dustrelayfee(self):
+        node = self.nodes[0]
+
+        # test dustdynamic=target:<blocks>
+        for dustfee_target in (2, 8, 1008):
+            dust_mode = f"target:{dustfee_target}"
+            dust_parameter = f"-dustdynamic={dust_mode}"
+            self.log.info(f"Test dust limit setting {dust_parameter} (fee estimation for {dustfee_target} blocks)")
+            self.restart_node(0, extra_args=[dust_parameter])
+            assert_equal(node.getmempoolinfo()['dustdynamic'], dust_mode)
+            with node.busy_wait_for_debug_log([b'Updating dust feerate']):
+                node.mockscheduler(SECONDS_PER_HOUR)
+            fee_est = node.estimaterawfee(dustfee_target, target_success_threshold)['long']['feerate']
+            mempool_info = node.getmempoolinfo()
+            assert_equal(mempool_info['dustrelayfee'], fee_est)
+            assert mempool_info['dustrelayfee'] > mempool_info['dustrelayfeefloor']
+
+        # Fill mempool up
+        mempool_size = 0
+        batch_sendtx_reqs = []
+        min_fee = Decimal("0.00001")
+        while mempool_size < 52000:
+            (tx_bytes, fee) = small_txpuzzle_randfee(
+                self.wallet,
+                self.nodes[0],
+                self.confutxo,
+                self.memutxo,
+                Decimal("0.005"),
+                min_fee,
+                min_fee,
+                batch_sendtx_reqs,
+            )
+            mempool_size += tx_bytes
+        node.batch(batch_sendtx_reqs)
+
+        # test dustdynamic=mempool:<kB>
+        for dustfee_kB in (1, 10, 50):
+            dust_mode = f"mempool:{dustfee_kB}"
+            dust_parameter = f"-dustdynamic={dust_mode}"
+            self.log.info(f"Test dust limit setting {dust_parameter} (fee estimation for {dustfee_kB} kB into mempool)")
+            self.restart_node(0, extra_args=[dust_parameter])
+            assert_equal(node.getmempoolinfo()['dustdynamic'], dust_mode)
+            with node.busy_wait_for_debug_log([b'Updating dust feerate']):
+                node.mockscheduler(SECONDS_PER_HOUR)
+            feerate_into_mempool = get_feerate_into_mempool(node, dustfee_kB)
+            mempool_info = node.getmempoolinfo()
+            assert_equal(mempool_info['dustrelayfee'], feerate_into_mempool)
+            assert mempool_info['dustrelayfee'] > mempool_info['dustrelayfeefloor']
+
+        # Restore nodes to a normal state, wiping the mempool
+        self.stop_node(0)
+        (self.nodes[0].chain_path / 'mempool.dat').unlink()
+        self.start_node(0)
+        self.connect_nodes(1, 0)
+        self.connect_nodes(0, 2)
 
     def test_estimates_with_highminrelaytxfee(self):
         high_val = 3 * self.nodes[1].estimatesmartfee(2, "economical", {"fee_rate_estimator": "block_policy"})["feerate"]
@@ -736,6 +806,9 @@ class EstimateFeeTest(BitcoinTestFramework):
 
         self.log.info("Test fallback to block policy when the mempool estimator has insufficient data")
         self.test_fallback_when_mempool_estimator_has_insufficient_data()
+
+        # After Core 32's mempool-estimator cases: the dust cases advance the scheduler by hours and wipe the mempool
+        self.test_feerate_dustrelayfee()
 
         self.log.info("Test reading old block policy estimator file")
         self.test_old_fee_estimate_file()
