@@ -1081,13 +1081,35 @@ void ArgsManager::ModifyRWConfigFile(const std::map<std::string, std::string>& s
     rwconf_new_path += ".new";
     try {
         fs::remove(rwconf_new_path);
-        std::ofstream streamRWConfigOut(rwconf_new_path.std_path(), std::ios_base::out | std::ios_base::trunc);
+        // Read the existing file completely, with error checks, before anything replaces it. (A read error can look like
+        // end of file to an std::ifstream, which would turn into a file holding only the new settings.)
+        std::string old_contents;
         if (fs::exists(rwconf_path)) {
-            std::ifstream streamRWConfig(rwconf_path.std_path());
-            ::ModifyRWConfigStream(streamRWConfig, streamRWConfigOut, settings_to_change);
-        } else {
-            std::istringstream streamIn;
-            ::ModifyRWConfigStream(streamIn, streamRWConfigOut, settings_to_change);
+            FILE* file_in{fsbridge::fopen(rwconf_path, "rb")};
+            if (!file_in) {
+                throw std::ios_base::failure(strprintf("Failed to read %s", fs::PathToString(rwconf_path)));
+            }
+            char buf[4096];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), file_in)) > 0) old_contents.append(buf, n);
+            const bool read_error{std::ferror(file_in) != 0};
+            std::fclose(file_in);
+            if (read_error) {
+                throw std::ios_base::failure(strprintf("Failed to read %s", fs::PathToString(rwconf_path)));
+            }
+        }
+        std::istringstream streamIn{old_contents};
+        std::ostringstream streamOut;
+        ::ModifyRWConfigStream(streamIn, streamOut, settings_to_change);
+        const std::string new_contents{streamOut.str()};
+        // Only a completely written file that has reached the disk may replace the existing one
+        FILE* file_out{fsbridge::fopen(rwconf_new_path, "wb")};
+        if (!file_out) {
+            throw std::ios_base::failure(strprintf("Failed to write %s", fs::PathToString(rwconf_new_path)));
+        }
+        const bool written{std::fwrite(new_contents.data(), 1, new_contents.size(), file_out) == new_contents.size() && FileCommit(file_out)};
+        if (std::fclose(file_out) != 0 || !written) {
+            throw std::ios_base::failure(strprintf("Failed to write %s", fs::PathToString(rwconf_new_path)));
         }
     } catch (...) {
         fs::remove(rwconf_new_path);
@@ -1096,6 +1118,10 @@ void ArgsManager::ModifyRWConfigFile(const std::map<std::string, std::string>& s
     if (!RenameOver(rwconf_new_path, rwconf_path)) {
         fs::remove(rwconf_new_path);
         throw std::ios_base::failure(strprintf("Failed to replace %s", fs::PathToString(rwconf_new_path)));
+    }
+    DirectoryCommit(rwconf_path.parent_path());
+    for (const auto& setting_change : settings_to_change) {
+        m_settings.rw_config[setting_change.first] = {setting_change.second};
     }
     if (!IsArgNegated("-settings")) {
         // Also save to settings.json for Core (0.21+) compatibility

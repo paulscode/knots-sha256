@@ -2041,4 +2041,46 @@ BOOST_AUTO_TEST_CASE(test_ModifyRWConfigFile)
     BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n[group]\nab=bc\nGARBAGE\nd=e"), "ab=x\n[INVALID]\n# Error parsing line 4: GARBAGE\n#a=b\n#[group]\n#ab=bc\n#GARBAGE\n#d=e");
 }
 
+BOOST_AUTO_TEST_CASE(rwconf_failure_keeps_existing_file)
+{
+    const fs::path dir{m_path_root / "rwconf_keep"};
+    fs::create_directories(dir);
+    const fs::path rwconf{dir / "bitcoin_rw.conf"};
+    const auto read_file = [](const fs::path& path) {
+        std::ifstream f{path.std_path(), std::ios_base::binary};
+        return std::string{std::istreambuf_iterator<char>{f}, {}};
+    };
+    std::ofstream{rwconf.std_path(), std::ios_base::binary} << "prune=1000\n";
+    ArgsManager args;
+    args.ForceSetArg("-confrw", fs::PathToString(rwconf));
+    args.SoftSetBoolArg("-settings", false);
+
+    // Modify: a normal update keeps the existing lines and adds the new one
+    args.ModifyRWConfigFile("dbcache", "1000");
+    BOOST_CHECK_EQUAL(read_file(rwconf), "prune=1000\ndbcache=1000\n");
+    BOOST_CHECK(!fs::exists(dir / "bitcoin_rw.conf.new"));
+    const std::string original{read_file(rwconf)};
+
+    // Reset: when the backup cannot be made, the file must be kept, not deleted, and the failure reported
+    fs::create_directories(dir / "bitcoin_rw.conf.reset" / "occupied");
+    BOOST_CHECK(!args.EraseRWConfigFile());
+    BOOST_CHECK_EQUAL(read_file(rwconf), original);
+
+    // Reset: with the way clear, the file is moved to the backup name
+    fs::remove_all(dir / "bitcoin_rw.conf.reset");
+    BOOST_CHECK(args.EraseRWConfigFile());
+    BOOST_CHECK(!fs::exists(rwconf));
+    BOOST_CHECK_EQUAL(read_file(dir / "bitcoin_rw.conf.reset"), original);
+
+    // Modify: a file that cannot be read (here a directory, which fails on every platform) is never replaced
+    const fs::path unreadable{m_path_root / "rwconf_unreadable" / "bitcoin_rw.conf"};
+    fs::create_directories(unreadable / "keep");
+    ArgsManager args2;
+    args2.ForceSetArg("-confrw", fs::PathToString(unreadable));
+    args2.SoftSetBoolArg("-settings", false);
+    BOOST_CHECK_THROW(args2.ModifyRWConfigFile("dbcache", "1000"), std::ios_base::failure);
+    BOOST_CHECK(fs::exists(unreadable / "keep"));
+    BOOST_CHECK(!fs::exists(m_path_root / "rwconf_unreadable" / "bitcoin_rw.conf.new"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
