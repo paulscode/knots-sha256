@@ -608,7 +608,7 @@ class TestNode():
                                     f'not found in log:\n\n{join_log(log)}\n\n')
 
     @contextlib.contextmanager
-    def busy_wait_for_debug_log(self, expected_msgs, timeout=60):
+    def busy_wait_for_debug_log(self, expected_msgs, timeout=60, *, forbid_msgs=()):
         """
         Block until we see a particular debug log message fragment or until we exceed the timeout.
         """
@@ -622,6 +622,13 @@ class TestNode():
             with open(self.debug_log_path, "rb") as dl:
                 dl.seek(prev_size)
                 log = dl.read()
+
+            for msg in forbid_msgs:
+                if msg in log:
+                    print_log = " - " + "\n - ".join(log.decode("utf8", errors="replace").splitlines())
+                    self._raise_assertion_error(
+                        'Forbidden message "{}" partially matched log:\n\n{}\n\n'.format(
+                            str(msg), print_log))
 
             while remaining_expected and remaining_expected[-1] in log:
                 remaining_expected.pop()
