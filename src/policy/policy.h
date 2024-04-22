@@ -73,6 +73,7 @@ inline constexpr unsigned int MAX_STANDARD_SCRIPTSIG_SIZE{1650};
  * outputs below the new threshold */
 inline constexpr unsigned int DUST_RELAY_TX_FEE{3000};
 static const std::string DEFAULT_DUST_DYNAMIC{"off"};
+static const int DEFAULT_DUST_RELAY_MULTIPLIER{3'000};
 static const std::string DEFAULT_SPKREUSE{"allow"};
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
 inline constexpr unsigned int DEFAULT_MIN_RELAY_TX_FEE{100};
