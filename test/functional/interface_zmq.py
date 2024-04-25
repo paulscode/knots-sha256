@@ -262,8 +262,7 @@ class ZMQTest (BitcoinTestFramework):
                 wallethex = rawwallettx.receive(b"rawwallettx-block")
                 wallettx = CTransaction()
                 wallettx.deserialize(io.BytesIO(wallethex))
-                wallettx.calc_sha256()
-                assert_equal(wallettx.hash, wallettxid.hex())
+                assert_equal(wallettx.txid_hex, wallettxid.hex())
 
             # Should receive the generated block hash.
             hash = hashblock.receive().hex()
@@ -298,7 +297,9 @@ class ZMQTest (BitcoinTestFramework):
         if self.is_wallet_compiled():
             wallettxid = hashwallettx.receive(b"hashwallettx-mempool")
             wallethex = rawwallettx.receive(b"rawwallettx-mempool")
-            assert_equal(hash256_reversed(wallethex), wallettxid)
+            wallettx = CTransaction()
+            wallettx.deserialize(io.BytesIO(wallethex))
+            assert_equal(wallettx.txid_hex, wallettxid.hex())
 
         self.log.info("Test the getzmqnotifications RPC")
         assert_equal(self.nodes[0].getzmqnotifications(), [
