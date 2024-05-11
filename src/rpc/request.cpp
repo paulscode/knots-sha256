@@ -128,6 +128,11 @@ GenerateAuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cook
     file.close();
 
     fs::path filepath = GetAuthCookieFile(false);
+    try {
+        fs::remove(filepath);
+    } catch (const fs::filesystem_error&) {
+        // ignore
+    }
     if (!RenameOver(filepath_tmp, filepath)) {
         LogWarning("Unable to rename cookie authentication file %s to %s", fs::PathToString(filepath_tmp), fs::PathToString(filepath));
         return GenerateAuthCookieResult::ERR;
