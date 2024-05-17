@@ -476,18 +476,22 @@ static RPCHelpMan disconnectnode()
 
     if (address && !node_id) {
         /* handle disconnect-by-address */
-        if (address->find('/') != std::string::npos) {
-                const CSubNet subnet = LookupSubNet(std::string{*address});
-                if (subnet.IsValid()) {
-                    success = connman.DisconnectNode(subnet);
-                } else {
-                    throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid subnet");
-                }
-            } else {
-                success = connman.DisconnectNode(*address);
+        const bool only_subnet{address->find('/') != std::string::npos};
+        if (only_subnet) {
+            success = false;
+        } else {
+            success = connman.DisconnectNode(*address);
+        }
+        if (!success) {
+            const CSubNet subnet = LookupSubNet(std::string{*address});
+            if (subnet.IsValid()) {
+                success = connman.DisconnectNode(subnet);
+            } else if (only_subnet) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid subnet");
             }
-        } else if (node_id && (!address || address->empty())) {
-            /* handle disconnect-by-id */
+        }
+    } else if (node_id && (!address || address->empty())) {
+        /* handle disconnect-by-id */
         success = connman.DisconnectNode(*node_id);
     } else {
         throw JSONRPCError(RPC_INVALID_PARAMS, "Only one of address and nodeid should be provided.");
