@@ -236,7 +236,7 @@ bool CZMQPublishHashTransactionNotifier::NotifyTransaction(const CTransaction &t
 
 bool CZMQPublishHashWalletTransactionNotifier::NotifyWalletTransaction(const CTransaction &transaction, const uint256 &hashBlock){
     const uint256 hash{transaction.GetHash().ToUint256()};
-    LogDebug(BCLog::ZMQ, "zmq: Publish hashwallettx %s to %s\n", hash.GetHex(), this->address);
+    LogDebug(BCLog::ZMQ, "Publish hashwallettx %s to %s\n", hash.GetHex(), this->address);
     uint8_t data[32];
     for (unsigned int i = 0; i < 32; i++)
         data[31 - i] = hash.begin()[i];
@@ -316,7 +316,7 @@ bool CZMQPublishSequenceNotifier::NotifyTransactionRemoval(const CTransaction &t
 
 bool CZMQPublishRawWalletTransactionNotifier::NotifyWalletTransaction(const CTransaction &transaction, const uint256 &hashBlock){
     const uint256 hash{transaction.GetHash().ToUint256()};
-    LogDebug(BCLog::ZMQ, "zmq: Publish rawwallettx %s to %s\n", hash.GetHex(), this->address);
+    LogDebug(BCLog::ZMQ, "Publish rawwallettx %s to %s\n", hash.GetHex(), this->address);
     DataStream ss;
     ss << TX_WITH_WITNESS(transaction);
 
