@@ -977,7 +977,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // ignore set, whose zero-entry-sequence reason is unique to it.
     if (!args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq)) {
         // Perform the TRUC checks, using the in-mempool parents.
-        if (const auto err{SingleTRUCChecks(m_pool, ws.m_ptx, "truc-", reason, ws.m_parents, ws.m_conflicts, ws.m_vsize)}) {
+        if (const auto err{SingleTRUCChecks(m_pool, ws.m_ptx, "truc-", reason, args.m_ignore_rejects, ws.m_parents, ws.m_conflicts, ws.m_vsize)}) {
             // Single transaction contexts only.
             if (args.m_allow_sibling_eviction && err->second != nullptr) {
                 // We should only be considering where replacement is considered valid as well.
@@ -995,7 +995,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                 // (which is normally done in PreChecks). However, the only way a TRUC transaction can
                 // have a non-TRUC and non-BIP125 descendant is due to a reorg.
             } else {
-                return state.Invalid(TxValidationResult::TX_MEreasonRUC-violation", err->first);
+                return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, reason, err->first);
             }
         }
     }
@@ -1507,7 +1507,7 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
     // Run the TRUC checks on the package.
     std::string reason;
     for (Workspace& ws : workspaces) {
-        if (auto err{PackageTRUCChecks(m_pool, ws.m_ptx, ws.m_vsize, "truc-", reason, txns, ws.m_parents)}) {
+        if (auto err{PackageTRUCChecks(m_pool, ws.m_ptx, ws.m_vsize, "truc-", reason, args.m_ignore_rejects, txns, ws.m_parents)}) {
             package_state.Invalid(PackageValidationResult::PCKG_POLICY, reason, err.value());
             return PackageMempoolAcceptResult(package_state, {});
         }
