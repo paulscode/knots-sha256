@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <optional>
 
+class FeeRateEstimatorManager;
 class ValidationSignals;
 
 enum class RBFPolicy { Never, OptIn, Always };
@@ -44,6 +45,9 @@ namespace kernel {
  * Most of the time, this struct should be referenced as CTxMemPool::Options.
  */
 struct MemPoolOptions {
+    /* Used to estimate appropriate transaction fees. Set after construction: Core 32 creates the fee estimator
+     * manager after (and from) the mempool. */
+    mutable const FeeRateEstimatorManager* estimator{nullptr};
     /* The ratio used to determine how often sanity checks will run.  */
     int check_ratio{0};
     int64_t max_size_bytes{DEFAULT_MAX_MEMPOOL_SIZE_MB * 1'000'000};

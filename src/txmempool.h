@@ -115,6 +115,8 @@ public:
 struct entry_time {};
 struct index_by_wtxid {};
 
+class FeeRateEstimatorManager;
+
 /**
  * Information about a mempool transaction.
  */
