@@ -79,7 +79,22 @@ void OptionsDialog::CreateOptionUI(QBoxLayout * const layout, QWidget * const o,
 
     layout->addLayout(horizontalLayout);
 
+    o->setProperty("L", QVariant::fromValue((QLayout*)horizontalLayout));
+
     FixTabOrder(o);
+}
+
+static void setSiblingsEnabled(QWidget * const o, const bool state)
+{
+    auto layout = o->property("L").value<QLayout*>();
+    Assert(layout);
+    // NOTE: QLayout::children does not do what we need here
+    for (int i = layout->count(); i-- > 0; ) {
+        QLayoutItem * const layoutitem = layout->itemAt(i);
+        QWidget * const childwidget = layoutitem->widget();
+        if (!childwidget) continue;
+        childwidget->setEnabled(state);
+    }
 }
 
 int setFontChoice(QComboBox* cb, const OptionsModel::FontChoice& fc)
