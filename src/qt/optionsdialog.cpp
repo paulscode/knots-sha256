@@ -73,9 +73,7 @@ void OptionsDialog::CreateOptionUI(QBoxLayout * const layout, QWidget * const o,
 
     horizontalLayout->addWidget(labelAfter);
 
-    QSpacerItem * const horizontalSpacer = new QSpacerItem(40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum);
-
-    horizontalLayout->addItem(horizontalSpacer);
+    horizontalLayout->addStretch(1);
 
     layout->addLayout(horizontalLayout);
 
