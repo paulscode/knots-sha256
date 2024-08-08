@@ -142,7 +142,7 @@ void BlockAssembler::resetBlock()
     nFees = 0;
 }
 
-std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
+std::shared_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 {
     const auto time_start{SteadyClock::now()};
 
@@ -475,10 +475,10 @@ void InterruptWait(KernelNotifications& kernel_notifications, bool& interrupt_wa
     kernel_notifications.m_tip_block_cv.notify_all();
 }
 
-std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
+std::shared_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
                                                       KernelNotifications& kernel_notifications,
                                                       CTxMemPool* mempool,
-                                                      const std::unique_ptr<CBlockTemplate>& block_template,
+                                                      const std::shared_ptr<CBlockTemplate>& block_template,
                                                       const BlockWaitOptions& wait_options,
                                                       const BlockCreateOptions& create_options,
                                                       bool& interrupt_wait)
