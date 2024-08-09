@@ -938,7 +938,8 @@ public:
                                                   m_block_template,
                                                   /*wait_options=*/options,
                                                   /*create_options=*/m_create_options,
-                                                  /*interrupt_wait=*/m_interrupt_wait);
+                                                  /*interrupt_wait=*/m_interrupt_wait,
+                                                  /*validation_signals=*/m_node.validation_signals.get());
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_create_options, std::move(new_template), m_node);
         return nullptr;
     }
@@ -1010,6 +1011,7 @@ public:
                                                        chainman().ActiveChainstate(),
                                                        m_node.mempool.get(),
                                                        create_options,
+                                                       m_node.validation_signals.get(),
                                                    }.CreateNewBlock(),
                                                    m_node);
     }
