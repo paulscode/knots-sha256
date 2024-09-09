@@ -106,6 +106,7 @@ const std::vector<std::string> RPC_COMMANDS_SAFE_FOR_FUZZING{
     "estimaterawfee",
     "estimatesmartfee",
     "finalizepsbt",
+    "format",
     "generate",
     "generateblock",
     "getaddednodeinfo",
