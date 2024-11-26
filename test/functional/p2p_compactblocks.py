@@ -1008,6 +1008,12 @@ class CompactBlocksTest(BitcoinTestFramework):
         self.test_end_to_end_block_relay([self.segwit_node, self.additional_segwit_node])
 
         self.log.info("Testing handling of invalid compact blocks...")
+        # Same relaxed punishment: the final announcement in that subtest disconnects a peer we rely on,
+        # so it runs on an outbound connection (the inbound peer is replaced right after it anyway).
+        self.segwit_node.peer_disconnect()
+        self.segwit_node.wait_for_disconnect()
+        self.segwit_node = self.nodes[0].add_outbound_p2p_connection(TestP2PConn(), p2p_idx=4)
+        self.request_cb_announcements(self.segwit_node)
         self.test_invalid_tx_in_compactblock(self.segwit_node)
 
         # The previous test will lead to a disconnection. Reconnect before continuing.
