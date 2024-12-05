@@ -2919,6 +2919,7 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
             // Knots: warn as soon as an unknown deployment is LOCKED_IN, not only once it is active
             const bilingual_str warning = strprintf(_("WARNING: Unknown new rules activated (versionbit %i) - this software is not secure"), bit);
             {
+                m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_ACTIVATED, warning);
                 warning_messages.push_back(warning);
             }
         }
@@ -2960,6 +2961,7 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
         }
         if (!warning_threshold_hit_bits.empty()) {
             const auto warning = strprintf(_("Warning: Miners are attempting to activate unknown new rules (bit %s)! You may or may not need to act to remain secure"), util::Join(warning_threshold_hit_bits, ", ", [](const uint8_t bit){ return util::ToString(int(bit)); }));
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_VBITS, warning, /*update=*/true);
             warning_messages.push_back(warning);
         }
         if (warning_threshold_hit_int != -1) {
@@ -2969,13 +2971,9 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
             } else {
                 warning = strprintf(_("Warning: Unrecognised block version (0x%08x) is being mined! Unknown rules may or may not be in effect"), warning_threshold_hit_int);
             }
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_INTVER, warning, /*update=*/true);
             warning_messages.push_back(warning);
         }
-    }
-
-    if (!warning_messages.empty()) {
-        auto warning_messages_joined = util::Join(warning_messages, Untranslated(", "));
-        m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_ACTIVATED, warning_messages_joined, /*update=*/true);
     }
 
     static constexpr int32_t BIP320_MASK = 0x1fffe000UL;
