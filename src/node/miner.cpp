@@ -115,8 +115,9 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate,
               throw std::runtime_error(util::ErrorString(result).original);
           }
           auto flat_options{FlattenMiningOptions(std::move(options))};
-          // Limit size to between 1K and MAX_BLOCK_SERIALIZED_SIZE-1K for sanity:
-          flat_options.block_max_size = std::clamp<uint64_t>(*flat_options.block_max_size, 1000, MAX_BLOCK_SERIALIZED_SIZE - 1000);
+          // Limit size to between block_reserved_size and MAX_BLOCK_SERIALIZED_SIZE-1K for sanity:
+          Assert(flat_options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE - 1000);
+          flat_options.block_max_size = std::clamp<uint64_t>(*flat_options.block_max_size, flat_options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE - 1000);
           return flat_options;
       }()}
 {
@@ -127,7 +128,7 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate,
 void BlockAssembler::resetBlock()
 {
     // Reserve space for fixed-size block header, txs count, and coinbase tx.
-    nBlockSize = 1000;
+    nBlockSize = m_options.block_reserved_size;
     nBlockWeight = *Assert(m_options.block_reserved_weight);
     if (fNeedSizeAccounting) {
         m_last_block_size = nBlockSize;

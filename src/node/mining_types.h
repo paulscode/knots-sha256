@@ -36,6 +36,11 @@ struct BlockCreateOptions {
      */
     bool use_mempool{true};
     /**
+     * The default reserved size for the fixed-size block header,
+     * transaction count and coinbase transaction.
+     */
+    size_t block_reserved_size{1000};
+    /**
      * Minimum fee rate for transactions to be included. Providing a value
      * overrides the -blockmintxfee startup setting.
      */
