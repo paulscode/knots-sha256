@@ -86,7 +86,7 @@ BlockCreateOptions BlockCreateOptions::Clamped() const
     // block_reserved_weight can safely exceed -blockmaxweight, but the rest of the block template will be empty.
     options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, *options.block_reserved_weight, MAX_BLOCK_WEIGHT);
     // Limit size to between block_reserved_size and MAX_BLOCK_SERIALIZED_SIZE for sanity:
-    Assert(options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE);
+    CHECK_NONFATAL(options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE);
     options.nBlockMaxSize = std::clamp<size_t>(options.nBlockMaxSize, options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE);
     return options;
 }
