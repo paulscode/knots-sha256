@@ -81,7 +81,7 @@ std::vector<uint32_t> GetDust(const CTransaction& tx, CFeeRate dust_relay_rate)
  * Note this must assign whichType even if returning false, in case
  * IsStandardTx ignores the "scriptpubkey" rejection.
  */
-bool IsStandard(const CScript& scriptPubKey, const kernel::MemPoolOptions& opts, TxoutType& whichType)
+bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
 {
     std::vector<std::vector<unsigned char> > vSolutions;
     whichType = Solver(scriptPubKey, vSolutions);
@@ -154,7 +154,7 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     unsigned int datacarrier_bytes_left = opts.max_datacarrier_bytes.value_or(0);
     TxoutType whichType;
     for (const CTxOut& txout : tx.vout) {
-        if (!::IsStandard(txout.scriptPubKey, opts, whichType)) {
+        if (!::IsStandard(txout.scriptPubKey, whichType)) {
             if (whichType == TxoutType::WITNESS_UNKNOWN) {
                 MaybeReject("scriptpubkey-unknown-witnessversion");
             } else {
