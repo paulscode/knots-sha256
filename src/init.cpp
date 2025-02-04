@@ -884,7 +884,7 @@ void InitParameterInteraction(ArgsManager& args)
         args.SoftSetArg("-datacarriermultiple", "1");
         args.SoftSetArg("-datacarriercost", "0.25");
         args.SoftSetArg("-datacarrierfullcount", "0");
-
+        args.SoftSetArg("-maxscriptsize", strprintf("%s", std::numeric_limits<unsigned int>::max()));
         args.SoftSetArg("-spkreuse", "allow");
         args.SoftSetArg("-blockmaxsize", "4000000");
         args.SoftSetArg("-blockmaxweight", "4000000");
