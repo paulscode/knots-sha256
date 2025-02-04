@@ -50,7 +50,7 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend, Dersig100Setup)
     {
         spends[i].version = 1;
         spends[i].vin = {CTxIn{m_coinbase_txns[0]->GetHash(), 0}};
-        spends[i].vout = {CTxOut{11*CENT, scriptPubKey}};
+        spends[i].vout = {CTxOut{11*CENT, GetScriptForDestination(PKHash(coinbaseKey.GetPubKey()))}};
 
         // Sign:
         std::vector<unsigned char> vchSig;
