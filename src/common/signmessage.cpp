@@ -109,11 +109,6 @@ MessageVerificationResult MessageVerifyBIP322(
         return MessageVerificationResult::INCONCLUSIVE;
     }
 
-    // timelock check
-    if (to_sign.nLockTime > 0 || to_sign.vin[0].nSequence > 0) {
-        return MessageVerificationResult::OK_TIMELOCKED;
-    }
-
     return MessageVerificationResult::OK;
 }
 
