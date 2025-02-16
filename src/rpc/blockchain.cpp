@@ -3663,9 +3663,9 @@ return RPCMethod{
     };
 }
 
-static RPCHelpMan getblocklocations()
+static RPCMethod getblocklocations()
 {
-    return RPCHelpMan{"getblocklocations",
+    return RPCMethod{"getblocklocations",
                 "EXPERIMENTAL warning: this call may be removed or changed in future releases."
                 "\nReturns a JSON for the file system location of 'blockhash' block and undo data.\n"
                 "\nIt is possible to return also the locations of previous blocks, by specifying 'nblocks' > 1.\n",
@@ -3690,7 +3690,7 @@ static RPCHelpMan getblocklocations()
                 RPCExamples{
                     HelpExampleCli("getblocklocations", "\"00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09\" 10")
                 },
-                [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+                [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
 
     ChainstateManager& chainman = EnsureAnyChainman(request.context);
     if (chainman.m_blockman.IsPruneMode()) {
