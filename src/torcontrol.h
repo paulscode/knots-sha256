@@ -13,10 +13,6 @@
 #include <netaddress.h>
 #include <util/fs.h>
 
-#ifdef ENABLE_TOR_SUBPROCESS
-#include <util/subprocess.h>
-#endif // ENABLE_TOR_SUBPROCESS
-
 #include <event2/util.h>
 
 #include <cstdint>
@@ -26,6 +22,10 @@
 #include <vector>
 
 constexpr uint16_t DEFAULT_TOR_SOCKS_PORT{9050};
+namespace subprocess {
+class Popen;
+}
+
 constexpr int DEFAULT_TOR_CONTROL_PORT = 9051;
 extern const std::string DEFAULT_TOR_CONTROL;
 extern const std::string DEFAULT_TOR_EXECUTE;
