@@ -25,6 +25,7 @@
 #include <util/fs_helpers.h>
 #include <util/log.h>
 #include <util/obfuscation.h>
+#include <util/result.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
 
@@ -56,20 +57,19 @@ static void HandleError(const leveldb::Status& status)
     throw dbwrapper_error(errmsg);
 }
 
-bool dbwrapper_SanityCheck()
+util::Result<void> dbwrapper_SanityCheck()
 {
     unsigned long header_version = (leveldb::kMajorVersion << 16) | leveldb::kMinorVersion;
     unsigned long library_version = (leveldb_major_version() << 16) | leveldb_minor_version();
 
     if (header_version != library_version) {
-        InitError(Untranslated(strprintf("Compiled with LevelDB %d.%d, but linked with LevelDB %d.%d (incompatible).",
+        return util::Error{Untranslated(strprintf("Compiled with LevelDB %d.%d, but linked with LevelDB %d.%d (incompatible).",
             leveldb::kMajorVersion, leveldb::kMinorVersion,
             leveldb_major_version(), leveldb_minor_version()
-        )));
-        return false;
+        ))};
     }
 
-    return true;
+    return {};
 }
 
 #ifndef WIN32
