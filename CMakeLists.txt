@@ -122,6 +122,14 @@ else()
   set(EMBEDDED_LEVELDB TRUE)
 endif()  # WITH_SYSTEM_LEVELDB
 
+option(WITH_SYSTEM_LIBSECP256K1 "Build with system libsecp256k1 instead of embedded copy." OFF)
+mark_as_advanced(WITH_SYSTEM_LIBSECP256K1)
+if(WITH_SYSTEM_LIBSECP256K1)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(libsecp256k1 REQUIRED IMPORTED_TARGET libsecp256k1)
+  add_library(secp256k1 ALIAS PkgConfig::libsecp256k1)
+endif()  # WITH_SYSTEM_LIBSECP256K1
+
 option(ENABLE_WALLET "Enable wallet." ON)
 cmake_dependent_option(BUILD_WALLET_TOOL "Build bitcoin-wallet tool." ${BUILD_TESTS} "ENABLE_WALLET" OFF)
 
