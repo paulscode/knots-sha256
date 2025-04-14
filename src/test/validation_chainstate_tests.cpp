@@ -3,7 +3,6 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
 #include <chainparams.h>
-#include <common/system.h>
 #include <consensus/amount.h>
 #include <consensus/validation.h>
 #include <node/kernel_notifications.h>
@@ -18,6 +17,7 @@
 #include <test/util/setup_common.h>
 #include <uint256.h>
 #include <util/check.h>
+#include <util/mempressure.h>
 #include <validation.h>
 
 #include <vector>
