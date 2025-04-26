@@ -84,9 +84,9 @@ static BlockAssembler::Options ClampOptions(BlockAssembler::Options options)
     // Limit weight to between block_reserved_weight and MAX_BLOCK_WEIGHT for sanity:
     // block_reserved_weight can safely exceed -blockmaxweight, but the rest of the block template will be empty.
     options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, *options.block_reserved_weight, MAX_BLOCK_WEIGHT);
-    // Limit size to between block_reserved_size and MAX_BLOCK_SERIALIZED_SIZE-1K for sanity:
-    Assert(options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE - 1000);
-    options.nBlockMaxSize = std::clamp<size_t>(options.nBlockMaxSize, options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE - 1000);
+    // Limit size to between block_reserved_size and MAX_BLOCK_SERIALIZED_SIZE for sanity:
+    Assert(options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE);
+    options.nBlockMaxSize = std::clamp<size_t>(options.nBlockMaxSize, options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE);
     return options;
 }
 
@@ -97,7 +97,7 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool
       m_options{ClampOptions(options)}
 {
     // Whether we need to account for byte usage (in addition to weight usage)
-    fNeedSizeAccounting = (options.nBlockMaxSize < MAX_BLOCK_SERIALIZED_SIZE - 1000);
+    fNeedSizeAccounting = (options.nBlockMaxSize < MAX_BLOCK_SERIALIZED_SIZE);
 }
 
 void ApplyArgsManOptions(const ArgsManager& args, BlockAssembler::Options& options)
