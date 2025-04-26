@@ -115,14 +115,14 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate,
               throw std::runtime_error(util::ErrorString(result).original);
           }
           auto flat_options{FlattenMiningOptions(std::move(options))};
-          // Limit size to between block_reserved_size and MAX_BLOCK_SERIALIZED_SIZE-1K for sanity:
-          Assert(flat_options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE - 1000);
-          flat_options.block_max_size = std::clamp<uint64_t>(*flat_options.block_max_size, flat_options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE - 1000);
+          // Limit size to between block_reserved_size and MAX_BLOCK_SERIALIZED_SIZE for sanity:
+          Assert(flat_options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE);
+          flat_options.block_max_size = std::clamp<uint64_t>(*flat_options.block_max_size, flat_options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE);
           return flat_options;
       }()}
 {
     // Whether we need to account for byte usage (in addition to weight usage)
-    fNeedSizeAccounting = (*m_options.block_max_size < MAX_BLOCK_SERIALIZED_SIZE - 1000);
+    fNeedSizeAccounting = (*m_options.block_max_size < MAX_BLOCK_SERIALIZED_SIZE);
 }
 
 void BlockAssembler::resetBlock()
