@@ -16,7 +16,6 @@
 #include <util/result.h>
 #include <util/translation.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -81,7 +80,7 @@ Result<BlockCreateOptions> ReadMiningArgs(const ArgsManager& args)
     if (options.block_max_weight && !options.block_max_size) {
         options.block_max_size = MAX_BLOCK_SERIALIZED_SIZE;
     } else if (options.block_max_size && !options.block_max_weight) {
-        options.block_max_weight = std::min<uint64_t>(*options.block_max_size * WITNESS_SCALE_FACTOR, MAX_BLOCK_WEIGHT);
+        options.block_max_weight = MAX_BLOCK_WEIGHT;
     }
 
     if (auto result{CheckMiningOptions(options, /*use_argnames=*/true)}; !result) return Error{util::ErrorString(result)};
