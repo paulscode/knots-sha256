@@ -61,6 +61,8 @@ inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 /** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
 inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{1};
+/** Default for -permitbareanchor */
+inline constexpr bool DEFAULT_PERMITBAREANCHOR{true};
 /** Default for -permitbarepubkey */
 inline constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
 /** Default for -permitbaremultisig */

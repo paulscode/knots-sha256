@@ -204,6 +204,9 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
         if (nDataOut && !opts.permitbaredatacarrier) {
             MaybeReject("bare-datacarrier");
         }
+        if ((!nDataOut) && !opts.permitbareanchor) {
+            MaybeReject("bare-anchor");
+        }
     }
 
     return true;
