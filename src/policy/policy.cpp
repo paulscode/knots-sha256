@@ -153,7 +153,9 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     }
 
     unsigned int datacarrier_bytes_left = opts.max_datacarrier_bytes.value_or(0);
+    unsigned int nDataOut = 0;
     unsigned int n_dust{0};
+    unsigned int n_monetary{0};
     TxoutType whichType;
     for (const CTxOut& txout : tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
@@ -166,9 +168,12 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
 
         if (IsDust(txout, opts.dust_relay_feerate)) {
             ++n_dust;
+        } else if (whichType != TxoutType::NULL_DATA) {
+            ++n_monetary;
         }
 
         if (whichType == TxoutType::NULL_DATA) {
+            nDataOut++;
             unsigned int size = txout.scriptPubKey.size();
             if (size > datacarrier_bytes_left) {
                 MaybeReject("datacarrier");
@@ -186,6 +191,18 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     // Only MAX_DUST_OUTPUTS_PER_TX dust is permitted(on otherwise valid ephemeral dust)
     if (n_dust > MAX_DUST_OUTPUTS_PER_TX) {
         MaybeReject("dust");
+    }
+
+    // only one OP_RETURN txout is permitted unless -datacarriermultiple is set (Core 31 allows several within the
+    // aggregate -datacarriersize; Bitcoin Knots SHA256 keeps the single-output rule by default, decisions/0013)
+    if (nDataOut > 1 && !opts.datacarrier_multiple) {
+        MaybeReject("multi-op-return");
+    }
+
+    if (!n_monetary) {
+        if (nDataOut && !opts.permitbaredatacarrier) {
+            MaybeReject("bare-datacarrier");
+        }
     }
 
     return true;
