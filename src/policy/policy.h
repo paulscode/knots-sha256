@@ -99,6 +99,10 @@ inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
  * Default setting for -datacarriersize in vbytes.
  */
+/** Default for -permitbaredatacarrier */
+inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{true};
+/** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
+inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
 inline constexpr unsigned int MAX_OP_RETURN_RELAY = MAX_STANDARD_TX_WEIGHT / WITNESS_SCALE_FACTOR;
 /** Default for -datacarrierfullcount */
 inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{false};
