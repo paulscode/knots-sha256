@@ -74,6 +74,7 @@ struct MemPoolOptions {
     bool datacarrier_fullcount{DEFAULT_DATACARRIER_FULLCOUNT};
     bool permitbaredatacarrier{DEFAULT_PERMITBAREDATACARRIER};
     bool datacarrier_multiple{DEFAULT_DATACARRIER_MULTIPLE};
+    bool permitbareanchor{DEFAULT_PERMITBAREANCHOR};
     bool permit_bare_pubkey{DEFAULT_PERMIT_BAREPUBKEY};
     bool permit_bare_multisig{DEFAULT_PERMIT_BAREMULTISIG};
     bool require_standard{true};
