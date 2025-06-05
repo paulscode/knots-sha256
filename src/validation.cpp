@@ -695,7 +695,7 @@ private:
 
     // Run the script checks using our policy flags. As this can be slow, we should
     // only invoke this on transactions that have otherwise passed policy checks.
-    bool PolicyScriptChecks(Workspace& ws) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_pool.cs);
+    bool PolicyScriptChecks(const ATMPArgs& args, Workspace& ws) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_pool.cs);
 
     // Re-run the script checks, using consensus flags, and try to cache the
     // result in the scriptcache. This should be done after
@@ -1149,14 +1149,85 @@ bool MemPoolAccept::PackageRBFChecks(const ATMPArgs& args, const std::vector<CTr
     return true;
 }
 
-bool MemPoolAccept::PolicyScriptChecks(Workspace& ws)
+script_verify_flags PolicyScriptVerifyFlags(const ignore_rejects_type& ignore_rejects)
+{
+    if (ignore_rejects.empty()) {
+        return STANDARD_SCRIPT_VERIFY_FLAGS;
+    }
+    if (ignore_rejects.count("non-mandatory-script-verify-flag")) {
+        return MANDATORY_SCRIPT_VERIFY_FLAGS;
+    }
+
+    script_verify_flags flags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    if (ignore_rejects.count("non-mandatory-script-verify-flag-upgradable")) {
+        constexpr script_verify_flags upgradable_policy_flags =
+            SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS |
+            SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM |
+            SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION |
+            SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS |
+            SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE;
+        flags &= ~upgradable_policy_flags;
+    } else {
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-upgradable-nops")) {
+            flags &= ~SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS;
+        }
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-upgradable-witness_program")) {
+            flags &= ~SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM;
+        }
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-upgradable-taproot_version")) {
+            flags &= ~SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION;
+        }
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-upgradable-op_success")) {
+            flags &= ~SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS;
+        }
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-upgradable-pubkeytype")) {
+            flags &= ~SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE;
+        }
+    }
+    if (ignore_rejects.count("non-mandatory-script-verify-flag-bip62")) {
+        constexpr script_verify_flags bip62_policy_flags =
+            SCRIPT_VERIFY_LOW_S |
+            SCRIPT_VERIFY_SIGPUSHONLY |  // NOTE: not actually set ever
+            SCRIPT_VERIFY_MINIMALDATA;
+        flags &= ~bip62_policy_flags;
+    } else {
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-low_s")) {
+            flags &= ~SCRIPT_VERIFY_LOW_S;
+        }
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-minimaldata")) {
+            flags &= ~SCRIPT_VERIFY_MINIMALDATA;
+        }
+        if (ignore_rejects.count("non-mandatory-script-verify-flag-cleanstack")) {
+            flags &= ~SCRIPT_VERIFY_CLEANSTACK;
+        }
+    }
+    if (ignore_rejects.count("non-mandatory-script-verify-flag-strictenc")) {
+        flags &= ~SCRIPT_VERIFY_STRICTENC;
+    }
+    if (ignore_rejects.count("non-mandatory-script-verify-flag-minimalif")) {
+        flags &= ~SCRIPT_VERIFY_MINIMALIF;
+    }
+    if (ignore_rejects.count("non-mandatory-script-verify-flag-nullfail")) {
+        flags &= ~SCRIPT_VERIFY_NULLFAIL;
+    }
+    if (ignore_rejects.count("non-mandatory-script-verify-flag-witness_pubkeytype")) {
+        flags &= ~SCRIPT_VERIFY_WITNESS_PUBKEYTYPE;
+    }
+    if (ignore_rejects.count("non-mandatory-script-verify-flag-const_scriptcode")) {
+        flags &= ~SCRIPT_VERIFY_CONST_SCRIPTCODE;
+    }
+    flags |= MANDATORY_SCRIPT_VERIFY_FLAGS;  // for safety
+    return flags;
+}
+
+bool MemPoolAccept::PolicyScriptChecks(const ATMPArgs& args, Workspace& ws)
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(m_pool.cs);
     const CTransaction& tx = *ws.m_ptx;
     TxValidationState& state = ws.m_state;
 
-    constexpr script_verify_flags scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    const script_verify_flags scriptVerifyFlags = PolicyScriptVerifyFlags(args.m_ignore_rejects);
 
     // Check input scripts and signatures.
     // This is done last to help prevent CPU exhaustion denial-of-service attacks.
@@ -1398,7 +1469,7 @@ MempoolAcceptResult MemPoolAccept::AcceptSingleTransactionInternal(const CTransa
 
     // Perform the inexpensive checks first and avoid hashing and signature verification unless
     // those checks pass, to mitigate CPU exhaustion denial-of-service attacks.
-    if (!PolicyScriptChecks(ws)) return MempoolAcceptResult::Failure(ws.m_state);
+    if (!PolicyScriptChecks(args, ws)) return MempoolAcceptResult::Failure(ws.m_state);
 
     if (!ConsensusScriptChecks(ws)) return MempoolAcceptResult::Failure(ws.m_state);
 
@@ -1556,7 +1627,7 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
 
     for (Workspace& ws : workspaces) {
         ws.m_package_feerate = package_feerate;
-        if (!PolicyScriptChecks(ws)) {
+        if (!PolicyScriptChecks(args, ws)) {
             // Exit early to avoid doing pointless work. Update the failed tx result; the rest are unfinished.
             package_state.Invalid(PackageValidationResult::PCKG_TX, "transaction failed");
             results.emplace(ws.m_ptx->GetWitnessHash(), MempoolAcceptResult::Failure(ws.m_state));
