@@ -1072,6 +1072,21 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
+    // "Coin blocks" of the confirmed inputs (value in atoms x confirmations at the next height). The coin-age
+    // helper belonged to the superseded mining_priority topic (decisions/0017), so it is computed here.
+    if (m_pool.m_opts.minrelaycoinblocks > 0) {
+        double inputs_coin_age{0};
+        for (const CTxIn& txin : tx.vin) {
+            const Coin& coin = m_view.AccessCoin(txin.prevout);
+            if (!coin.IsSpent() && coin.nHeight <= block_height_next) {
+                inputs_coin_age += (double)(coin.out.nValue) * (block_height_next - coin.nHeight);
+            }
+        }
+        if (inputs_coin_age < m_pool.m_opts.minrelaycoinblocks) {
+            MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-input-immature-coinblocks");
+        }
+    }
+
     // Set entry_sequence to 0 when rejectmsg_zero_mempool_entry_seq is used; this allows txs from a block
     // reorg to be marked earlier than any child txs that were already in the mempool.
     const uint64_t entry_sequence = args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) ? 0 : m_pool.GetSequence();
