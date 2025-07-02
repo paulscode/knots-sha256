@@ -240,8 +240,7 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
     }
 
     if (!CheckSigopsBIP54(tx, mapInputs)) {
-        state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-nonstandard-inputs", "non-witness sigops exceed bip54 limit");
-        return state;
+        if (maybe_reject("bad-txns-input-sigops-toomany-overall", "non-witness sigops exceed bip54 limit")) return state;
     }
 
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
