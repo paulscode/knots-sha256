@@ -134,6 +134,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "getdescriptoractivity", 1, "scanobjects" },
     { "getdescriptoractivity", 2, "include_mempool" },
     { "scantxoutset", 1, "scanobjects" },
+    { "dumptxoutset", 1, "format" },
     { "dumptxoutset", 2, "format" },
     { "dumptxoutset", 2, "show_header" },
     { "createmultisig", 0, "nrequired" },
