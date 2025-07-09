@@ -160,7 +160,7 @@ static RPCHelpMan gettxoutproof()
             if (prove_witness) {
                 mb.SerializeWithWitness(ssMB);
             } else {
-                ssMB << mb;
+            ssMB << mb;
             }
             std::string strHex = HexStr(ssMB);
 
@@ -230,7 +230,7 @@ static RPCHelpMan verifytxoutproof()
             if (verify_witness) {
                 merkleBlock.UnserializeWithWitness(ssMB);
             } else {
-                ssMB >> merkleBlock;
+            ssMB >> merkleBlock;
             }
 
             UniValue res(verify_witness ? UniValue::VOBJ : UniValue::VARR);
@@ -277,16 +277,15 @@ static RPCHelpMan verifytxoutproof()
             }
 
             {
-                ChainstateManager& chainman = EnsureAnyChainman(request.context);
-                LOCK(cs_main);
+            ChainstateManager& chainman = EnsureAnyChainman(request.context);
+            LOCK(cs_main);
 
-                const CBlockIndex* pindex = chainman.m_blockman.LookupBlockIndex(merkleBlock.header.GetHash());
-                const auto& active_chain = chainman.ActiveChain();
-                if (!pindex || !active_chain.Contains(pindex) || pindex->nTx == 0) {
-                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found in chain");
-                }
+            const CBlockIndex* pindex = chainman.m_blockman.LookupBlockIndex(merkleBlock.header.GetHash());
+            if (!pindex || !chainman.ActiveChain().Contains(pindex) || pindex->nTx == 0) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found in chain");
+            }
 
-                // Check if proof is valid, only add results if so
+            // Check if proof is valid, only add results if so
                 if (pindex->nTx != merkleBlock.txn.GetNumTransactions()) {
                     return res;
                 }
@@ -294,7 +293,7 @@ static RPCHelpMan verifytxoutproof()
                 if (verify_witness) {
                     res.pushKV("blockheight", pindex->nHeight);
 
-                    const auto pindex_tip = active_chain.Tip();
+                    const auto pindex_tip = chainman.ActiveChain().Tip();
                     CHECK_NONFATAL(pindex_tip);
                     const CBlockIndex* snapshot_base{chainman.ActiveChainstate().SnapshotBase()};
                     if (snapshot_base && !chainman.ActiveChainstate().GetRole().validated && pindex->nHeight <= snapshot_base->nHeight) {
