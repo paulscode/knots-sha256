@@ -4223,19 +4223,6 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
                                  strprintf("rejected nVersion=0x%08x block", block.nVersion));
     }
 
-    if (IsThisSoftwareExpired(block.nTime)) {
-        // Wait an extra day before we start rejecting blocks
-        CBlockIndex const *blockindex_old = pindexPrev;
-        for (int i = 0; i < 144; ++i) {
-            assert(blockindex_old);
-            blockindex_old = blockindex_old->pprev;
-        }
-        assert(blockindex_old);
-        if (IsThisSoftwareExpired(blockindex_old->GetMedianTimePast())) {
-            return state.Invalid(BlockValidationResult::BLOCK_TIME_FUTURE, "node-expired", "node software has expired");
-        }
-    }
-
     return true;
 }
 
