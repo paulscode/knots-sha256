@@ -70,9 +70,9 @@ inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{false};
 
 // NOTE: Changes to these three require manually adjusting doc in init.cpp
 /** Default for -permitephemeral=send */
-inline constexpr bool DEFAULT_PERMITEPHEMERAL_SEND{true};
+inline constexpr bool DEFAULT_PERMITEPHEMERAL_SEND{false};
 /** Default for -permitephemeral=dust */
-inline constexpr bool DEFAULT_PERMITEPHEMERAL_DUST{true};
+inline constexpr bool DEFAULT_PERMITEPHEMERAL_DUST{false};
 /** Default for -permitephemeral=anchor */
 inline constexpr bool DEFAULT_PERMITEPHEMERAL_ANCHOR{true};
 
