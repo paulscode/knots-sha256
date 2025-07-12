@@ -925,6 +925,8 @@ void InitParameterInteraction(ArgsManager& args)
         args.SoftSetArg("-rejectparasites", "0");
         args.SoftSetArg("-datacarriercost", "0.25");
         args.SoftSetArg("-datacarrierfullcount", "0");
+        // Core 30+ enforces MAX_TX_LEGACY_SIGOPS (2500, BIP54) itself; Knots' unlimited reset predates it (Core 29)
+        args.SoftSetArg("-maxtxlegacysigops", strprintf("%u", MAX_TX_LEGACY_SIGOPS));
         args.SoftSetArg("-maxscriptsize", strprintf("%s", std::numeric_limits<unsigned int>::max()));
         args.SoftSetArg("-mempooltruc", "enforce");
         args.SoftSetArg("-permitephemeral", "anchor,send,dust");
