@@ -119,7 +119,7 @@ static const bool DEFAULT_ACCEPT_DATACARRIER = true;
  * +1 for the pushdata opcode.
  */
 /** Default for -permitbaredatacarrier */
-static const bool DEFAULT_PERMITBAREDATACARRIER{true};
+static const bool DEFAULT_PERMITBAREDATACARRIER{false};
 /** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
 static constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
 static constexpr unsigned int MAX_OP_RETURN_RELAY{42};
