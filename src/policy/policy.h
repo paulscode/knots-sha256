@@ -120,7 +120,7 @@ inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
  * +1 for the pushdata opcode.
  */
 /** Default for -permitbaredatacarrier */
-inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{true};
+inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{false};
 /** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
 inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
 inline constexpr unsigned int MAX_OP_RETURN_RELAY{42};
