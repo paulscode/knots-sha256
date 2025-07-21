@@ -27,6 +27,14 @@ set_target_properties(bitcoinconsensus PROPERTIES
 
 add_library(libbitcoinconsensus ALIAS bitcoinconsensus)
 
+# ELF: export only the bitcoinconsensus_* API. Without this, the libstdc++ template code the library instantiates
+# (std::string, std::from_chars...) is exported too, because the standard headers give it default visibility.
+# Mach-O and PE builds already export only the API.
+if(BUILD_SHARED_LIBS AND NOT APPLE AND NOT WIN32)
+  target_link_options(bitcoinconsensus PRIVATE "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libbitcoinconsensus.map")
+  set_property(TARGET bitcoinconsensus APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libbitcoinconsensus.map)
+endif()
+
 # When building the static library, install all static libraries the
 # libbitcoinconsensus depends on.
 if(NOT BUILD_SHARED_LIBS)
@@ -53,6 +61,7 @@ if(NOT BUILD_SHARED_LIBS)
   list(TRANSFORM all_consensus_static_link_libs PREPEND "-l")
   # LIBS_PRIVATE is substituted in the pkg-config file.
   list(JOIN all_consensus_static_link_libs " " LIBS_PRIVATE)
+  target_compile_definitions(bitcoinconsensus PRIVATE STATIC_LIBBITCOINCONSENSUS)
   set(MAYBE_DEFINE_STATIC_LIBBITCOINCONSENSUS "-DSTATIC_LIBBITCOINCONSENSUS")
 else()
   set(MAYBE_DEFINE_STATIC_LIBBITCOINCONSENSUS )
