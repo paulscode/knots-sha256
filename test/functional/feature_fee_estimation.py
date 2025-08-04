@@ -14,6 +14,7 @@ from test_framework.messages import (
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
+    assert_approx,
     assert_not_equal,
     assert_equal,
     assert_greater_than,
@@ -257,15 +258,24 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.log.info("Final estimates after emptying mempools")
         check_estimates(self.nodes[1], self.fees_per_kb)
 
-    def test_feerate_dustrelayfee_common(self, node, multiplier, dust_mode, desc, expected_base):
+    def test_feerate_dustrelayfee_common(self, node, multiplier, dust_mode, desc, expected_base, *, approx=False):
         dust_parameter = f"-dustdynamic={dust_mode}".replace('=3*', '=')
         self.log.info(f"Test dust limit setting {dust_parameter} (fee estimation for {desc})")
-        self.restart_node(0, extra_args=[dust_parameter])
+        self.restart_node(0, extra_args=[dust_parameter, '-dustrelayfee=0'])
         assert_equal(node.getmempoolinfo()['dustdynamic'], dust_mode)
+        expected_dustrelayfee = satoshi_round(expected_base() * multiplier, rounding=ROUND_DOWN)
         with node.busy_wait_for_debug_log([b'Updating dust feerate']):
+            mempool_info = node.getmempoolinfo()
+            assert mempool_info['dustrelayfee'] != expected_dustrelayfee
+            assert mempool_info['dustrelayfeefloor'] <= expected_dustrelayfee
             node.mockscheduler(SECONDS_PER_HOUR)
         mempool_info = node.getmempoolinfo()
-        assert_equal(mempool_info['dustrelayfee'], satoshi_round(expected_base() * multiplier, rounding=ROUND_DOWN))
+        if approx:
+            # Core 31 walks the cluster-mempool linearisation (chunk feerates), which can differ slightly from the
+            # per-transaction ordering the reference helper uses.
+            assert_approx(float(mempool_info['dustrelayfee']), float(expected_dustrelayfee), vspan=float(expected_dustrelayfee) * 0.02)
+        else:
+            assert_equal(mempool_info['dustrelayfee'], expected_dustrelayfee)
         assert mempool_info['dustrelayfee'] > mempool_info['dustrelayfeefloor']
 
     def test_feerate_dustrelayfee_target(self, node, multiplier, dustfee_target):
@@ -274,7 +284,7 @@ class EstimateFeeTest(BitcoinTestFramework):
 
     def test_feerate_dustrelayfee_mempool(self, node, multiplier, dustfee_kB):
         dust_mode = f"{multiplier}*mempool:{dustfee_kB}"
-        self.test_feerate_dustrelayfee_common(node, multiplier, dust_mode, f'{dustfee_kB} kB into mempool', lambda: get_feerate_into_mempool(node, dustfee_kB))
+        self.test_feerate_dustrelayfee_common(node, multiplier, dust_mode, f'{dustfee_kB} kB into mempool', lambda: get_feerate_into_mempool(node, dustfee_kB), approx=True)
 
     def test_feerate_dustrelayfee(self):
         node = self.nodes[0]
