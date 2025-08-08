@@ -1725,6 +1725,11 @@ BOOST_AUTO_TEST_CASE(formatscriptflags)
     BOOST_CHECK_EQUAL(FormatScriptFlags(script_verify_flags::from_int(1u<<26)), "0x04000000");
 }
 
+static std::string DatacarrierBytesStr(const CScript &script, const size_t remaining_outputs = 0) {
+    auto dcb = script.DatacarrierBytes(remaining_outputs);
+    return strprintf("%s+%s", dcb.first, dcb.second);
+}
+
 BOOST_AUTO_TEST_CASE(script_DataCarrierBytes)
 {
     using zeros = std::vector<unsigned char>;
@@ -1747,6 +1752,13 @@ BOOST_AUTO_TEST_CASE(script_DataCarrierBytes)
     BOOST_CHECK_EQUAL("0+6", DatacarrierBytesStr(CScript() << OP_FALSE << OP_IF << OP_TRUE << OP_IF << OP_ENDIF << OP_ENDIF));
     // pushing then immediately dropping is data: length(1), zero(11), OP_DROP
     BOOST_CHECK_EQUAL("0+13", DatacarrierBytesStr(CScript() << zeros(11) << OP_DROP));
+    // OLGA data obfuscated as p2wsh
+    const auto olga_header = CScript() << OP_0 << "003e7374616d703a000000000000000000000000000000000000000000000000"_hex;
+    BOOST_CHECK_EQUAL("0+82", DatacarrierBytesStr(olga_header, 2));
+    // OLGA missing a second output is p2wsh, not OLGA
+    BOOST_CHECK_EQUAL("0+0", DatacarrierBytesStr(olga_header, 1));
+    // OGLA with extra outputs still is OLGA
+    BOOST_CHECK_EQUAL("0+82", DatacarrierBytesStr(olga_header, 3));
 }
 
 BOOST_AUTO_TEST_CASE(script_GetScriptForTransactionInput)
