@@ -842,7 +842,19 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     // At least one data push is needed after OP_13 to match
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << OP_13;
     CheckIsStandard(t);
+    // Test rejecttokens applying to OLGA
+    const auto olga_header = CScript() << OP_0 << "003e7374616d703a000000000000000000000000000000000000000000000000"_hex;
+    t.vout[0].scriptPubKey = olga_header;
+    t.vout.resize(1);
+    // Missing a second output, so not OLGA
+    CheckIsStandard(t);
+    t.vout.emplace_back(1000, olga_header);
+    CheckIsNotStandard(t, "tokens-olga");
+    t.vout.emplace_back(1000, olga_header);
+    CheckIsNotStandard(t, "tokens-olga");
     g_mempool_opts.reject_tokens = false;
+    CheckIsStandard(t);
+    t.vout.resize(1);
 
     // Custom 83-byte TxoutType::NULL_DATA (standard with max_op_return_relay of 83)
     g_mempool_opts.permitbaredatacarrier = true;
