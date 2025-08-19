@@ -189,7 +189,7 @@ void AllocateFileRange(FILE* file, uint64_t offset, unsigned int length)
     nFileSize.u.HighPart = nEndPos >> 32;
     SetFilePointerEx(hFile, nFileSize, 0, FILE_BEGIN);
     SetEndOfFile(hFile);
-#elif defined(__APPLE__)
+#elif 0
     // OSX specific version
     // NOTE: Contrary to other OS versions, the OSX version assumes that
     // NOTE: offset is the size of the file.
