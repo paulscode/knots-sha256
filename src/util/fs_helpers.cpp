@@ -207,8 +207,7 @@ void AllocateFileRange(FILE* file, uint64_t offset, unsigned int length)
 #else
 #if defined(HAVE_POSIX_FALLOCATE)
     // Version using posix_fallocate
-    off_t nEndPos = (off_t)offset + length;
-    if (0 == posix_fallocate(fileno(file), 0, nEndPos)) return;
+    if (0 == posix_fallocate(fileno(file), offset, length)) return;
 #endif
     // Fallback version
     // TODO: just write one byte per block
