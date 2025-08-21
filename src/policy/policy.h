@@ -42,7 +42,7 @@ inline constexpr unsigned int DEFAULT_COINBASE_OUTPUT_MAX_ADDITIONAL_SIGOPS{400}
  * Setting a lower value is prevented at startup. */
 inline constexpr unsigned int MINIMUM_BLOCK_RESERVED_WEIGHT{2000};
 /** Default for -blockmintxfee, which sets the minimum feerate for a transaction in blocks created by mining code **/
-inline constexpr unsigned int DEFAULT_BLOCK_MIN_TX_FEE{1};
+inline constexpr unsigned int DEFAULT_BLOCK_MIN_TX_FEE{1000};
 /** The maximum weight for transactions we're willing to relay/mine */
 inline constexpr int32_t MAX_STANDARD_TX_WEIGHT{400'000};
 /** The minimum non-witness size for transactions we're willing to relay/mine: one larger than 64  */
