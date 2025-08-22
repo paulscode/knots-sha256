@@ -90,6 +90,7 @@ class CompactBlocksBlockReconstructionLimitTest(BitcoinTestFramework):
         self.num_nodes = 1
         self.extra_args = [[
             "-acceptnonstdtxn=0",
+            "-incrementalrelayfee=0.00001",
             "-debug=net",
         ]]
         self.utxos = []
@@ -106,7 +107,7 @@ class CompactBlocksBlockReconstructionLimitTest(BitcoinTestFramework):
 
     def restart_node_with_limit(self, count=None):
         """Restart node with specific count limit."""
-        extra_args = ["-acceptnonstdtxn=0", "-debug=net"]
+        extra_args = list(self.extra_args[0])
 
         if count is not None:
             self.log.info(f"Setting transaction count limit: {count}")
