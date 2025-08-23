@@ -14,6 +14,7 @@ import time
 
 from test_framework.messages import (
     CAddress,
+    NODE_BLOOM,
     from_hex,
     msg_headers,
     CBlockHeader,
@@ -106,7 +107,9 @@ class AddrSelfAnnouncementTest(BitcoinTestFramework):
         self.nodes[0].setmocktime(int(time.time()))
 
         expected = CAddress()
-        expected.nServices = int(netinfo["localservices"], 16)
+        # Localhost peers hold the bloomfilter permission by default here, and a peer with that
+        # permission is told we serve NODE_BLOOM — getnetworkinfo reports the node-wide services only.
+        expected.nServices = int(netinfo["localservices"], 16) | NODE_BLOOM
         expected.ip = IP_TO_ANNOUNCE
         expected.port = port
         expected.time = self.nodes[0].mocktime
