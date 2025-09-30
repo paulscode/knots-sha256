@@ -975,7 +975,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     // Core skips the TRUC checks for disconnected-block re-adds (bypass_limits); that caller now passes the legacy
     // ignore set, whose zero-entry-sequence reason is unique to it.
-    if (!args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq)) {
+    if (!args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) && !args.m_ignore_rejects.count("truc")) {
         // Perform the TRUC checks, using the in-mempool parents.
         if (const auto err{SingleTRUCChecks(m_pool, ws.m_ptx, "truc-", reason, args.m_ignore_rejects, ws.m_parents, ws.m_conflicts, ws.m_vsize)}) {
             // Single transaction contexts only.
