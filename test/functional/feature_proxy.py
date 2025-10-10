@@ -46,7 +46,10 @@ import tempfile
 
 from test_framework.socks5 import Socks5Configuration, Socks5Command, Socks5Server, AddressType
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal
+from test_framework.util import (
+    assert_equal,
+    p2p_port,
+)
 from test_framework.netutil import test_ipv6_local, test_unix_socket
 
 # Networks returned by RPC getpeerinfo.
@@ -436,7 +439,7 @@ class ProxyTest(BitcoinTestFramework):
 
         self.log.info("Test passing -onlynet=onion without -proxy or -onion but with -listenonion=1 is ok")
         self.start_node(1, extra_args=["-onlynet=onion", "-listenonion=1"])
-        self.stop_node(1)
+        self.stop_node(1, expected_stderr=f'Warning: You are using a common listening port (127.0.0.1:{p2p_port(1)}) for both Tor and local connections. All connections to this port will be assumed to be Tor connections, and will be denied any whitelist permissions. If this is not your intent, setup a separate -bind=<addr>[:<port>]=onion configuration, or set -listenonion=0.')
 
         self.log.info("Test unknown and removed network names are rejected by -onlynet")
         for network in ["abc", "tor"]:
