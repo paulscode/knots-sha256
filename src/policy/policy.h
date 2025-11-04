@@ -117,14 +117,14 @@ inline constexpr unsigned int DEFAULT_DESCENDANT_LIMIT{25};
 /** Default for -datacarrier */
 inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
- * Default setting for -datacarriersize. 40 bytes of data, +1 for OP_RETURN,
- * +1 for the pushdata opcode.
+ * Default setting for -datacarriersize. 80 bytes of data, +1 for OP_RETURN,
+ * +2 for the pushdata opcodes.
  */
 /** Default for -permitbaredatacarrier */
 inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{false};
 /** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
 inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
-inline constexpr unsigned int MAX_OP_RETURN_RELAY{42};
+inline constexpr unsigned int MAX_OP_RETURN_RELAY = 83;
 /** Default for -datacarrierfullcount */
 inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{true};
 /**
