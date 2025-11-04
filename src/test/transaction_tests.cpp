@@ -907,9 +907,9 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout[1].nValue = 0;
     // Core 31 accepts several OP_RETURN outputs within -datacarriersize; Bitcoin Knots SHA256 requires
     // -datacarriermultiple for that (single-output rule by default, decisions/0013)
-    CheckIsNotStandard(t, "multi-op-return");
+    CheckIsNotStandard(t, "multi-op-return", /*max_op_return_relay=*/1000);
     g_mempool_opts.datacarrier_multiple = true;
-    CheckIsStandard(t);
+    CheckIsStandard(t, /*max_op_return_relay=*/1000);
 
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN;
@@ -922,7 +922,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3804678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3804678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     const auto datacarrier_size = t.vout[0].scriptPubKey.size() + t.vout[1].scriptPubKey.size();
-    CheckIsStandard(t); // Default max relay should never trigger
+    CheckIsNotStandard(t, "datacarrier"); // two full outputs exceed the 83-byte default
     CheckIsStandard(t, /*max_op_return_relay=*/datacarrier_size);
     CheckIsNotStandard(t, "datacarrier", /*max_op_return_relay=*/datacarrier_size-1);
     g_mempool_opts.datacarrier_multiple = DEFAULT_DATACARRIER_MULTIPLE;
