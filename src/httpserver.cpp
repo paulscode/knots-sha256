@@ -222,7 +222,7 @@ static std::vector<std::pair<std::string, uint16_t>> GetBindAddresses()
             LogWarning("Option -rpcallowip was specified without -rpcbind; this doesn't usually make sense");
         }
         if (!gArgs.GetArgs("-rpcbind").empty()) {
-            LogWarning("Option -rpcbind was ignored because -rpcallowip was not specified, refusing to allow everyone to connect");
+            InitWarning(_("Option -rpcbind was ignored because -rpcallowip was not specified, refusing to allow everyone to connect"));
         }
     } else { // Specific bind addresses
         for (const std::string& strRPCBind : gArgs.GetArgs("-rpcbind")) {
