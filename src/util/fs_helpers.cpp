@@ -9,6 +9,7 @@
 
 #include <random.h>
 #include <sync.h>
+#include <tinyformat.h>
 #include <util/fs.h>
 #include <util/log.h>
 #include <util/syserror.h>
@@ -18,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
