@@ -12,6 +12,7 @@
 #include <common/args.h>
 #include <common/settings.h>
 #include <consensus/amount.h>
+#include <common/pcp.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
 #include <external_signer.h>
@@ -201,7 +202,10 @@ public:
         });
         args().WriteSettingsFile();
     }
-    void mapPort(bool enable) override { StartMapPort(enable); }
+    void mapPort(bool enable) override {
+        g_pcp_warn_for_unauthorized = true;
+        StartMapPort(enable);
+    }
     std::optional<Proxy> getProxy(Network net) override { return GetProxy(net); }
     size_t getNodeCount(ConnectionDirection flags) override
     {
