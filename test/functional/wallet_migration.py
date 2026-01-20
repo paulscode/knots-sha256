@@ -1786,6 +1786,11 @@ class WalletMigrationTest(BitcoinTestFramework):
 
         migration_failure_cases = [
             "",
+            ".",
+            "./",
+            "..",
+            "../",
+            "../subdir",
             os.path.abspath(self.master_node.datadir_path / "absolute_path"),
             "normallynamedwallet"
         ]
