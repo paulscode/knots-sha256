@@ -717,13 +717,19 @@ class WalletMigrationTest(BitcoinTestFramework):
         wallet.importaddress(master_wallet.getnewaddress(address_type="legacy"))
         wallet.unloadwallet()
 
+        migrating_file_to_dir = wallet_name.endswith('.dat')
         if os.path.isabs(wallet_name):
+            assert not migrating_file_to_dir
             old_path = master_path = Path(wallet_name)
         else:
             old_path = self.old_node.wallets_path / wallet_name
             master_path = self.master_node.wallets_path / wallet_name
-            os.makedirs(master_path, exist_ok=True)
-            shutil.copyfile(old_path / "wallet.dat", master_path / "wallet.dat")
+            if migrating_file_to_dir:
+                assert not master_path.exists()
+                shutil.copyfile(old_path / "wallet.dat", master_path)
+            else:
+                os.makedirs(master_path, exist_ok=True)
+                shutil.copyfile(old_path / "wallet.dat", master_path / "wallet.dat")
 
         # This will be the watch-only directory the migration tries to create,
         # we make migration fail by placing a wallet.dat file there.
@@ -779,6 +785,10 @@ class WalletMigrationTest(BitcoinTestFramework):
             Path(watch_only_dir).rmdir()
             Path(master_path / "wallet.dat").unlink()
             Path(old_path / "wallet.dat").unlink(missing_ok=True)
+            try:
+                master_path.rmdir()
+            except Exception:
+                pass
 
     def test_direct_file(self):
         self.log.info("Test migration of a wallet that is not in a wallet directory")
@@ -1703,6 +1713,7 @@ class WalletMigrationTest(BitcoinTestFramework):
             "",
             ".",
             "./",
+            "test.dat",
             "..",
             "../",
             "../subdir",
