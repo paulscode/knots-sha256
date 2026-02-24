@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
@@ -525,7 +526,7 @@ size_t DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view)
 
 int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& view, const unsigned int weight_per_data_byte)
 {
-    int32_t mod_weight{0};
+    int64_t mod_weight{0};
 
     // Add in any extra weight for data bytes
     if (weight_per_data_byte > 1) {
@@ -533,15 +534,15 @@ int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& vi
             const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
             auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
             if (weight_per_data_byte > consensus_weight_per_byte) {
-                mod_weight += script.DatacarrierBytes() * (weight_per_data_byte - consensus_weight_per_byte);
+                mod_weight += int64_t(script.DatacarrierBytes()) * (weight_per_data_byte - consensus_weight_per_byte);
             }
         }
         if (weight_per_data_byte > WITNESS_SCALE_FACTOR) {
             for (const CTxOut& txout : tx.vout) {
-                mod_weight += txout.scriptPubKey.DatacarrierBytes() * (weight_per_data_byte - WITNESS_SCALE_FACTOR);
+                mod_weight += int64_t(txout.scriptPubKey.DatacarrierBytes()) * (weight_per_data_byte - WITNESS_SCALE_FACTOR);
             }
         }
     }
 
-    return mod_weight;
+    return int32_t(std::min(mod_weight, int64_t{std::numeric_limits<int32_t>::max()}));
 }
