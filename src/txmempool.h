@@ -658,6 +658,15 @@ public:
 
         void StageRemoval(CTxMemPool::txiter it);
 
+        /** Add a fee delta to a staged entry and keep the TxGraph's feerate in step, as PrioritiseTransaction()
+         *  does for entries already in the mempool. Changing only the entry leaves the cluster linearization,
+         *  and with it mining and eviction, on the old fee (CTxMemPool::check() asserts the two agree). */
+        void UpdateStagedModifiedFee(TxHandle it, CAmount fee_delta)
+        {
+            it->UpdateModifiedFee(fee_delta);
+            m_pool->m_txgraph->SetTransactionFee(*it, it->GetModifiedFee());
+        }
+
         const CTxMemPool::setEntries& GetRemovals() const { return m_to_remove; }
 
         /** Check if any cluster limits are exceeded. Returns true if pass, false if fail. */
