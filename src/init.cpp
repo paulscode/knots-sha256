@@ -893,6 +893,7 @@ void InitParameterInteraction(ArgsManager& args)
         args.SoftSetArg("-datacarriersize", "100000");
         args.SoftSetArg("-datacarriermultiple", "1");
         args.SoftSetArg("-rejectparasites", "0");
+        args.SoftSetArg("-subdustfeepenalty", "0");
         args.SoftSetArg("-datacarriercost", "0.25");
         args.SoftSetArg("-datacarrierfullcount", "0");
         args.SoftSetArg("-maxtxlegacysigops", strprintf("%s", std::numeric_limits<unsigned int>::max()));
