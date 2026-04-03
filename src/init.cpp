@@ -1331,7 +1331,7 @@ static ChainstateLoadResult InitAndLoadChainstate(
             mempool_opts.max_size_bytes * (1.0 / 1024 / 1024));
 
     if (gArgs.IsArgSet("-lowmem")) {
-        g_low_memory_threshold = gArgs.GetIntArg("-lowmem", 0 /* not used */) * 1024 * 1024;
+        g_low_memory_threshold = std::max(int64_t{0}, gArgs.GetIntArg("-lowmem", 0 /* not used */)) * 1024 * 1024;
     }
     if (g_low_memory_threshold > 0) {
         LogInfo("* Flushing caches if available system memory drops below %s MiB", g_low_memory_threshold / 1024 / 1024);
