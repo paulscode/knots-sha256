@@ -9,6 +9,7 @@
 #include <index/txindex.h>
 #include <index/txospenderindex.h>
 #include <kernel/caches.h>
+#include <logging.h>
 #include <node/dbcache.h>
 #include <node/interface_ui.h>
 #include <tinyformat.h>
@@ -63,5 +64,13 @@ void LogOversizedDbCache(const ArgsManager& args) noexcept
                         db_cache / 1_MiB, *total_ram / 1_MiB)});
         }
     }
+}
+
+void LogAutoDbCacheSettings() noexcept
+{
+    LogInfo("Automatically selected -dbcache=%s MiB based on %s system memory of %s MiB.",
+            GetDefaultDBCache(GetTotalRam()) / 1_MiB,
+            TryGetTotalRam() ? "detected" : "assumed",
+            GetTotalRam() / 1_MiB);
 }
 } // namespace node
