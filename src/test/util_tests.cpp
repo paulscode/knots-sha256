@@ -13,7 +13,6 @@
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
-#include <univalue.h>
 #include <util/bitdeque.h>
 #include <util/byte_units.h>
 #include <util/fs.h>
@@ -36,6 +35,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <univalue.h>
 #include <type_traits>
 #include <utility>
 #include <vector>
