@@ -9,7 +9,14 @@
 #include <test/util/json.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
+#include <util/hasher.h>
 #include <util/strencodings.h>
+
+#ifdef __GLIBCXX__
+#include <bits/functional_hash.h>
+#endif
+
+#include <type_traits>
 
 #include <boost/test/unit_test.hpp>
 
@@ -84,6 +91,16 @@ BOOST_AUTO_TEST_CASE(murmurhash3)
     T(0xb4698defU, 0x00000000, "001122334455667788");
 
 #undef T
+}
+
+BOOST_AUTO_TEST_CASE(salted_outpoint_hasher_cache_policy)
+{
+    constexpr bool nothrow_invocable{std::is_nothrow_invocable_v<const SaltedOutpointHasher&, const COutPoint&>};
+    BOOST_CHECK(!nothrow_invocable);
+#ifdef __GLIBCXX__
+    // With a fast hasher, the may-throw contract above selects cached hash nodes on libstdc++.
+    BOOST_CHECK(std::__is_fast_hash<SaltedOutpointHasher>::value);
+#endif
 }
 
 /*
