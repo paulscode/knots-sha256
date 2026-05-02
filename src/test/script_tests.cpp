@@ -156,10 +156,14 @@ void DoTest(const CScript& scriptPubKey, const CScript& scriptSig, const CScript
 #if defined(HAVE_CONSENSUS_LIB)
     DataStream stream;
     stream << TX_WITH_WITNESS(tx2);
-    uint32_t libconsensus_flags{flags & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_ALL};
-    if (libconsensus_flags == flags) {
+    const uint32_t libconsensus_flags{static_cast<uint32_t>(flags.as_int() & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_ALL)};
+    if (libconsensus_flags == flags.as_int()) {
         int expectedSuccessCode = expect ? 1 : 0;
-        if (flags & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_WITNESS) {
+        if (libconsensus_flags & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_TAPROOT) {
+            // Taproot needs the spent outputs (Core 31 ships taproot vectors in script_tests.json)
+            const UTXO utxo{scriptPubKey.data(), static_cast<unsigned int>(scriptPubKey.size()), txCredit.vout[0].nValue};
+            BOOST_CHECK_MESSAGE(bitcoinconsensus_verify_script_with_spent_outputs(scriptPubKey.data(), scriptPubKey.size(), txCredit.vout[0].nValue, UCharCast(stream.data()), stream.size(), &utxo, 1, 0, libconsensus_flags, nullptr) == expectedSuccessCode, message);
+        } else if (libconsensus_flags & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_WITNESS) {
             BOOST_CHECK_MESSAGE(bitcoinconsensus_verify_script_with_amount(scriptPubKey.data(), scriptPubKey.size(), txCredit.vout[0].nValue, UCharCast(stream.data()), stream.size(), 0, libconsensus_flags, nullptr) == expectedSuccessCode, message);
         } else {
             BOOST_CHECK_MESSAGE(bitcoinconsensus_verify_script_with_amount(scriptPubKey.data(), scriptPubKey.size(), 0, UCharCast(stream.data()), stream.size(), 0, libconsensus_flags, nullptr) == expectedSuccessCode, message);
