@@ -112,6 +112,14 @@ option(BUILD_UTIL_CHAINSTATE "Build experimental bitcoin-chainstate executable."
 option(BUILD_KERNEL_LIB "Build experimental bitcoinkernel library." ${BUILD_UTIL_CHAINSTATE})
 cmake_dependent_option(BUILD_KERNEL_TEST "Build tests for the experimental bitcoinkernel library." ON "BUILD_KERNEL_LIB" OFF)
 
+option(WITH_SYSTEM_LEVELDB "Build with system LevelDB instead of embedded fork." OFF)
+mark_as_advanced(WITH_SYSTEM_LEVELDB)
+if(WITH_SYSTEM_LEVELDB)
+  find_package(LevelDB MODULE REQUIRED)
+else()
+  set(EMBEDDED_LEVELDB TRUE)
+endif()  # WITH_SYSTEM_LEVELDB
+
 option(ENABLE_WALLET "Enable wallet." ON)
 if(ENABLE_WALLET)
   if(VCPKG_TARGET_TRIPLET)
