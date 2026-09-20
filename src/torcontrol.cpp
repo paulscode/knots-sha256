@@ -71,6 +71,11 @@ static const float RECONNECT_TIMEOUT_MAX = 600.0;
  * this is belt-and-suspenders sanity limit to prevent memory exhaustion.
  */
 static const int MAX_LINE_LENGTH = 100000;
+/** Maximum number of lines received on TorControlConnection per reply to avoid
+ * memory exhaustion. The largest expected now is 5 (PROTOCOLINFO), but future
+ * changes to this file might need to re-evaluate MAX_LINE_COUNT.
+ */
+constexpr int MAX_LINE_COUNT = 1000;
 
 /****** Low-level TorControlConnection ********/
 
@@ -98,6 +103,13 @@ void TorControlConnection::readcb(struct bufferevent *bev, void *ctx)
         if (n_read_out >= MAX_LINE_LENGTH) {
             free(line);
             LogWarning("tor: Disconnecting because MAX_LINE_LENGTH exceeded");
+            self->Disconnect();
+            self->disconnected(*self);
+            return;
+        }
+        if (self->message.lines.size() == MAX_LINE_COUNT) {
+            free(line);
+            LogWarning("Control port reply exceeded %d lines, disconnecting", MAX_LINE_COUNT);
             self->Disconnect();
             self->disconnected(*self);
             return;
