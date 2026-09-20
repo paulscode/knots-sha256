@@ -32,7 +32,7 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         self.uses_wallet = None
         # both nodes disable full-rbf to test BIP125 signaling (Core 31 has no ancestor/descendant limit options; cluster limits are the defaults)
         self.extra_args = [
-            ["-mempoolfullrbf=0"],
+            ["-mempoolfullrbf=0", "-mempooltruc=accept"],
             # second node has default mempool parameters, besides mempoolfullrbf being disabled
             ["-mempoolfullrbf=0"],
             ["-acceptnonstdtxn=1", "-mempoolreplacement=0"],
@@ -90,8 +90,10 @@ class ReplaceByFeeTest(BitcoinTestFramework):
 
         self.log.info("Running test opt-in...")
         self.test_opt_in(fullrbf=False)
+        self.test_opt_in(fullrbf=False, use_truc=True)
         self.nodes[0], self.nodes[-1] = self.nodes[-1], self.nodes[0]
         self.test_opt_in(fullrbf=True)
+        self.test_opt_in(fullrbf=True, use_truc=True)
         self.nodes[0], self.nodes[-1] = self.nodes[-1], self.nodes[0]
 
         self.log.info("Running test RPC...")
@@ -451,7 +453,7 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         double_tx_hex = double_tx.serialize().hex()
         self.nodes[0].sendrawtransaction(double_tx_hex, 0)
 
-    def test_opt_in(self, fullrbf):
+    def test_opt_in(self, fullrbf, use_truc=False):
         """Replacing should only work if orig tx opted in"""
         tx0_outpoint = self.make_utxo(self.nodes[0], int(1.1 * COIN))
 
@@ -510,15 +512,24 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         # opt-in on one of the inputs
         # Transaction should be replaceable on either input
 
+        self.generate(self.nodes[0], 1)  # clean mempool so parent txs don't trigger BIP125
+        if use_truc:
+            kwargs = {'sequence': SEQUENCE_FINAL, 'version': 3}
+        else:
+            kwargs = {'sequence': [SEQUENCE_FINAL, 0xfffffffd]}
+
         tx3a_txid = self.wallet.send_self_transfer_multi(
             from_node=self.nodes[0],
             utxos_to_spend=[tx1a_utxo, tx2a_utxo],
-            sequence=[SEQUENCE_FINAL, 0xfffffffd],
             fee_per_output=int(0.1 * COIN),
+            **kwargs
         )["txid"]
 
         # This transaction is shown as replaceable
-        assert_equal(self.nodes[0].getmempoolentry(tx3a_txid)['bip125-replaceable'], True)
+        if use_truc:
+            assert_equal(self.nodes[0].getmempoolentry(tx3a_txid)['bip125-replaceable'], False)
+        else:
+            assert_equal(self.nodes[0].getmempoolentry(tx3a_txid)['bip125-replaceable'], True)
 
         self.wallet.send_self_transfer(
             from_node=self.nodes[0],
