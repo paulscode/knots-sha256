@@ -18,6 +18,7 @@
 #include <policy/packages.h>
 #include <primitives/transaction.h>
 #include <primitives/transaction_identifier.h>
+#include <script/script.h>
 #include <sync.h>
 #include <txgraph.h>
 #include <util/feefrac.h>
@@ -43,6 +44,9 @@
 
 class CChain;
 class CScript;
+
+/** Hash key under which a scriptPubKey is tracked in the mempool (-spkreuse). */
+uint160 ScriptHashkey(const CScript& script);
 class ValidationSignals;
 
 struct bilingual_str;
@@ -280,6 +284,8 @@ public:
     int64_t GetAncestorCount(const CTxMemPoolEntry &e) const { LOCK(cs); return m_txgraph->GetAncestors(e, TxGraph::Level::MAIN).size(); }
     std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> GetChildren(const CTxMemPoolEntry &entry) const;
     std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> GetParents(const CTxMemPoolEntry &entry) const;
+
+    std::map<uint160, std::pair<const CTransaction *, const CTransaction *>> mapUsedSPK;
 
 private:
     std::vector<indexed_transaction_set::const_iterator> GetSortedScoreWithTopology() const EXCLUSIVE_LOCKS_REQUIRED(cs);
@@ -639,6 +645,9 @@ public:
 
         using TxHandle = CTxMemPool::txiter;
 
+        /** Modify a staged (not yet applied) entry in place; Knots uses this to attach the scriptPubKey states. */
+        template <typename Modifier>
+        void ModifyEntry(TxHandle it, Modifier&& fn) { m_to_add.modify(it, std::forward<Modifier>(fn)); }
         TxHandle StageAddition(const CTransactionRef& tx, CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int64_t sigops_cost, LockPoints lp);
 
         void StageRemoval(CTxMemPool::txiter it);
@@ -689,6 +698,7 @@ public:
 
         CTxMemPool* m_pool;
         CTxMemPool::indexed_transaction_set m_to_add;
+    private:
         std::vector<CTxMemPool::txiter> m_entry_vec; // track the added transactions' insertion order
         // map from the m_to_add index to the ancestors for the transaction
         std::map<CTxMemPool::txiter, CTxMemPool::setEntries, CompareIteratorByHash> m_ancestors;
