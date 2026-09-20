@@ -35,6 +35,15 @@ struct LockPoints {
     CBlockIndex* maxInputBlock{nullptr};
 };
 
+enum MemPool_SPK_State {
+    MSS_UNSEEN  = 0,
+    MSS_SPENT   = 1,  // .second
+    MSS_CREATED = 2,  // .first
+    MSS_BOTH    = 3,
+};
+
+typedef std::map<uint160, enum MemPool_SPK_State> SPKStates_t;
+
 struct CompareIteratorByHash {
     // SFINAE for T where T is either a pointer type (e.g., a txiter) or a reference_wrapper<T>
     // (e.g. a wrapped CTxMemPoolEntry&)
@@ -136,6 +145,8 @@ public:
     bool GetSpendsCoinbase() const { return spendsCoinbase; }
 
     mutable size_t idx_randomized; //!< Index in mempool's txns_randomized
+
+    SPKStates_t mapSPK;
 };
 
 using CTxMemPoolEntryRef = CTxMemPoolEntry::CTxMemPoolEntryRef;
