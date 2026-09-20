@@ -91,14 +91,20 @@ static RPCHelpMan createmultisig()
     return RPCHelpMan{
         "createmultisig",
         "Creates a multi-signature address with n signatures of m keys required.\n"
-        "It returns a json object with the address and redeemScript.\n",
+        "It returns a json object with the address and redeemScript.\n"
+        "Public keys can be sorted according to BIP67 during the request if required.\n",
         {
             {"nrequired", RPCArg::Type::NUM, RPCArg::Optional::NO, "The number of required signatures out of the m keys."},
             {"keys", RPCArg::Type::ARR, RPCArg::Optional::NO, "The hex-encoded public keys.",
                 {
                     {"key", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "The hex-encoded public key"},
                 }},
-            {"address_type", RPCArg::Type::STR, RPCArg::Default{"legacy"}, "The address type to use. Options are \"legacy\", \"p2sh-segwit\", and \"bech32\"."},
+            {"options|address_type", {RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Type::STR}, RPCArg::Optional::OMITTED, "",
+                {
+                    {"address_type", RPCArg::Type::STR, RPCArg::Default{"legacy"}, "The address type to use. Options are \"legacy\", \"p2sh-segwit\", and \"bech32\".", RPCArgOptions{.also_positional = true}},
+                    {"sort", RPCArg::Type::BOOL, RPCArg::Default{false}, "Whether to sort public keys according to BIP67."},
+                },
+                RPCArgOptions{.oneline_description="options"}},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -122,26 +128,55 @@ static RPCHelpMan createmultisig()
         {
             int required = request.params[0].getInt<int>();
 
+            bool sort = false;
+            OutputType output_type = OutputType::LEGACY;
+
+            if (request.params[2].isStr()) {
+                // backward compatibility
+                std::optional<OutputType> parsed = ParseOutputType(request.params[2].get_str());
+                if (!parsed) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Unknown address type '%s'", request.params[2].get_str()));
+                }
+                output_type = parsed.value();
+            } else if (!request.params[2].isNull()) {
+                const UniValue& options = request.params[2].get_obj();
+                RPCTypeCheckObj(options,
+                    {
+                        {"address_type", UniValueType(UniValue::VSTR)},
+                        {"sort", UniValueType(UniValue::VBOOL)},
+                    },
+                    true, true);
+
+                if (options.exists("address_type")) {
+                    std::optional<OutputType> parsed = ParseOutputType(options["address_type"].get_str());
+                    if (!parsed) {
+                        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Unknown address type '%s'", options["address_type"].get_str()));
+                    }
+                    output_type = parsed.value();
+                }
+
+                if (options.exists("sort")) {
+                    sort = options["sort"].get_bool();
+                }
+            }
+            if (output_type == OutputType::BECH32M) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "createmultisig cannot create bech32m multisig addresses");
+            }
+
             // Get the public keys
             const UniValue& keys = request.params[1].get_array();
             std::vector<CPubKey> pubkeys;
             pubkeys.reserve(keys.size());
             for (unsigned int i = 0; i < keys.size(); ++i) {
                 pubkeys.push_back(HexToPubKey(keys[i].get_str()));
-            }
-
-            // Get the output type
-            auto address_type{self.Arg<std::string_view>("address_type")};
-            auto output_type{ParseOutputType(address_type)};
-            if (!output_type) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, tfm::format("Unknown address type '%s'", address_type));
-            } else if (output_type.value() == OutputType::BECH32M) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "createmultisig cannot create bech32m multisig addresses");
+                if (sort && !pubkeys.back().IsCompressed()) {
+                    throw std::runtime_error(strprintf("Compressed key required for BIP67: %s", keys[i].get_str()));
+                }
             }
 
             FlatSigningProvider keystore;
             CScript inner;
-            const CTxDestination dest = AddAndGetMultisigDestination(required, pubkeys, output_type.value(), keystore, inner);
+            const CTxDestination dest = AddAndGetMultisigDestination(required, pubkeys, output_type, keystore, inner, sort);
 
             // Make the descriptor
             std::unique_ptr<Descriptor> descriptor = InferDescriptor(GetScriptForDestination(dest), keystore);
@@ -152,7 +187,7 @@ static RPCHelpMan createmultisig()
             result.pushKV("descriptor", descriptor->ToString());
 
             UniValue warnings(UniValue::VARR);
-            if (descriptor->GetOutputType() != output_type.value()) {
+            if (descriptor->GetOutputType() != output_type) {
                 // Only warns if the user has explicitly chosen an address type we cannot generate
                 warnings.push_back("Unable to make chosen address type, please ensure no uncompressed public keys are present.");
             }
