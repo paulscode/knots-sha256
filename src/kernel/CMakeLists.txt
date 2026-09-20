@@ -99,6 +99,11 @@ target_link_libraries(bitcoin_crypto PRIVATE kernel_warn_interface)
 target_link_libraries(leveldb PRIVATE kernel_warn_interface)
 target_link_libraries(crc32c PRIVATE kernel_warn_interface)
 
+target_compile_definitions(bitcoinkernel
+  PRIVATE
+    BUILDING_FOR_LIBBITCOINKERNEL
+)
+
 target_link_libraries(bitcoinkernel
   PRIVATE
     core_interface
