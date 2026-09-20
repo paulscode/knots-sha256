@@ -58,6 +58,8 @@ static constexpr unsigned int DEFAULT_INCREMENTAL_RELAY_FEE{100};
 static constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 /** Default for -bytespersigopstrict */
 static constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
+/** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
+static constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{1};
 /** Default for -permitbarepubkey */
 static constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
 /** Default for -permitbaremultisig */
@@ -78,6 +80,9 @@ static constexpr unsigned int MAX_STANDARD_SCRIPTSIG_SIZE{1650};
  * only increase the dust limit after prior releases were already not creating
  * outputs below the new threshold */
 static constexpr unsigned int DUST_RELAY_TX_FEE{3000};
+static const std::string DEFAULT_DUST_DYNAMIC{"off"};
+static const int DEFAULT_DUST_RELAY_MULTIPLIER{3'000};
+static const std::string DEFAULT_SPKREUSE{"allow"};
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
 static constexpr unsigned int DEFAULT_MIN_RELAY_TX_FEE{100};
 /** Maximum number of transactions per cluster (default) */
@@ -217,5 +222,7 @@ static inline FeePerVSize ToFeePerVSize(FeePerWeight feerate) { return {feerate.
 std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript, const CTxIn&);
 
 size_t DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view);
+
+int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& view, const unsigned int weight_per_data_byte);
 
 #endif // BITCOIN_POLICY_POLICY_H
