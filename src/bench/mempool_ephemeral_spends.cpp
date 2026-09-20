@@ -31,7 +31,7 @@ static void AddTx(const CTransactionRef& tx, CTxMemPool& pool) EXCLUSIVE_LOCKS_R
     LockPoints lp;
     TryAddToMempool(pool, CTxMemPoolEntry(
         tx, fee, nTime, nHeight, sequence,
-        spendsCoinbase, sigOpCost, lp));
+        spendsCoinbase, /*extra_weight=*/0, sigOpCost, lp));
 }
 
 static void MempoolCheckEphemeralSpends(benchmark::Bench& bench)

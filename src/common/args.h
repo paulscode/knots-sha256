@@ -96,6 +96,8 @@ Int SettingTo(const common::SettingsValue&, Int);
 template <std::integral Int>
 std::optional<Int> SettingTo(const common::SettingsValue&);
 
+std::optional<int64_t> SettingToFixedPoint(const common::SettingsValue&, int decimals);
+
 bool SettingToBool(const common::SettingsValue&, bool);
 std::optional<bool> SettingToBool(const common::SettingsValue&);
 
@@ -305,6 +307,15 @@ protected:
 
     int64_t GetIntArg(const std::string& strArg, int64_t nDefault) const { return GetArg<int64_t>(strArg, nDefault); }
     std::optional<int64_t> GetIntArg(const std::string& strArg) const { return GetArg<int64_t>(strArg); }
+
+    /**
+     * Return fixed-point argument
+     *
+     * @param arg Argument to get (e.g. "-foo")
+     * @param decimals Number of fractional decimal digits to accept
+     * @return Command-line argument (0 if invalid number) multiplied by 10**decimals
+     */
+    std::optional<int64_t> GetFixedPointArg(const std::string& arg, int decimals) const;
 
     /**
      * Return boolean argument or default value
