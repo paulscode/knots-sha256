@@ -1070,6 +1070,9 @@ def spenders_taproot_active():
     add_spender(spenders, "tapscript/emptysigs/nochecksigverify", leaf="t12", **common, inputs=[b'', getter("sign")], failure={"leaf": "t20"}, **ERR_TAPSCRIPT_EMPTY_PUBKEY)
     add_spender(spenders, "tapscript/emptysigs/checksigadd", leaf="t14", **common, inputs=[b'', getter("sign")], failure={"leaf": "t15"}, **ERR_TAPSCRIPT_EMPTY_PUBKEY)
     # Test that scripts over 10000 bytes (and over 201 non-push ops) are acceptable.
+    # Its OP_0 OP_0 OP_2DROP run is a data envelope (about 30 kB of datacarrier data); the node runs under the
+    # -corepolicy the test framework injects, which leaves -datacarriersize uncapped on Core 31, so it stays
+    # standard here (mempool_datacarrier.py covers the rejection at a capped limit).
     add_spender(spenders, "tapscript/no10000limit", leaf="t19", **SINGLE_SIG, **common)
     # Test that a stack size of 1000 elements is permitted, but 1001 isn't.
     add_spender(spenders, "tapscript/1000stack", leaf="t21", **SINGLE_SIG, **common, failure={"leaf": "t22"}, **ERR_STACK_SIZE)
