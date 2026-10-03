@@ -1,5 +1,5 @@
 (use-modules (gnu packages bison)
-             ((gnu packages gnome) #:select (librsvg))
+             ((gnu packages gnome) #:select (librsvg-2.40))
              ((gnu packages image) #:select (libicns))
              ((gnu packages imagemagick) #:select (imagemagick))
              ((gnu packages compression) #:select (xz zip))
@@ -19,7 +19,7 @@
         ;; Rendering icons from SVG
         imagemagick
         libicns
-        librsvg
+        librsvg-2.40
         ;; Packaging scripts
         python-minimal ;; (3.11)
         ;; Tests
