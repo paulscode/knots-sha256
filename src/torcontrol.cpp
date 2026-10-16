@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
@@ -793,6 +794,8 @@ std::string TorController::LaunchTor()
     while (!fs::exists(controlport_env_filepath)) {
         if (m_process->poll() != -1) {
             LogDebug(BCLog::TOR, "tor: Tor process died before making control port file");
+            delete m_process;
+            m_process = nullptr;
             throw std::runtime_error("tor process died");
         }
         if (!m_interrupt.sleep_for(std::chrono::seconds(1))) {
