@@ -242,6 +242,30 @@ mkdir -p "$DISTSRC"
     # Extract the source tarball
     tar --strip-components=1 -xf "${GIT_ARCHIVE}"
 
+    # First build libbitcoinconsensus
+    # shellcheck disable=SC2086
+    env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
+    cmake -S . -B build_libbitcoinconsensus \
+          --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
+          -DWITH_CCACHE=OFF \
+          ${CONFIGFLAGS} \
+          -DBUILD_BENCH=OFF \
+          -DBUILD_BITCOIN_BIN=OFF \
+          -DBUILD_CLI=OFF \
+          -DBUILD_DAEMON=OFF \
+          -DBUILD_FOR_FUZZING=OFF \
+          -DBUILD_FUZZ_BINARY=OFF \
+          -DBUILD_GUI=OFF \
+          -DBUILD_GUI_TESTS=OFF \
+          -DBUILD_KERNEL_LIB=OFF \
+          -DBUILD_TESTS=OFF \
+          -DBUILD_TX=OFF \
+          -DBUILD_UTIL=OFF \
+          -DBUILD_UTIL_CHAINSTATE=OFF \
+          -DBUILD_WALLET_TOOL=OFF \
+          -DBUILD_SHARED_LIBS=ON -DBUILD_BITCOINCONSENSUS_LIB=ON
+    cmake --build build_libbitcoinconsensus -j "$JOBS" ${V:+--verbose}
+
     # Configure this DISTSRC for $HOST
     # shellcheck disable=SC2086
     env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
@@ -275,21 +299,26 @@ mkdir -p "$DISTSRC"
         *darwin*)
             # This workaround can be dropped for CMake >= 3.27.
             # See the upstream commit 689616785f76acd844fd448c51c5b2a0711aafa2.
-            find build -name 'cmake_install.cmake' -exec sed -i 's| -u -r | |g' {} +
+            find build* -name 'cmake_install.cmake' -exec sed -i 's| -u -r | |g' {} +
 
+            cmake --install build_libbitcoinconsensus --strip --prefix "${INSTALLPATH}" ${V:+--verbose}
             cmake --install build --strip --prefix "${INSTALLPATH}" ${V:+--verbose}
             ;;
         *)
+            cmake --install build_libbitcoinconsensus --prefix "${INSTALLPATH}" ${V:+--verbose}
             cmake --install build --prefix "${INSTALLPATH}" ${V:+--verbose}
             ;;
     esac
 
     # Perform basic security checks on installed executables.
+    # The checks are for executables. libbitcoinconsensus (on Windows a DLL installed to bin/) is a library and, as in
+    # Knots 29.3, is not checked by them.
+    mapfile -t CHECK_BINARIES < <(find "${INSTALLPATH}/bin" "${INSTALLPATH}/libexec" -maxdepth 1 -type f ! -name 'libbitcoinconsensus*' | sort)
     echo "Checking binary security on installed executables..."
-    python3 "${DISTSRC}/contrib/guix/security-check.py" "${INSTALLPATH}/bin/"* "${INSTALLPATH}/libexec/"*
+    python3 "${DISTSRC}/contrib/guix/security-check.py" "${CHECK_BINARIES[@]}"
     # Check that executables only contain allowed version symbols.
     echo "Running symbol and dynamic library checks on installed executables..."
-    python3 "${DISTSRC}/contrib/guix/symbol-check.py" "${INSTALLPATH}/bin/"* "${INSTALLPATH}/libexec/"*
+    python3 "${DISTSRC}/contrib/guix/symbol-check.py" "${CHECK_BINARIES[@]}"
 
     (
         cd installed
@@ -300,6 +329,9 @@ mkdir -p "$DISTSRC"
                 # Split binaries from their debug symbols
                 {
                     find "${DISTNAME}/bin" "${DISTNAME}/libexec" -type f -executable -print0
+                    if test -d "${DISTNAME}/lib"; then
+                        find "${DISTNAME}/lib" -type f -executable -print0
+                    fi
                 } | xargs -0 -P"$JOBS" -I{} "${DISTSRC}/build/split-debug.sh" {} {} {}.dbg
                 ;;
         esac
