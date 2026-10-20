@@ -140,7 +140,9 @@ class AssumeValidTest(BitcoinTestFramework):
 
         # nodes[0]
         self.log.info("Send blocks to node0. Block 102 will be rejected.")
-        p2p0 = self.nodes[0].add_p2p_connection(BaseNode())
+        # Invalid blocks only cost a peer the connection when we rely on it (relaxed punishment),
+        # so the disconnection checked below is observed on an outbound connection.
+        p2p0 = self.nodes[0].add_outbound_p2p_connection(BaseNode(), p2p_idx=0)
         p2p0.send_header_for_blocks(self.blocks[0:2000])
         p2p0.send_header_for_blocks(self.blocks[2000:])
         with self.nodes[0].assert_debug_log(expected_msgs=[
@@ -176,7 +178,8 @@ class AssumeValidTest(BitcoinTestFramework):
 
         # nodes[2]
         self.log.info("Send blocks to node2. Block 102 will be rejected.")
-        p2p2 = self.nodes[2].add_p2p_connection(BaseNode())
+        # Same as node 0 above: the disconnection checked below only happens for a peer we rely on.
+        p2p2 = self.nodes[2].add_outbound_p2p_connection(BaseNode(), p2p_idx=0)
         p2p2.send_header_for_blocks(self.blocks[0:200])
         with self.nodes[2].assert_debug_log(expected_msgs=[
             f"Enabling script verification at block #1 ({block_1_hash}): block too recent relative to best header.",
