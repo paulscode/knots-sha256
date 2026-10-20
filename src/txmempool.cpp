@@ -12,9 +12,11 @@
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
 #include <crypto/ripemd160.h>
+#include <policy/fees/block_policy_estimator.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <random.h>
+#include <scheduler.h>
 #include <tinyformat.h>
 #include <script/script.h>
 #include <util/check.h>
@@ -194,6 +196,17 @@ CTxMemPool::CTxMemPool(Options opts, bilingual_str& error)
             const Txid& txid_b = static_cast<const CTxMemPoolEntry&>(b).GetTx().GetHash();
             return txid_a <=> txid_b;
         });
+    Assert(m_opts.scheduler || !m_opts.dust_relay_target);
+    m_opts.dust_relay_feerate_floor = m_opts.dust_relay_feerate;
+#ifdef BUILDING_FOR_LIBBITCOINKERNEL
+    assert(!m_opts.scheduler);
+#else
+    if (m_opts.scheduler) {
+        m_opts.scheduler->scheduleEvery([this]{
+            UpdateDynamicDustFeerate();
+        }, DYNAMIC_DUST_FEERATE_UPDATE_INTERVAL);
+    }
+#endif
 }
 
 bool CTxMemPool::isSpent(const COutPoint& outpoint) const
@@ -463,6 +476,43 @@ void CTxMemPool::removeForBlock(const std::vector<CTransactionRef>& vtx, unsigne
         LogDebug(BCLog::MEMPOOL, "Mempool in non-optimal ordering after block.");
     }
 }
+
+#ifndef BUILDING_FOR_LIBBITCOINKERNEL
+void CTxMemPool::UpdateDynamicDustFeerate()
+{
+    CFeeRate est_feerate{0};
+    if (m_opts.dust_relay_target < 0 && m_opts.estimator) {
+        static constexpr double target_success_threshold{0.8};
+        est_feerate = m_opts.estimator->estimateRawFee(-m_opts.dust_relay_target, target_success_threshold, FeeEstimateHorizon::LONG_HALFLIFE, nullptr);
+    } else if (m_opts.dust_relay_target > 0) {
+        auto bytes_remaining = int64_t{m_opts.dust_relay_target} * 1'000;
+        LOCK(cs);
+        // Walk the mempool in block-building order (cluster linearisation chunks) until the
+        // requested position is reached; the feerate at that point is the estimate.
+        auto builder = m_txgraph->GetBlockBuilder();
+        while (auto chunk = builder->GetCurrentChunk()) {
+            const FeePerVSize chunk_feerate{ToFeePerVSize(chunk->second)};
+            bytes_remaining -= chunk_feerate.size;
+            if (bytes_remaining <= 0) {
+                est_feerate = CFeeRate(chunk_feerate.fee, chunk_feerate.size);
+                break;
+            }
+            builder->Include();
+        }
+    }
+
+    est_feerate = (est_feerate * m_opts.dust_relay_multiplier) / 1'000;
+
+    if (est_feerate < m_opts.dust_relay_feerate_floor) {
+        est_feerate = m_opts.dust_relay_feerate_floor;
+    }
+
+    if (m_opts.dust_relay_feerate != est_feerate) {
+        LogDebug(BCLog::MEMPOOL, "Updating dust feerate to %s\n", est_feerate.ToString(FeeRateFormat::SAT_VB));
+        m_opts.dust_relay_feerate = est_feerate;
+    }
+}
+#endif
 
 void CTxMemPool::check(const CCoinsViewCache& active_coins_tip, int64_t spendheight) const
 {
