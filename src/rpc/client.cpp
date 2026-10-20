@@ -142,6 +142,8 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "dumptxoutset", 2, "show_header" },
     { "createmultisig", 0, "nrequired" },
     { "createmultisig", 1, "keys" },
+    { "createmultisig", 2, "options" },
+    { "createmultisig", 2, "sort" },
     { "listunspent", 0, "minconf" },
     { "listunspent", 1, "maxconf" },
     { "listunspent", 2, "addresses" },
