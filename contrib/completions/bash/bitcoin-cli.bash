@@ -61,16 +61,12 @@ _bitcoin_cli() {
                 COMPREPLY=( $( compgen -W "false true" -- "$cur" ) )
                 return 0
                 ;;
-            descriptorprocesspsbt)
-                COMPREPLY=( $( compgen -W "ALL ALL|ANYONECANPAY NONE NONE|ANYONECANPAY SINGLE SINGLE|ANYONECANPAY" -- "$cur" ) )
-                return 0
-                ;;
         esac
     fi
 
     if ((cword > 2)); then
         case ${words[cword-2]} in
-            converttopsbt|decoderawtransaction|finalizepsbt|getblockheader|getmempoolancestors|getmempooldescendants|getrawmempool)
+            converttopsbt|decoderawtransaction|finalizepsbt|getblockheader|getmempoolancestors|getmempooldescendants|getrawmempool|listmempooltransactions)
                 COMPREPLY=( $( compgen -W "false true" -- "$cur" ) )
                 return 0
                 ;;
@@ -94,7 +90,7 @@ _bitcoin_cli() {
             _filedir
             return 0
             ;;
-        getrawmempool|setnetworkactive)
+        getrawmempool|setnetworkactive|setscriptthreadsenabled)
             COMPREPLY=( $( compgen -W "false true" -- "$cur" ) )
             return 0
             ;;
