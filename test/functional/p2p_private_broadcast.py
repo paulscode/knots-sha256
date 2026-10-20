@@ -40,6 +40,7 @@ from test_framework.util import (
     assert_greater_than_or_equal,
     assert_not_equal,
     assert_raises_rpc_error,
+    p2p_port,
     tor_port,
 )
 from test_framework.wallet import (
@@ -391,6 +392,10 @@ class P2PPrivateBroadcast(BitcoinTestFramework):
         ])
         assert_raises_rpc_error(-1, "none of the Tor or I2P networks is reachable",
                                 tx_originator.sendrawtransaction, hexstring=txs[0]["hex"], maxfeerate=0.1)
+
+        # This node listens for Tor and for local connections on one port, which we warn about (the warning
+        # is checked here because the framework's shutdown would otherwise report it as unexpected stderr).
+        self.stop_node(0, expected_stderr=f'Warning: You are using a common listening port (127.0.0.1:{p2p_port(0)}) for both Tor and local connections. All connections to this port will be assumed to be Tor connections, and will be denied any whitelist permissions. If this is not your intent, setup a separate -bind=<addr>[:<port>]=onion configuration, or set -listenonion=0.')
 
 
 if __name__ == "__main__":
