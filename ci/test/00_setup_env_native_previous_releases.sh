@@ -19,6 +19,7 @@ export DOWNLOAD_PREVIOUS_RELEASES="true"
 export BITCOIN_CONFIG="\
  --preset=dev-mode \
  -DREDUCE_EXPORTS=ON \
+ -DBUILD_BITCOINCONSENSUS_LIB=OFF \
  -DCMAKE_BUILD_TYPE=Debug \
  -DCMAKE_C_FLAGS='-funsigned-char -Werror' \
  -DCMAKE_C_FLAGS_DEBUG='-g2 -O2' \
