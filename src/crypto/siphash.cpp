@@ -2,10 +2,12 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <crypto/common.h>
 #include <crypto/siphash.h>
 
 #include <uint256.h>
 
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <span>
@@ -41,31 +43,58 @@ CSipHasher& CSipHasher::Write(uint64_t data)
     return *this;
 }
 
+/// Load a uint64_t from 0 to 7 bytes.
+static inline uint64_t ReadU64ByLenLE(const unsigned char* data, size_t len)
+{
+    assert(len < 8);
+    uint64_t out = 0;
+    for (size_t i = 0; i < len; ++i) {
+        out |= (uint64_t)data[i] << (i * 8);
+    }
+    return out;
+}
+
 CSipHasher& CSipHasher::Write(std::span<const unsigned char> data)
 {
     uint64_t v0 = m_state.v[0], v1 = m_state.v[1], v2 = m_state.v[2], v3 = m_state.v[3];
-    uint64_t t = m_tmp;
-    uint8_t c = m_count;
+    uint64_t tail = m_tmp;
+    auto ntail = m_count & 0x07;
+    m_count += data.size();
 
-    while (data.size() > 0) {
-        t |= uint64_t{data.front()} << (8 * (c % 8));
-        c++;
-        if ((c & 7) == 0) {
-            v3 ^= t;
+    size_t needed = 0;
+
+    if (ntail != 0) {
+        needed = 8 - ntail;
+        tail |= ReadU64ByLenLE(data.data(), std::min(data.size(), needed)) << 8 * ntail;
+        if (data.size() < needed) {
+            m_tmp = tail;
+            return *this;
+        } else {
+            v3 ^= tail;
             SIPROUND;
             SIPROUND;
-            v0 ^= t;
-            t = 0;
+            v0 ^= tail;
         }
-        data = data.subspan(1);
+    }
+
+    size_t len = data.size() - needed;
+    auto left = len & 0x07;
+
+    auto i = needed;
+    while (i < len - left) {
+        uint64_t mi = ReadLE64(data.data() + i);
+        v3 ^= mi;
+        SIPROUND;
+        SIPROUND;
+        v0 ^= mi;
+        i += 8;
     }
 
     m_state.v[0] = v0;
     m_state.v[1] = v1;
     m_state.v[2] = v2;
     m_state.v[3] = v3;
-    m_count = c;
-    m_tmp = t;
+    m_tmp = ReadU64ByLenLE(data.data() + i, left);
 
     return *this;
 }
