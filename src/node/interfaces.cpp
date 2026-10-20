@@ -772,6 +772,9 @@ public:
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }
     void initWarning(const bilingual_str& message) override { InitWarning(message); }
     void initError(const bilingual_str& message) override { InitError(message); }
+    bool initQuestion(const bilingual_str& message, const bilingual_str& non_interactive_message, unsigned int style) override {
+        return uiInterface.ThreadSafeQuestion(message, non_interactive_message.translated, style);
+    }
     void showProgress(const std::string& title, int progress, bool resume_possible) override
     {
         ::uiInterface.ShowProgress(title, progress, resume_possible);
