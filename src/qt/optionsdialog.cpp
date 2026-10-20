@@ -24,14 +24,76 @@
 #include <chrono>
 
 #include <QApplication>
+#include <QBoxLayout>
 #include <QDataWidgetMapper>
 #include <QDir>
 #include <QFontDialog>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QInputDialog>
 #include <QIntValidator>
+#include <QLabel>
 #include <QLocale>
 #include <QMessageBox>
+#include <QSpacerItem>
+#include <QString>
+#include <QStringList>
 #include <QSystemTrayIcon>
 #include <QTimer>
+#include <QVBoxLayout>
+#include <QWidget>
+
+void OptionsDialog::FixTabOrder(QWidget * const o)
+{
+    setTabOrder(prevwidget, o);
+    prevwidget = o;
+}
+
+void OptionsDialog::CreateOptionUI(QBoxLayout * const layout, QWidget * const o, const QString& text)
+{
+    QWidget * const parent = o->parentWidget();
+    const QStringList text_parts = text.split("%s");
+
+    QHBoxLayout * const horizontalLayout = new QHBoxLayout();
+
+    QLabel * const labelBefore = new QLabel(parent);
+    labelBefore->setText(text_parts[0]);
+    labelBefore->setTextFormat(Qt::PlainText);
+    labelBefore->setBuddy(o);
+    labelBefore->setToolTip(o->toolTip());
+
+    horizontalLayout->addWidget(labelBefore);
+    horizontalLayout->addWidget(o);
+
+    QLabel * const labelAfter = new QLabel(parent);
+    labelAfter->setText(text_parts[1]);
+    labelAfter->setTextFormat(Qt::PlainText);
+    labelAfter->setBuddy(o);
+    labelAfter->setToolTip(o->toolTip());
+
+    horizontalLayout->addWidget(labelAfter);
+
+    horizontalLayout->addStretch(1);
+
+    layout->addLayout(horizontalLayout);
+
+    o->setProperty("L", QVariant::fromValue((QLayout*)horizontalLayout));
+
+    FixTabOrder(o);
+}
+
+static void setSiblingsEnabled(QWidget * const o, const bool state)
+{
+    auto layout = o->property("L").value<QLayout*>();
+    Assert(layout);
+    // NOTE: QLayout::children does not do what we need here
+    for (int i = layout->count(); i-- > 0; ) {
+        QLayoutItem * const layoutitem = layout->itemAt(i);
+        QWidget * const childwidget = layoutitem->widget();
+        if (!childwidget) continue;
+        childwidget->setEnabled(state);
+    }
+}
 
 int setFontChoice(QComboBox* cb, const OptionsModel::FontChoice& fc)
 {
