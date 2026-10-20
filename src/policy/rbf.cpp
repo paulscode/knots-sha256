@@ -85,12 +85,17 @@ std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx,
 }
 
 std::optional<std::string> EntriesAndTxidsDisjoint(const CTxMemPool::setEntries& ancestors,
-                                                   const std::set<Txid>& direct_conflicts,
-                                                   const Txid& txid)
+                                                   const std::map<Txid, bool>& direct_conflicts,
+                                                   const Txid& txid, bool* const out_violates_policy)
 {
     for (CTxMemPool::txiter ancestorIt : ancestors) {
         const Txid& hashAncestor = ancestorIt->GetTx().GetHash();
-        if (direct_conflicts.contains(hashAncestor)) {
+        const auto& conflictit = direct_conflicts.find(hashAncestor);
+        if (conflictit != direct_conflicts.end()) {
+            if (!conflictit->second /* mere SPK conflict, NOT invalid */) {
+                if (out_violates_policy) *out_violates_policy = true;
+                continue;
+            }
             return strprintf("%s spends conflicting transaction %s",
                              txid.ToString(),
                              hashAncestor.ToString());
