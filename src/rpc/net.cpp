@@ -406,10 +406,6 @@ static RPCHelpMan addconnection()
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
-    if (Params().GetChainType() != ChainType::REGTEST) {
-        throw std::runtime_error("addconnection is for regression testing (-regtest mode) only.");
-    }
-
     const std::string address = request.params[0].get_str();
     auto conn_type_in{util::TrimStringView(self.Arg<std::string_view>("connection_type"))};
     ConnectionType conn_type{};
