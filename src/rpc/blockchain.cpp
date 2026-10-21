@@ -3619,7 +3619,7 @@ static RPCMethod dumptxoutset()
     const UniValue& hr_format = [&]() -> const UniValue& {
         if (options["format"].isNull() && request.params[1].isArray()) {
             // Knots 0.20.0-28.1 compatibility
-            snapshot_type = "latest";
+            if (!options.exists("rollback")) snapshot_type = "latest";
             return request.params[1];
         }
         snapshot_type = std::string{self.Arg<std::string_view>("type")};
