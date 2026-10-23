@@ -88,6 +88,7 @@ private:
     const unsigned int entryHeight; //!< Chain height when entering the mempool
     const bool spendsCoinbase;      //!< keep track of transactions that spend a coinbase
     const int64_t sigOpCost;        //!< Total sigop cost
+    const int32_t m_extra_weight;   //!< Policy-only additional transaction weight beyond nTxWeight
     mutable CAmount m_modified_fee; //!< Used for determining the priority of the transaction for mining in a block
     mutable LockPoints lockPoints;  //!< Track the height and time at which tx was final
 
@@ -96,6 +97,7 @@ public:
     CTxMemPoolEntry(const CTransactionRef& tx, CAmount fee,
                     int64_t time, unsigned int entry_height, uint64_t entry_sequence,
                     bool spends_coinbase,
+                    int32_t extra_weight,
                     int64_t sigops_cost, LockPoints lp)
         : tx{tx},
           nFee{fee},
@@ -106,6 +108,7 @@ public:
           entryHeight{entry_height},
           spendsCoinbase{spends_coinbase},
           sigOpCost{sigops_cost},
+          m_extra_weight{extra_weight},
           m_modified_fee{nFee},
           lockPoints{lp} {}
 
@@ -118,13 +121,14 @@ public:
     const CAmount& GetFee() const { return nFee; }
     int32_t GetTxSize() const
     {
-        return GetVirtualTransactionSize(nTxWeight, sigOpCost, ::nBytesPerSigOp);
+        return GetVirtualTransactionSize(nTxWeight + m_extra_weight, sigOpCost, ::nBytesPerSigOp);
     }
     int32_t GetAdjustedWeight() const { return GetSigOpsAdjustedWeight(nTxWeight, sigOpCost, ::nBytesPerSigOp); }
     int32_t GetTxWeight() const { return nTxWeight; }
     std::chrono::seconds GetTime() const { return std::chrono::seconds{nTime}; }
     unsigned int GetHeight() const { return entryHeight; }
     uint64_t GetSequence() const { return entry_sequence; }
+    int32_t GetExtraWeight() const { return m_extra_weight; }
     int64_t GetSigOpCost() const { return sigOpCost; }
     CAmount GetModifiedFee() const { return m_modified_fee; }
     size_t DynamicMemoryUsage() const { return nUsageSize; }
