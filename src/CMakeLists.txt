@@ -221,6 +221,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/interface_ui.cpp
   node/interfaces.cpp
   node/kernel_notifications.cpp
+  node/known_splits.cpp
   node/mempool_args.cpp
   node/mempool_persist.cpp
   node/mempool_persist_args.cpp
