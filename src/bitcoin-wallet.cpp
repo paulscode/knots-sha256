@@ -44,6 +44,7 @@ static void SetupWalletToolArgs(ArgsManager& argsman)
     argsman.AddCommand("create", "Create a new descriptor wallet file");
     argsman.AddCommand("dump", "Print out all of the wallet key-value records");
     argsman.AddCommand("createfromdump", "Create new wallet file from dumped records");
+    argsman.AddCommand("importfromcoldcard", "Create new wallet file and import descriptors from Coldcard wallet");
 }
 
 static std::optional<int> WalletAppInit(ArgsManager& args, int argc, char* argv[])
