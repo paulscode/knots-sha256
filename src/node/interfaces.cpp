@@ -899,7 +899,7 @@ class BlockTemplateImpl : public BlockTemplate
 {
 public:
     explicit BlockTemplateImpl(BlockAssembler::Options assemble_options,
-                               std::unique_ptr<CBlockTemplate> block_template,
+                               std::shared_ptr<CBlockTemplate> block_template,
                                NodeContext& node) : m_assemble_options(std::move(assemble_options)),
                                                     m_block_template(std::move(block_template)),
                                                     m_node(node)
@@ -945,7 +945,7 @@ public:
 
     std::unique_ptr<BlockTemplate> waitNext(BlockWaitOptions options) override
     {
-        auto new_template = WaitAndCreateNewBlock(chainman(), notifications(), m_node.mempool.get(), m_block_template, options, m_assemble_options, m_interrupt_wait);
+        auto new_template = WaitAndCreateNewBlock(chainman(), notifications(), m_node.mempool.get(), m_block_template, options, m_assemble_options, m_node, m_interrupt_wait);
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_assemble_options, std::move(new_template), m_node);
         return nullptr;
     }
@@ -957,7 +957,7 @@ public:
 
     const BlockAssembler::Options m_assemble_options;
 
-    const std::unique_ptr<CBlockTemplate> m_block_template;
+    const std::shared_ptr<CBlockTemplate> m_block_template;
 
     bool m_interrupt_wait{false};
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
@@ -1029,7 +1029,7 @@ public:
             if (!CooldownIfHeadersAhead(chainman(), notifications(), *maybe_tip, m_interrupt_mining)) return {};
         }
 
-        return std::make_unique<BlockTemplateImpl>(assemble_options, BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options}.CreateNewBlock(), m_node);
+        return std::make_unique<BlockTemplateImpl>(assemble_options, BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options, m_node}.CreateNewBlock(), m_node);
     }
 
     void interrupt() override
