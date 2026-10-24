@@ -182,7 +182,7 @@ BASE_SCRIPTS = [
     'feature_bind_extra.py',
     'mempool_resurrect.py',
     'wallet_txn_doublespend.py --mineblock',
-    'tool_cli_bash_completion.py',
+    'tool_cli_completion.py',
     'tool_bitcoin_chainstate.py',
     'tool_wallet.py',
     'tool_utils.py',
