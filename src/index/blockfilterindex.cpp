@@ -96,6 +96,11 @@ interfaces::Chain::NotifyOptions BlockFilterIndex::CustomOptions()
     return options;
 }
 
+bilingual_str BlockFilterIndex::GetDisableAction() const
+{
+    return strprintf(_("remove \"%s\" from -blockfilterindex"), BlockFilterTypeName(m_filter_type));
+}
+
 bool BlockFilterIndex::CustomInit(const std::optional<interfaces::BlockRef>& block)
 {
     if (!m_db->Read(DB_FILTER_POS, m_next_filter_pos)) {
