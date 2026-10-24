@@ -25,6 +25,7 @@ interface Mining $Proxy.wrap("interfaces::Mining") {
     createNewBlock @4 (context :Proxy.Context, options: BlockCreateOptions, cooldown: Bool = true) -> (result: BlockTemplate);
     checkBlock @5 (context :Proxy.Context, block: Data, options: BlockCheckOptions) -> (reason: Text, debug: Text, result: Bool);
     interrupt @6 () -> ();
+    createNewBlock2 @7 (context :Proxy.Context, assembleOptions: BlockCreateOptions, cooldown: Bool = true) -> (result: BlockTemplate);
 }
 
 interface BlockTemplate $Proxy.wrap("interfaces::BlockTemplate") {
@@ -44,6 +45,11 @@ struct BlockCreateOptions $Proxy.wrap("node::BlockCreateOptions") {
     useMempool @0 :Bool = true $Proxy.name("use_mempool");
     blockReservedWeight @1 :UInt64 = .defaultBlockReservedWeight $Proxy.name("block_reserved_weight");
     coinbaseOutputMaxAdditionalSigops @2 :UInt64 = .defaultCoinbaseOutputMaxAdditionalSigops $Proxy.name("coinbase_output_max_additional_sigops");
+    nBlockMaxWeight @3 :UInt64 $Proxy.name("nBlockMaxWeight");
+    nBlockMaxSize @4 :UInt64 $Proxy.name("nBlockMaxSize");
+    blockMinFeeRate @5 :Data $Proxy.name("blockMinFeeRate");
+    testBlockValidity @6 :Bool = true $Proxy.name("test_block_validity");
+    printModifiedFee @7 :Bool $Proxy.name("print_modified_fee");
 }
 
 struct BlockWaitOptions $Proxy.wrap("node::BlockWaitOptions") {
