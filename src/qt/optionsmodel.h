@@ -50,6 +50,7 @@ public:
         StartAtStartup,         // bool
         ShowTrayIcon,           // bool
         MinimizeToTray,         // bool
+        NetworkPort,            // int
         MapPortNatpmp,          // bool
         MinimizeOnClose,        // bool
         ProxyUse,               // bool
