@@ -681,7 +681,10 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         connect(ui->peerWidget, &QTableView::customContextMenuRequested, this, &RPCConsole::showPeersTableContextMenu);
 
         // peer table signal handling - update peer details when selecting new node
-        connect(ui->peerWidget->selectionModel(), &QItemSelectionModel::selectionChanged, this, &RPCConsole::updateDetailWidget);
+        connect(ui->peerWidget->selectionModel(), &QItemSelectionModel::selectionChanged, [this] {
+            resetDetailWidget();
+            updateDetailWidget();
+        });
         connect(model->getPeerTableModel(), &QAbstractItemModel::dataChanged, [this] { updateDetailWidget(); });
 
         // set up ban table
@@ -1145,6 +1148,15 @@ void RPCConsole::updateTrafficStats(quint64 totalBytesIn, quint64 totalBytesOut)
     ui->lblBytesOut->setText(GUIUtil::formatBytes(totalBytesOut));
 }
 
+void RPCConsole::resetDetailWidget()
+{
+    for (int row = 0; QLayoutItem * const item = ui->peerDetailsGrid->itemAtPosition(row, 1); ++row) {
+        QLabel * const value_label = qobject_cast<QLabel*>(item->widget());
+        if (!value_label) continue;
+        value_label->setText(ts.na);
+    }
+}
+
 void RPCConsole::updateDetailWidget()
 {
     const QList<QModelIndex> selected_peers = GUIUtil::getEntryData(ui->peerWidget, PeerTableModel::NetNodeId);
@@ -1176,7 +1188,8 @@ void RPCConsole::updateDetailWidget()
     ui->peerPingTime->setText(GUIUtil::formatPingTime(stats->nodeStats.m_last_ping_time));
     ui->peerMinPing->setText(GUIUtil::formatPingTime(stats->nodeStats.m_min_ping_time));
     ui->peerVersion->setText(stats->nodeStats.nVersion ? QString::number(stats->nodeStats.nVersion) : ts.na);
-    ui->peerSubversion->setText(!stats->nodeStats.cleanSubVer.empty() ? QString::fromStdString(stats->nodeStats.cleanSubVer) : ts.na);
+    // Once the version is known, show the subversion as it is (a genuinely blank one stays blank)
+    ui->peerSubversion->setText(stats->nodeStats.nVersion ? QString::fromStdString(stats->nodeStats.cleanSubVer) : ts.na);
     ui->peerConnectionType->setText(GUIUtil::ConnectionTypeToQString(stats->nodeStats.m_conn_type, /*prepend_direction=*/true));
     ui->peerTransportType->setText(QString::fromStdString(TransportTypeAsString(stats->nodeStats.m_transport_type)));
     if (stats->nodeStats.m_transport_type == TransportProtocolType::V2) {
@@ -1189,7 +1202,7 @@ void RPCConsole::updateDetailWidget()
     }
     ui->peerNetwork->setText(GUIUtil::NetworkToQString(stats->nodeStats.m_network));
     if (stats->nodeStats.m_permission_flags == NetPermissionFlags::None) {
-        ui->peerPermissions->setText(ts.na);
+        ui->peerPermissions->setText(ts.no_permissions);
     } else {
         QStringList permissions;
         for (const auto& permission : NetPermissions::ToStrings(stats->nodeStats.m_permission_flags)) {
