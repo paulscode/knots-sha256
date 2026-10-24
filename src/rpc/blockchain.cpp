@@ -1509,6 +1509,7 @@ static void SoftForkDescPushBack(const CBlockIndex* blockindex, UniValue& softfo
     if (info.stats.has_value()) {
         UniValue statsUV(UniValue::VOBJ);
         statsUV.pushKV("period", info.stats->period);
+        statsUV.pushKV("period_start", blockindex->nHeight + 1 - info.stats->elapsed);
         statsUV.pushKV("elapsed", info.stats->elapsed);
         statsUV.pushKV("count", info.stats->count);
         if (info.stats->threshold > 0 || info.stats->possible) {
@@ -1640,6 +1641,7 @@ const std::vector<RPCResult> RPCHelpForDeployment{
         {RPCResult::Type::OBJ, "statistics", /*optional=*/true, "numeric statistics about signalling for a softfork (only for \"started\" and \"locked_in\" status)",
         {
             {RPCResult::Type::NUM, "period", "the length in blocks of the signalling period"},
+            {RPCResult::Type::NUM, "period_start", "height of the first block of this signalling period"},
             {RPCResult::Type::NUM, "threshold", /*optional=*/true, "the number of blocks with the version bit set required to activate the feature (only for \"started\" status)"},
             {RPCResult::Type::NUM, "elapsed", "the number of blocks elapsed since the beginning of the current period"},
             {RPCResult::Type::NUM, "count", "the number of blocks with the version bit set in the current period"},
