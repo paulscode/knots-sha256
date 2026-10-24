@@ -70,7 +70,7 @@ public:
      *
      * @see https://gcc.gnu.org/onlinedocs/gcc-13.2.0/libstdc++/manual/manual/unordered_associative.html
      */
-    size_t operator()(const COutPoint& id) const noexcept
+    size_t operator()(const COutPoint& id) const noexcept(false)
     {
         return m_hasher(id.hash.ToUint256(), id.n);
     }
