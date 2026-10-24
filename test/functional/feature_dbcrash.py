@@ -84,6 +84,7 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
             try:
                 # Any of these RPC calls could throw due to node crash
                 self.start_node(node_index)
+                self.deliver_missing_blocks(node_index, expected_tip)
                 self.nodes[node_index].waitforblock(expected_tip)
                 utxo_hash = self.nodes[node_index].gettxoutsetinfo()['hash_serialized_3']
                 return utxo_hash
@@ -100,6 +101,16 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
         # If this happens, the test should try to restart without -dbcrashratio
         # and make sure that recovery happens.
         raise AssertionError(f"Unable to successfully restart node {node_index} in allotted time")
+
+    def deliver_missing_blocks(self, node_index, expected_tip):
+        """Knots' post-IBD chainstate sync writes the coins database from the scheduler thread, so -dbcrashratio can
+        also fire between submitblock calls. A node that crashed that way never received the block(s) the test sent
+        it afterwards; deliver them again from node3, whose chain contains expected_tip. A crash while doing so raises
+        here and is handled by restart_node's retry loop."""
+        node = self.nodes[node_index]
+        target = self.nodes[3].getblockheader(expected_tip)["height"]
+        for height in range(node.getblockcount() + 1, target + 1):
+            node.submitblock(self.nodes[3].getblock(self.nodes[3].getblockhash(height), 0))
 
     def submit_block_catch_error(self, node_index, block):
         """Try submitting a block to the given node.
