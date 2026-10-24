@@ -170,6 +170,8 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
             } else {
                 datacarrier_bytes_left -= size;
             }
+        } else if ((whichType == TxoutType::PUBKEY) && (!opts.permit_bare_pubkey)) {
+            MaybeReject("bare-pubkey");
         } else if ((whichType == TxoutType::MULTISIG) && (!opts.permit_bare_multisig)) {
             MaybeReject("bare-multisig");
         }
