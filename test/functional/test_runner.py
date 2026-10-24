@@ -292,6 +292,7 @@ BASE_SCRIPTS = [
     'mempool_fee_histogram.py',
     'mempool_expiry.py',
     'wallet_importdescriptors.py',
+    'wallet_importseed.py',
     'wallet_crosschain.py',
     'mining_basic.py',
     'mining_mainnet.py',
