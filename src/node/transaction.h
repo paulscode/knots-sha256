@@ -10,6 +10,8 @@
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 
+#include <variant>
+
 class CBlockIndex;
 class CTxMemPool;
 namespace Consensus {
@@ -45,7 +47,7 @@ static const CAmount DEFAULT_MAX_BURN_AMOUNT{0};
  * @param[in]  node reference to node context
  * @param[in]  tx the transaction to broadcast
  * @param[out] err_string reference to std::string to fill with error string if available
- * @param[in]  max_tx_fee reject txs with fees higher than this (if 0, accept any fee)
+ * @param[in]  max_tx_fee reject txs with fees higher than this: an absolute amount, or a CFeeRate applied to the policy vsize (if 0, accept any fee)
  * @param[in]  broadcast_method whether to add the transaction to the mempool and how to broadcast it
  * @param[in]  wait_callback wait until callbacks have been processed to avoid stale result due to a sequentially RPC.
  * return error
@@ -53,7 +55,7 @@ static const CAmount DEFAULT_MAX_BURN_AMOUNT{0};
 [[nodiscard]] TransactionError BroadcastTransaction(NodeContext& node,
                                                     CTransactionRef tx,
                                                     std::string& err_string,
-                                                    const CAmount& max_tx_fee,
+                                                    const std::variant<CAmount, CFeeRate>& max_tx_fee,
                                                     TxBroadcast broadcast_method,
                                                     bool wait_callback);
 
