@@ -103,6 +103,8 @@ class ListTransactionsTest(BitcoinTestFramework):
         self.run_invalid_parameters_test()
         self.test_op_return()
         self.test_from_me_status_change()
+        self.test_listtransactions_display_in_mempool()
+        self.test_gettransaction_display_in_mempool()
 
     def run_rbf_opt_in_test(self):
         """Test the opt-in-rbf flag for sent and received transactions."""
@@ -360,6 +362,61 @@ class ListTransactionsTest(BitcoinTestFramework):
             tx_info = wallet.gettransaction(txid)
             assert "fee" in tx_info
             assert_equal(any(detail["category"] == "send" for detail in tx_info["details"]), True)
+
+    def create_and_send_transaction(self, utxo, address, amt, feeRate):
+        w = self.nodes[0].get_wallet_rpc(self.default_wallet_name)
+        psbtx = w.walletcreatefundedpsbt([{"txid": utxo['txid'], "vout": utxo['vout']}],
+                                                      {address: amt},
+                                                      0,
+                                                      {"replaceable":True, "feeRate":feeRate})['psbt']
+        signed_tx = w.walletprocesspsbt(psbtx)['psbt']
+        final_tx = w.finalizepsbt(signed_tx)['hex']
+        return w.sendrawtransaction(final_tx)
+
+    def test_listtransactions_display_in_mempool(self):
+        w = self.nodes[0].get_wallet_rpc(self.default_wallet_name)
+        self.log.info('Testing that listtransactions correctly displays whether a transaction is in the mempool')
+        utxo = w.listunspent(query_options={'minimumAmount': 0.15})[0]
+        address = w.getnewaddress()
+
+        tx1_id = self.create_and_send_transaction(utxo, address, 0.1, 0.001)
+
+        new_txs = w.listtransactions(count=2)
+        for tx in new_txs:
+            assert_equal(tx['txid'], tx1_id)
+            assert_equal(tx['in_mempool'], True)
+
+        tx2_id = self.create_and_send_transaction(utxo, address, 0.1, 0.002)
+
+        new_txs = w.listtransactions(count=4)
+        for i in range(2):
+            assert_equal(new_txs[i]['txid'], tx1_id)
+            assert_equal(new_txs[i]['in_mempool'], False)
+
+        for i in range(2, 4):
+            assert_equal(new_txs[i]['txid'], tx2_id)
+            assert_equal(new_txs[i]['in_mempool'], True)
+
+    def test_gettransaction_display_in_mempool(self):
+        w = self.nodes[0].get_wallet_rpc(self.default_wallet_name)
+        self.log.info('Testing that gettransaction correctly displays whether a transaction is in the mempool')
+        utxo = w.listunspent(query_options={'minimumAmount': 0.15})[0]
+        address = w.getnewaddress()
+
+        tx1_id = self.create_and_send_transaction(utxo, address, 0.1, 0.001)
+
+        tx1 = w.gettransaction(tx1_id)
+        assert_equal(tx1['txid'], tx1_id)
+        assert_equal(tx1['in_mempool'], True)
+
+        tx2_id = self.create_and_send_transaction(utxo, address, 0.1, 0.002)
+        tx1 = w.gettransaction(tx1_id)
+        tx2 = w.gettransaction(tx2_id)
+        assert_equal(tx1['txid'], tx1_id)
+        assert_equal(tx1['in_mempool'], False)
+        assert_equal(tx2['txid'], tx2_id)
+        assert_equal(tx2['in_mempool'], True)
+
 
 if __name__ == '__main__':
     ListTransactionsTest(__file__).main()
