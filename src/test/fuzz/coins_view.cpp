@@ -14,6 +14,7 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/util/setup_common.h>
+#include <test/util/transaction_utils.h>
 #include <txdb.h>
 #include <util/hasher.h>
 
@@ -312,7 +313,8 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                 (void)GetTransactionSigOpCost(transaction, coins_view_cache, flags);
             },
             [&] {
-                (void)IsWitnessStandard(CTransaction{random_mutable_transaction}, coins_view_cache);
+                std::string reason;
+                (void)IsWitnessStandard(CTransaction{random_mutable_transaction}, coins_view_cache, "bad-witness-", reason);
             });
     }
 
