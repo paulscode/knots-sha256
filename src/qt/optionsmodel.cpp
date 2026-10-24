@@ -149,6 +149,16 @@ OptionsModel::FontChoice OptionsModel::FontChoiceFromString(const QString& s)
     }
 }
 
+static QString CanonicalMempoolReplacement(const OptionsModel& model)
+{
+    switch (model.node().mempool().m_opts.rbf_policy) {
+    case RBFPolicy::Never:  return "never";
+    case RBFPolicy::OptIn:  return "fee,optin";
+    case RBFPolicy::Always: return "fee,-optin";
+    }
+    assert(0);
+}
+
 OptionsModel::OptionsModel(interfaces::Node& node, QObject *parent) :
     QAbstractListModel(parent), m_node{node}
 {
