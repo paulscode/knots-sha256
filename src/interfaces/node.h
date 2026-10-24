@@ -27,6 +27,7 @@
 class BanMan;
 class CFeeRate;
 class CNodeStats;
+class CTxMemPool;
 class Coin;
 class UniValue;
 class Proxy;
@@ -156,6 +157,8 @@ public:
 
     //! Get total bytes sent.
     virtual int64_t getTotalBytesSent() = 0;
+
+    virtual CTxMemPool& mempool() = 0;
 
     //! Get mempool size.
     virtual size_t getMempoolSize() = 0;
