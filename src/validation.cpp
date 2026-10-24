@@ -2518,7 +2518,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // for as long as `control`.
     std::vector<PrecomputedTransactionData> txsdata(block.vtx.size());
     std::optional<CCheckQueueControl<CScriptCheck>> control;
-    if (auto& queue = m_chainman.GetCheckQueue(); queue.HasThreads() && fScriptChecks) control.emplace(queue);
+    if (auto& queue = m_chainman.GetCheckQueue(); m_chainman.m_script_check_queue_enabled && queue.HasThreads() && fScriptChecks) control.emplace(queue);
 
     std::vector<int> prevheights;
     CAmount nFees = 0;
