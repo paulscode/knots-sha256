@@ -66,6 +66,7 @@ target_raw_data_sources(bench_bitcoin NAMESPACE benchmark::data
 target_link_libraries(bench_bitcoin
   core_interface
   test_util
+  $<TARGET_NAME_IF_EXISTS:bitcoinconsensus>
   bitcoin_node
   Boost::headers
 )
@@ -84,4 +85,5 @@ if(ENABLE_WALLET)
   target_link_libraries(bench_bitcoin bitcoin_wallet)
 endif()
 
+make_libbitcoinconsensus_dll_available(bench_bitcoin)
 install_binary_component(bench_bitcoin INTERNAL)
