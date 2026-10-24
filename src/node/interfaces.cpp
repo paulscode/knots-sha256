@@ -992,13 +992,20 @@ public:
 
     std::unique_ptr<BlockTemplate> createNewBlock(const BlockCreateOptions& options, bool cooldown) override
     {
+        BlockAssembler::Options assemble_options{options};
+        ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
+        return createNewBlock2(assemble_options, cooldown);
+    }
+
+    std::unique_ptr<BlockTemplate> createNewBlock2(const BlockCreateOptions& assemble_options, bool cooldown) override
+    {
         // Reject too-small values instead of clamping so callers don't silently
         // end up mining with different options than requested. This matches the
         // behavior of the `-blockreservedweight` startup option, which rejects
         // values below MINIMUM_BLOCK_RESERVED_WEIGHT.
-        if (options.block_reserved_weight && options.block_reserved_weight < MINIMUM_BLOCK_RESERVED_WEIGHT) {
+        if (assemble_options.block_reserved_weight && assemble_options.block_reserved_weight < MINIMUM_BLOCK_RESERVED_WEIGHT) {
             throw std::runtime_error(strprintf("block_reserved_weight (%zu) must be at least %u weight units",
-                                               *options.block_reserved_weight,
+                                               *assemble_options.block_reserved_weight,
                                                MINIMUM_BLOCK_RESERVED_WEIGHT));
         }
 
@@ -1022,8 +1029,6 @@ public:
             if (!CooldownIfHeadersAhead(chainman(), notifications(), *maybe_tip, m_interrupt_mining)) return {};
         }
 
-        BlockAssembler::Options assemble_options{options};
-        ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
         return std::make_unique<BlockTemplateImpl>(assemble_options, BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options}.CreateNewBlock(), m_node);
     }
 
