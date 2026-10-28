@@ -162,6 +162,7 @@ BASE_SCRIPTS = [
     'rpc_signer.py',
     'wallet_signer.py',
     'mempool_limit.py',
+    'mempool_data_outputs.py',
     'rpc_txoutproof.py',
     'rpc_orphans.py',
     'wallet_listreceivedby.py',
