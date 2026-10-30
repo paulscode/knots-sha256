@@ -13,15 +13,22 @@
 
 AutoFile::AutoFile(std::FILE* file, const Obfuscation& obfuscation) : m_file{file}, m_obfuscation{obfuscation}
 {
-    if (!IsNull()) {
+    position();
+}
+
+std::optional<int64_t> AutoFile::position() const
+{
+    if (!m_position.has_value() && !IsNull()) [[unlikely]] {
         auto pos{FileTell64(m_file)};
         if (pos >= 0) m_position = pos;
     }
+    return m_position;
 }
 
 std::size_t AutoFile::detail_fread(std::span<std::byte> dst)
 {
     if (!m_file) throw std::ios_base::failure("AutoFile::read: file handle is nullptr");
+    if (m_obfuscation) position(); // before the read moves the file
     const size_t ret = std::fread(dst.data(), 1, dst.size(), m_file);
     if (m_obfuscation) {
         if (!m_position) throw std::ios_base::failure("AutoFile::read: position unknown");
@@ -56,8 +63,9 @@ void AutoFile::seek(int64_t offset, int origin)
 
 int64_t AutoFile::tell()
 {
-    if (!m_position.has_value()) throw std::ios_base::failure("AutoFile::tell: position unknown");
-    return *m_position;
+    const auto pos{position()};
+    if (!pos.has_value()) throw std::ios_base::failure("AutoFile::tell: position unknown");
+    return *pos;
 }
 
 int64_t AutoFile::size()
@@ -119,7 +127,7 @@ void AutoFile::write_buffer(std::span<std::byte> src)
 {
     if (!m_file) throw std::ios_base::failure("AutoFile::write_buffer: file handle is nullptr");
     if (m_obfuscation) {
-        if (!m_position) throw std::ios_base::failure("AutoFile::write_buffer: obfuscation position unknown");
+        if (!position()) throw std::ios_base::failure("AutoFile::write_buffer: obfuscation position unknown");
         m_obfuscation(src, *m_position); // obfuscate in-place
     }
     if (std::fwrite(src.data(), 1, src.size(), m_file) != src.size()) {
