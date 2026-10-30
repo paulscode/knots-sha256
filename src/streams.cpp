@@ -96,6 +96,7 @@ void AutoFile::ignore(size_t nSize)
     while (nSize > 0) {
         size_t nNow = std::min<size_t>(nSize, sizeof(data));
         if (std::fread(data, 1, nNow, m_file) != nNow) {
+            m_position.reset(); // part of it may have moved the file
             throw std::ios_base::failure(feof() ? "AutoFile::ignore: end of file" : "AutoFile::ignore: fread failed");
         }
         nSize -= nNow;
@@ -108,6 +109,7 @@ void AutoFile::write(std::span<const std::byte> src)
     if (!m_file) throw std::ios_base::failure("AutoFile::write: file handle is nullptr");
     if (!m_obfuscation) {
         if (std::fwrite(src.data(), 1, src.size(), m_file) != src.size()) {
+            m_position.reset(); // part of it may have moved the file
             throw std::ios_base::failure("AutoFile::write: write failed");
         }
         m_was_written = true;
@@ -131,6 +133,7 @@ void AutoFile::write_buffer(std::span<std::byte> src)
         m_obfuscation(src, *m_position); // obfuscate in-place
     }
     if (std::fwrite(src.data(), 1, src.size(), m_file) != src.size()) {
+        m_position.reset(); // part of it may have moved the file
         throw std::ios_base::failure("AutoFile::write_buffer: write failed");
     }
     m_was_written = true;

@@ -298,6 +298,38 @@ BOOST_AUTO_TEST_CASE(autofile_xor_read_unknown_position)
     BOOST_REQUIRE_EQUAL(file.fclose(), 0);
 }
 
+BOOST_AUTO_TEST_CASE(autofile_short_ignore)
+{
+    FILE* raw_file{fsbridge::fopen(m_args.GetDataDirBase() / "short_ignore_tmp", "w+b")};
+    AutoFile file{raw_file};
+    BOOST_REQUIRE(!file.IsNull());
+    file << uint64_t{0};
+    file.seek(6, SEEK_SET);
+
+    // The part read before the end of the file moved it, so the cache cannot be kept
+    BOOST_CHECK_EXCEPTION(file.ignore(5), std::ios_base::failure, HasReason{"AutoFile::ignore: end of file"});
+    BOOST_CHECK_EQUAL(file.tell(), FileTell64(raw_file));
+    BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+}
+
+#ifndef WIN32
+BOOST_AUTO_TEST_CASE(autofile_partial_write)
+{
+    const std::vector<std::byte> data(10000);
+    for (const auto& xor_pat : {Obfuscation{}, Obfuscation{"0102040810204080"_hex}}) {
+        std::vector<char> buf(5000);
+        FILE* raw_file{fmemopen(buf.data(), buf.size(), "wb")};
+        BOOST_REQUIRE(raw_file);
+        AutoFile file{raw_file, xor_pat};
+
+        // The part written before the end of the buffer moved the file, so the cache cannot be kept
+        BOOST_CHECK_THROW(file.write(data), std::ios_base::failure);
+        BOOST_CHECK_EQUAL(file.tell(), FileTell64(raw_file));
+        BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+    }
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(streams_vector_reader)
 {
     std::vector<unsigned char> vch = {1, 255, 3, 4, 5, 6};
