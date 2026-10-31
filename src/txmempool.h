@@ -42,6 +42,7 @@
 #include <vector>
 
 class CChain;
+class CScript;
 class ValidationSignals;
 
 struct bilingual_str;
@@ -534,6 +535,8 @@ public:
     std::vector<CTxMemPoolEntryRef> entryAll() const EXCLUSIVE_LOCKS_REQUIRED(cs);
     std::vector<TxMempoolInfo> infoAll() const;
 
+    void FindScriptPubKey(const std::set<CScript>& needles, std::map<COutPoint, Coin>& out_results);
+
     size_t DynamicMemoryUsage() const;
 
     /** Adds a transaction to the unbroadcast set */
@@ -746,6 +749,9 @@ public:
  * It also allows you to sign a double-spend directly in
  * signrawtransactionwithkey and signrawtransactionwithwallet,
  * as long as the conflicting transaction is not yet confirmed.
+ *
+ * Its Cursor also doesn't work. In general, it is broken as a CCoinsView
+ * implementation outside of a few use cases.
  */
 class CCoinsViewMemPool : public CCoinsViewBacked
 {
