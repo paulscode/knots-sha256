@@ -176,6 +176,7 @@ static RPCHelpMan getpeerinfo()
                     {
                         {RPCResult::Type::STR, "permission_type", Join(NET_PERMISSIONS_DOC, ",\n") + ".\n"},
                     }},
+                    {RPCResult::Type::BOOL, "forced_inbound", "Whether this peer forced a connection by evicting another."},
                     {RPCResult::Type::NUM, "minfeefilter", "The minimum fee rate for transactions this peer accepts"},
                     {RPCResult::Type::OBJ_DYN, "bytessent_per_msg", "",
                     {
@@ -287,6 +288,7 @@ static RPCHelpMan getpeerinfo()
             permissions.push_back(permission);
         }
         obj.pushKV("permissions", std::move(permissions));
+        obj.pushKV("forced_inbound", stats.m_forced_inbound);
         obj.pushKV("minfeefilter", ValueFromAmount(statestats.m_fee_filter_received));
 
         UniValue sendPerMsgType(UniValue::VOBJ);
