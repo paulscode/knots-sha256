@@ -251,8 +251,9 @@ class SegWitTest(BitcoinTestFramework):
         tx1_hex = self.nodes[0].gettransaction(txid1)['hex']
         tx1 = tx_from_hex(tx1_hex)
 
-        # Check that wtxid is properly reported in mempool entry (txid1)
+        # Check that hash and wtxid are properly reported in mempool entry (txid1)
         assert_equal(self.nodes[0].getmempoolentry(txid1)["wtxid"], tx1.wtxid_hex)
+        assert_equal(self.nodes[0].getmempoolentry(txid1)["hash"], tx1.wtxid_hex)
 
         # Check that weight and vsize are properly reported in mempool entry (txid1)
         assert_equal(self.nodes[0].getmempoolentry(txid1)["vsize"], tx1.get_vsize())
@@ -267,8 +268,9 @@ class SegWitTest(BitcoinTestFramework):
         tx = tx_from_hex(tx2_hex)
         assert not tx.wit.is_null()
 
-        # Check that wtxid is properly reported in mempool entry (txid2)
+        # Check that hash and wtxid are properly reported in mempool entry (txid2)
         assert_equal(self.nodes[0].getmempoolentry(txid2)["wtxid"], tx.wtxid_hex)
+        assert_equal(self.nodes[0].getmempoolentry(txid2)["hash"], tx.wtxid_hex)
 
         # Check that weight and vsize are properly reported in mempool entry (txid2)
         assert_equal(self.nodes[0].getmempoolentry(txid2)["vsize"], tx.get_vsize())
@@ -289,8 +291,9 @@ class SegWitTest(BitcoinTestFramework):
         assert txid2 in template_txids
         assert txid3 in template_txids
 
-        # Check that wtxid is properly reported in mempool entry (txid3)
+        # Check that hash and wtxid are properly reported in mempool entry (txid3)
         assert_equal(self.nodes[0].getmempoolentry(txid3)["wtxid"], tx.wtxid_hex)
+        assert_equal(self.nodes[0].getmempoolentry(txid3)["hash"], tx.wtxid_hex)
 
         # Check that weight and vsize are properly reported in mempool entry (txid3)
         assert_equal(self.nodes[0].getmempoolentry(txid3)["vsize"], tx.get_vsize())
