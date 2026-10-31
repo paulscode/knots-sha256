@@ -122,12 +122,10 @@ void SignVerifyMessageDialog::on_signMessageButton_SM_clicked()
         ui->statusLabel_SM->setText(tr("The entered address is invalid.") + QString(" ") + tr("Please check the address and try again."));
         return;
     }
+    MessageSignatureFormat sig_format{MessageSignatureFormat::LEGACY};
     const PKHash* pkhash = std::get_if<PKHash>(&destination);
     if (!pkhash) {
-        ui->addressIn_SM->setValid(false);
-        ui->statusLabel_SM->setStyleSheet("QLabel { color: red; }");
-        ui->statusLabel_SM->setText(tr("The entered address does not refer to a key.") + QString(" ") + tr("Please check the address and try again."));
-        return;
+        sig_format = MessageSignatureFormat::SIMPLE;
     }
 
     WalletModel::UnlockContext ctx(model->requestUnlock());
@@ -140,7 +138,7 @@ void SignVerifyMessageDialog::on_signMessageButton_SM_clicked()
 
     const std::string& message = ui->messageIn_SM->document()->toPlainText().toStdString();
     std::string signature;
-    SigningResult res = model->wallet().signMessage(message, *pkhash, signature);
+    SigningResult res = model->wallet().signMessage(sig_format, message, destination, signature);
 
     QString error;
     switch (res) {
@@ -216,6 +214,12 @@ void SignVerifyMessageDialog::on_verifyMessageButton_VM_clicked()
             QString("<nobr>") + tr("Message verified.") + QString("</nobr>")
         );
         return;
+    case MessageVerificationResult::INCONCLUSIVE:
+    case MessageVerificationResult::ERR_POF:
+        ui->statusLabel_VM->setText(
+            QString("<nobr>") + tr("This version of %1 is unable to check this signature.").arg(CLIENT_NAME) + QString("</nobr>")
+        );
+        return;
     case MessageVerificationResult::ERR_INVALID_ADDRESS:
         ui->statusLabel_VM->setText(
             tr("The entered address is invalid.") + QString(" ") +
@@ -223,12 +227,6 @@ void SignVerifyMessageDialog::on_verifyMessageButton_VM_clicked()
         );
         return;
     case MessageVerificationResult::ERR_ADDRESS_NO_KEY:
-        ui->addressIn_VM->setValid(false);
-        ui->statusLabel_VM->setText(
-            tr("The entered address does not refer to a key.") + QString(" ") +
-            tr("Please check the address and try again.")
-        );
-        return;
     case MessageVerificationResult::ERR_MALFORMED_SIGNATURE:
         ui->signatureIn_VM->setValid(false);
         ui->statusLabel_VM->setText(
@@ -243,6 +241,7 @@ void SignVerifyMessageDialog::on_verifyMessageButton_VM_clicked()
             tr("Please check the signature and try again.")
         );
         return;
+    case MessageVerificationResult::ERR_INVALID:
     case MessageVerificationResult::ERR_NOT_SIGNED:
         ui->statusLabel_VM->setText(
             QString("<nobr>") + tr("Message verification failed.") + QString("</nobr>")
