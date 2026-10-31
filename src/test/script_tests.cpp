@@ -2,12 +2,15 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <bitcoin-build-config.h> // IWYU pragma: keep
+
 #include <test/data/script_tests.json.h>
 #include <test/data/bip341_wallet_vectors.json.h>
 
 #include <common/system.h>
 #include <core_io.h>
 #include <key.h>
+#include <policy/policy.h>
 #include <rpc/util.h>
 #include <script/interpreter.h>
 #include <script/script.h>
@@ -25,6 +28,10 @@
 #include <util/fs.h>
 #include <util/strencodings.h>
 #include <util/string.h>
+
+#if defined(HAVE_CONSENSUS_LIB)
+#include <script/bitcoinconsensus.h>
+#endif
 
 #include <cstdint>
 #include <string>
@@ -131,6 +138,9 @@ void DoTest(const CScript& scriptPubKey, const CScript& scriptSig, const CScript
     ScriptError err;
     const CTransaction txCredit{BuildCreditingTransaction(scriptPubKey, nValue)};
     CMutableTransaction tx = BuildSpendingTransaction(scriptSig, scriptWitness, txCredit);
+#if defined(HAVE_CONSENSUS_LIB)
+    CMutableTransaction tx2 = tx;
+#endif
     BOOST_CHECK_MESSAGE(VerifyScript(scriptSig, scriptPubKey, &scriptWitness, flags, MutableTransactionSignatureChecker(&tx, 0, txCredit.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL), &err) == expect, message);
     BOOST_CHECK_MESSAGE(err == scriptError, FormatScriptError(err) + " where " + FormatScriptError((ScriptError_t)scriptError) + " expected: " + message);
 
@@ -143,6 +153,25 @@ void DoTest(const CScript& scriptPubKey, const CScript& scriptSig, const CScript
         if (combined_flags & SCRIPT_VERIFY_WITNESS && ~combined_flags & SCRIPT_VERIFY_P2SH) continue;
         BOOST_CHECK_MESSAGE(VerifyScript(scriptSig, scriptPubKey, &scriptWitness, combined_flags, MutableTransactionSignatureChecker(&tx, 0, txCredit.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL), &err) == expect, message + strprintf(" (with flags %x)", combined_flags.as_int()));
     }
+
+#if defined(HAVE_CONSENSUS_LIB)
+    DataStream stream;
+    stream << TX_WITH_WITNESS(tx2);
+    const uint32_t libconsensus_flags{static_cast<uint32_t>(flags.as_int() & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_ALL)};
+    if (libconsensus_flags == flags.as_int()) {
+        int expectedSuccessCode = expect ? 1 : 0;
+        if (libconsensus_flags & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_TAPROOT) {
+            // Taproot needs the spent outputs (Core 31 ships taproot vectors in script_tests.json)
+            const UTXO utxo{scriptPubKey.data(), static_cast<unsigned int>(scriptPubKey.size()), txCredit.vout[0].nValue};
+            BOOST_CHECK_MESSAGE(bitcoinconsensus_verify_script_with_spent_outputs(scriptPubKey.data(), scriptPubKey.size(), txCredit.vout[0].nValue, UCharCast(stream.data()), stream.size(), &utxo, 1, 0, libconsensus_flags, nullptr) == expectedSuccessCode, message);
+        } else if (libconsensus_flags & bitcoinconsensus_SCRIPT_FLAGS_VERIFY_WITNESS) {
+            BOOST_CHECK_MESSAGE(bitcoinconsensus_verify_script_with_amount(scriptPubKey.data(), scriptPubKey.size(), txCredit.vout[0].nValue, UCharCast(stream.data()), stream.size(), 0, libconsensus_flags, nullptr) == expectedSuccessCode, message);
+        } else {
+            BOOST_CHECK_MESSAGE(bitcoinconsensus_verify_script_with_amount(scriptPubKey.data(), scriptPubKey.size(), 0, UCharCast(stream.data()), stream.size(), 0, libconsensus_flags, nullptr) == expectedSuccessCode, message);
+            BOOST_CHECK_MESSAGE(bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size(), 0, libconsensus_flags, nullptr) == expectedSuccessCode, message);
+        }
+    }
+#endif
 }
 }; // struct ScriptTest
 
@@ -1622,6 +1651,179 @@ BOOST_AUTO_TEST_CASE(script_HasValidOps)
     BOOST_CHECK(!script.HasValidOps());
 }
 
+#if defined(HAVE_CONSENSUS_LIB)
+
+/* Test simple (successful) usage of bitcoinconsensus_verify_script */
+BOOST_AUTO_TEST_CASE(bitcoinconsensus_verify_script_returns_true)
+{
+    unsigned int libconsensus_flags = 0;
+    int nIn = 0;
+
+    CScript scriptPubKey;
+    CScript scriptSig;
+    CScriptWitness wit;
+
+    scriptPubKey << OP_1;
+    CTransaction creditTx{BuildCreditingTransaction(scriptPubKey, 1)};
+    CTransaction spendTx{BuildSpendingTransaction(scriptSig, wit, creditTx)};
+
+    DataStream stream;
+    stream << TX_WITH_WITNESS(spendTx);
+
+    bitcoinconsensus_error err;
+    int result = bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size(), nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 1);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_OK);
+}
+
+/* Test bitcoinconsensus_verify_script returns invalid tx index err*/
+BOOST_AUTO_TEST_CASE(bitcoinconsensus_verify_script_tx_index_err)
+{
+    unsigned int libconsensus_flags = 0;
+    int nIn = 3;
+
+    CScript scriptPubKey;
+    CScript scriptSig;
+    CScriptWitness wit;
+
+    scriptPubKey << OP_EQUAL;
+    CTransaction creditTx{BuildCreditingTransaction(scriptPubKey, 1)};
+    CTransaction spendTx{BuildSpendingTransaction(scriptSig, wit, creditTx)};
+
+    DataStream stream;
+    stream << TX_WITH_WITNESS(spendTx);
+
+    bitcoinconsensus_error err;
+    int result = bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size(), nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_TX_INDEX);
+}
+
+/* Test bitcoinconsensus_verify_script returns tx size mismatch err*/
+BOOST_AUTO_TEST_CASE(bitcoinconsensus_verify_script_tx_size)
+{
+    unsigned int libconsensus_flags = 0;
+    int nIn = 0;
+
+    CScript scriptPubKey;
+    CScript scriptSig;
+    CScriptWitness wit;
+
+    scriptPubKey << OP_EQUAL;
+    CTransaction creditTx{BuildCreditingTransaction(scriptPubKey, 1)};
+    CTransaction spendTx{BuildSpendingTransaction(scriptSig, wit, creditTx)};
+
+    DataStream stream;
+    stream << TX_WITH_WITNESS(spendTx);
+
+    bitcoinconsensus_error err;
+    int result = bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size() * 2, nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_TX_SIZE_MISMATCH);
+}
+
+/* Test bitcoinconsensus_verify_script returns invalid tx serialization error */
+BOOST_AUTO_TEST_CASE(bitcoinconsensus_verify_script_tx_serialization)
+{
+    unsigned int libconsensus_flags = 0;
+    int nIn = 0;
+
+    CScript scriptPubKey;
+    CScript scriptSig;
+    CScriptWitness wit;
+
+    scriptPubKey << OP_EQUAL;
+    CTransaction creditTx{BuildCreditingTransaction(scriptPubKey, 1)};
+    CTransaction spendTx{BuildSpendingTransaction(scriptSig, wit, creditTx)};
+
+    DataStream stream;
+    stream << 0xffffffff;
+
+    bitcoinconsensus_error err;
+    int result = bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size(), nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_TX_DESERIALIZE);
+}
+
+/* Test bitcoinconsensus_verify_script returns amount required error */
+BOOST_AUTO_TEST_CASE(bitcoinconsensus_verify_script_amount_required_err)
+{
+    unsigned int libconsensus_flags = bitcoinconsensus_SCRIPT_FLAGS_VERIFY_WITNESS;
+    int nIn = 0;
+
+    CScript scriptPubKey;
+    CScript scriptSig;
+    CScriptWitness wit;
+
+    scriptPubKey << OP_EQUAL;
+    CTransaction creditTx{BuildCreditingTransaction(scriptPubKey, 1)};
+    CTransaction spendTx{BuildSpendingTransaction(scriptSig, wit, creditTx)};
+
+    DataStream stream;
+    stream << TX_WITH_WITNESS(spendTx);
+
+    bitcoinconsensus_error err;
+    int result = bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size(), nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_AMOUNT_REQUIRED);
+}
+
+/* Test bitcoinconsensus_verify_script returns invalid flags err */
+BOOST_AUTO_TEST_CASE(bitcoinconsensus_verify_script_invalid_flags)
+{
+    unsigned int libconsensus_flags = 1 << 3;
+    int nIn = 0;
+
+    CScript scriptPubKey;
+    CScript scriptSig;
+    CScriptWitness wit;
+
+    scriptPubKey << OP_EQUAL;
+    CTransaction creditTx{BuildCreditingTransaction(scriptPubKey, 1)};
+    CTransaction spendTx{BuildSpendingTransaction(scriptSig, wit, creditTx)};
+
+    DataStream stream;
+    stream << TX_WITH_WITNESS(spendTx);
+
+    bitcoinconsensus_error err;
+    int result = bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size(), nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_INVALID_FLAGS);
+}
+
+/* Test bitcoinconsensus_verify_script returns spent outputs required err */
+BOOST_AUTO_TEST_CASE(bitcoinconsensus_verify_script_spent_outputs_required_err)
+{
+    unsigned int libconsensus_flags{bitcoinconsensus_SCRIPT_FLAGS_VERIFY_TAPROOT};
+    const int nIn{0};
+
+    CScript scriptPubKey;
+    CScript scriptSig;
+    CScriptWitness wit;
+
+    scriptPubKey << OP_EQUAL;
+    CTransaction creditTx{BuildCreditingTransaction(scriptPubKey, 1)};
+    CTransaction spendTx{BuildSpendingTransaction(scriptSig, wit, creditTx)};
+
+    DataStream stream;
+    stream << TX_WITH_WITNESS(spendTx);
+
+    bitcoinconsensus_error err;
+    int result{bitcoinconsensus_verify_script_with_spent_outputs(scriptPubKey.data(), scriptPubKey.size(), creditTx.vout[0].nValue, UCharCast(stream.data()), stream.size(), nullptr, 0, nIn, libconsensus_flags, &err)};
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_SPENT_OUTPUTS_REQUIRED);
+
+    result = bitcoinconsensus_verify_script_with_amount(scriptPubKey.data(), scriptPubKey.size(), creditTx.vout[0].nValue, UCharCast(stream.data()), stream.size(), nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_SPENT_OUTPUTS_REQUIRED);
+
+    result = bitcoinconsensus_verify_script(scriptPubKey.data(), scriptPubKey.size(), UCharCast(stream.data()), stream.size(), nIn, libconsensus_flags, &err);
+    BOOST_CHECK_EQUAL(result, 0);
+    BOOST_CHECK_EQUAL(err, bitcoinconsensus_ERR_SPENT_OUTPUTS_REQUIRED);
+}
+
+#endif // defined(HAVE_CONSENSUS_LIB)
+
 BOOST_AUTO_TEST_CASE(bip341_keypath_test_vectors)
 {
     UniValue tests;
@@ -1722,6 +1924,273 @@ BOOST_AUTO_TEST_CASE(formatscriptflags)
     BOOST_CHECK_EQUAL(FormatScriptFlags(SCRIPT_VERIFY_TAPROOT | script_verify_flags::from_int(1u<<27)), "TAPROOT,0x08000000");
     BOOST_CHECK_EQUAL(FormatScriptFlags(SCRIPT_VERIFY_TAPROOT | script_verify_flags::from_int((1u<<28) | (1ull<<58))), "TAPROOT,0x400000010000000");
     BOOST_CHECK_EQUAL(FormatScriptFlags(script_verify_flags::from_int(1u<<26)), "0x04000000");
+}
+
+static std::string DatacarrierBytesStr(const CScript &script, const size_t remaining_outputs = 0) {
+    auto dcb = script.DatacarrierBytes(remaining_outputs);
+    return strprintf("%s+%s", dcb.first, dcb.second);
+}
+
+BOOST_AUTO_TEST_CASE(script_DataCarrierBytes)
+{
+    using zeros = std::vector<unsigned char>;
+
+    // empty script
+    BOOST_CHECK_EQUAL("0+0", DatacarrierBytesStr(CScript()));
+    // series of pushes are not data
+    BOOST_CHECK_EQUAL("0+0", DatacarrierBytesStr(CScript() << OP_0 << OP_0 << OP_0));
+    // unspendable if first op is OP_RETURN, then length(1), zeros(11)
+    BOOST_CHECK_EQUAL("13+0", DatacarrierBytesStr(CScript() << OP_RETURN << zeros(11)));
+    // invalid script (no data following PUSHDATA) makes it all data
+    BOOST_CHECK_EQUAL("0+2", DatacarrierBytesStr(CScript() << OP_0 << OP_PUSHDATA4));
+    // no data here
+    BOOST_CHECK_EQUAL("0+0", DatacarrierBytesStr(CScript() << OP_TRUE << OP_IF << OP_ENDIF));
+    // specific data pattern, entire script is data
+    BOOST_CHECK_EQUAL("0+4", DatacarrierBytesStr(CScript() << OP_FALSE << OP_IF << OP_7 << OP_ENDIF));
+    // consecutive data
+    BOOST_CHECK_EQUAL("0+6", DatacarrierBytesStr(CScript() << OP_FALSE << OP_IF << OP_ENDIF << OP_FALSE << OP_IF << OP_ENDIF));
+    // nested data (all is data)
+    BOOST_CHECK_EQUAL("0+6", DatacarrierBytesStr(CScript() << OP_FALSE << OP_IF << OP_TRUE << OP_IF << OP_ENDIF << OP_ENDIF));
+    // pushing then immediately dropping is data: length(1), zero(11), OP_DROP
+    BOOST_CHECK_EQUAL("0+13", DatacarrierBytesStr(CScript() << zeros(11) << OP_DROP));
+    // OLGA data obfuscated as p2wsh
+    const auto olga_header = CScript() << OP_0 << "003e7374616d703a000000000000000000000000000000000000000000000000"_hex;
+    BOOST_CHECK_EQUAL("0+82", DatacarrierBytesStr(olga_header, 2));
+    // OLGA missing a second output is p2wsh, not OLGA
+    BOOST_CHECK_EQUAL("0+0", DatacarrierBytesStr(olga_header, 1));
+    // OGLA with extra outputs still is OLGA
+    BOOST_CHECK_EQUAL("0+82", DatacarrierBytesStr(olga_header, 3));
+}
+
+BOOST_AUTO_TEST_CASE(script_GetScriptForTransactionInput)
+{
+    using zeros = std::vector<unsigned char>;
+
+    { // P2PK - no datacarrier bytes (tx_in doesn't matter)
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << zeros(65) << OP_CHECKSIG;
+        tx_in.scriptSig = CScript();
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == tx_in.scriptSig);
+        BOOST_CHECK_EQUAL(scale, WITNESS_SCALE_FACTOR);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2PKH - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << OP_DUP << OP_HASH160 << zeros(20) << OP_EQUALVERIFY << OP_CHECKSIG;
+        // signature, pubkey
+        tx_in.scriptSig = CScript() << zeros(72) << zeros(33);
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == tx_in.scriptSig);
+        BOOST_CHECK_EQUAL(scale, WITNESS_SCALE_FACTOR);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2SH - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        CScript redeem_script = CScript() << OP_DROP << OP_TRUE;
+        prev_script = CScript() << OP_HASH160 << zeros(20) << OP_EQUAL;
+        // signature, pubkey, redeem_script
+        tx_in.scriptSig = CScript() << OP_7 << std::vector<unsigned char>(redeem_script.begin(), redeem_script.end());
+        // this should return the redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == redeem_script);
+        BOOST_CHECK_EQUAL(scale, WITNESS_SCALE_FACTOR);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2SH - with datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        // arbitrary amount of data (27 bytes)
+        CScript redeem_script = CScript() << OP_RETURN << zeros(27);
+        prev_script = CScript() << OP_HASH160 << zeros(20) << OP_EQUAL;
+        // signature, pubkey, redeem_script
+        tx_in.scriptSig = CScript() << OP_7 << std::vector<unsigned char>(redeem_script.begin(), redeem_script.end());
+        // this should return the redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == redeem_script);
+        BOOST_CHECK_EQUAL(scale, WITNESS_SCALE_FACTOR);
+        // OP_RETURN(1), length(1), zeros(27) = 29
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "29+0");
+    }
+    { // P2WPKH - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        // P2WPKH is [OP_0, hash160(pubkey)]
+        prev_script = CScript() << OP_0 << zeros(20);
+        // segwit: empty scriptsig
+        tx_in.scriptSig = CScript();
+        tx_in.scriptWitness.stack.emplace_back(65); // signature
+        tx_in.scriptWitness.stack.emplace_back(33); // pubkey
+        // this should return the redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        // should have no script at all since it's wrapped P2WPKH
+        BOOST_CHECK(ret_script == CScript());
+        BOOST_CHECK_EQUAL(scale, 0);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2WSH - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << OP_0 << zeros(32);
+        // segwit: empty scriptsig
+        tx_in.scriptSig = CScript();
+        tx_in.scriptWitness.stack.emplace_back(65); // arbitrary value to satisfy redeem script
+        CScript redeem_script = CScript() << OP_0;
+        auto redeem_vec{std::vector<unsigned char>(redeem_script.begin(), redeem_script.end())};
+        tx_in.scriptWitness.stack.push_back(redeem_vec);
+        // this should return the redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == redeem_script);
+        BOOST_CHECK_EQUAL(scale, 1);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2WSH - some datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << OP_0 << zeros(32);
+        // segwit: empty scriptsig
+        tx_in.scriptSig = CScript();
+        tx_in.scriptWitness.stack.emplace_back(65); // arbitrary value to satisfy redeem script
+        CScript redeem_script = CScript() << OP_FALSE << OP_IF << zeros(10) << OP_ENDIF;
+        auto redeem_vec{std::vector<unsigned char>(redeem_script.begin(), redeem_script.end())};
+        tx_in.scriptWitness.stack.push_back(redeem_vec);
+        // this should return the redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == redeem_script);
+        BOOST_CHECK_EQUAL(scale, 1);
+        // OP_FALSE(1), OP_IF(1), length(1), zeros(10), OP_ENDIF(1)
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+14");
+    }
+    { // P2SH-P2WPKH - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        // P2WPKH is [OP_0, hash160(pubkey)]
+        CScript redeem_script = CScript() << OP_0 << zeros(20);
+        prev_script = CScript() << OP_HASH160 << zeros(20) << OP_EQUAL;
+        tx_in.scriptSig = CScript() << std::vector<unsigned char>(redeem_script.begin(), redeem_script.end());
+        // this should return the redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        // should have no script at all since it's wrapped P2WPKH
+        BOOST_CHECK(ret_script == CScript());
+        // data bytes in the witness get discounted (*1 instead of *4)
+        BOOST_CHECK_EQUAL(scale, 0);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2SH-P2WSH - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        // P2WSH is [OP_0, sha256(redeem_script)]
+        CScript redeem_script = CScript() << OP_0 << zeros(32);
+        prev_script = CScript() << OP_HASH160 << zeros(20) << OP_EQUAL;
+        tx_in.scriptSig = CScript() << std::vector<unsigned char>(redeem_script.begin(), redeem_script.end());
+        CScript witness_redeem_script = CScript() << OP_TRUE << OP_IF << zeros(10) << OP_ENDIF;
+
+        // in real life, one or more values (to satisfy the redeem script) would be pushed to the stack
+        CScript wit = CScript() << OP_7;
+        tx_in.scriptWitness.stack.emplace_back(wit.begin(), wit.end());
+        // and then finally the redeem script itself (as the last stack element)
+        auto redeem_vec{std::vector<unsigned char>(witness_redeem_script.begin(), witness_redeem_script.end())};
+        tx_in.scriptWitness.stack.push_back(redeem_vec);
+
+        // this should return the witness redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        // should have no script at all since it's wrapped P2WPKH
+        BOOST_CHECK(ret_script == witness_redeem_script);
+        // data bytes in the witness get discounted (*1 instead of *4)
+        BOOST_CHECK_EQUAL(scale, 1);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2SH-P2WSH - some datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        // P2WSH is [OP_0, sha256(redeem_script)]
+        CScript redeem_script = CScript() << OP_0 << zeros(32);
+        prev_script = CScript() << OP_HASH160 << zeros(20) << OP_EQUAL;
+        tx_in.scriptSig = CScript() << std::vector<unsigned char>(redeem_script.begin(), redeem_script.end());
+        CScript witness_redeem_script = CScript() << OP_FALSE << OP_IF << zeros(10) << OP_ENDIF;
+
+        // in real life, one or more values (to satisfy the redeem script) would be pushed to the stack
+        CScript wit = CScript() << OP_7;
+        tx_in.scriptWitness.stack.emplace_back(wit.begin(), wit.end());
+        // and then finally the redeem script itself (as the last stack element)
+        auto redeem_vec{std::vector<unsigned char>(witness_redeem_script.begin(), witness_redeem_script.end())};
+        tx_in.scriptWitness.stack.push_back(redeem_vec);
+
+        // this should return the witness redeem script
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        // should have no script at all since it's wrapped P2WPKH
+        BOOST_CHECK(ret_script == witness_redeem_script);
+        // data bytes in the witness get discounted (*1 instead of *4)
+        BOOST_CHECK_EQUAL(scale, 1);
+        // OP_FALSE(1), OP_IF(1), length(1), zeros(10), OP_ENDIF(1) = 14
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+14");
+    }
+    { // P2TR keypath - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << OP_1 << zeros(32);
+        // segwit: empty scriptsig
+        tx_in.scriptSig = CScript();
+        tx_in.scriptWitness.stack.emplace_back(65); // signature
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == CScript());
+        BOOST_CHECK_EQUAL(scale, 0);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2TR keypath - annex but no script - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << OP_1 << zeros(32);
+        // segwit: empty scriptsig
+        tx_in.scriptSig = CScript();
+        tx_in.scriptWitness.stack.emplace_back(65); // signature
+        std::vector<unsigned char> annex{0x50, 0, 0};
+        tx_in.scriptWitness.stack.push_back(annex);
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == CScript());
+        BOOST_CHECK_EQUAL(scale, 0);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2TR scriptpath - no datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << OP_1 << zeros(32);
+        // segwit: empty scriptsig
+        tx_in.scriptSig = CScript();
+        // stack: zero or more arbitrary values (script arguments); script; control block
+        // (here we have two arbitrary values)
+        tx_in.scriptWitness.stack.emplace_back(85); // arbitrary value
+        tx_in.scriptWitness.stack.emplace_back(10); // arbitrary value
+        CScript script = CScript() << OP_7 << OP_8;
+        auto script_vec{std::vector<unsigned char>(script.begin(), script.end())};
+        tx_in.scriptWitness.stack.push_back(script_vec);
+        tx_in.scriptWitness.stack.emplace_back(33); // control block
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == script);
+        BOOST_CHECK_EQUAL(scale, 1);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "0+0");
+    }
+    { // P2TR scriptpath - some datacarrier bytes
+        CScript prev_script; // scriptPubKey
+        CTxIn tx_in;
+        prev_script = CScript() << OP_1 << zeros(32);
+        // segwit: empty scriptsig
+        tx_in.scriptSig = CScript();
+        // stack: zero or more arbitrary values (script arguments); script; control block
+        // (here we have one arbitrary value)
+        tx_in.scriptWitness.stack.emplace_back(85); // arbitrary value
+        CScript script = CScript() << OP_RETURN << OP_7 << OP_8;
+        auto script_vec{std::vector<unsigned char>(script.begin(), script.end())};
+        tx_in.scriptWitness.stack.push_back(script_vec);
+        tx_in.scriptWitness.stack.emplace_back(33); // control block
+        auto [ret_script, scale] = GetScriptForTransactionInput(prev_script, tx_in);
+        BOOST_CHECK(ret_script == script);
+        BOOST_CHECK_EQUAL(scale, 1);
+        BOOST_CHECK_EQUAL(DatacarrierBytesStr(ret_script), "3+0");
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

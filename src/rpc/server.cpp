@@ -17,11 +17,17 @@
 #include <rpc/server_util.h>
 #include <rpc/util.h>
 #include <sync.h>
+#include <util/any.h>
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
 #include <validation.h>
+
+#ifdef ENABLE_WALLET
+#include <interfaces/wallet.h>
+#include <wallet/wallet.h>
+#endif
 
 #include <algorithm>
 #include <cassert>
@@ -249,6 +255,10 @@ static RPCHelpMan getrpcwhitelist()
                         {
                             {RPCResult::Type::NONE, "rpc", "Key is name of RPC method, value is null"},
                         }},
+                        {RPCResult::Type::OBJ_DYN, "wallets", "List of wallets that the user is allowed to access",
+                        {
+                            {RPCResult::Type::NONE, "wallet_name", "Key is name of wallet, value is null"},
+                        }},
                     }
                 },
                 RPCExamples{
@@ -262,8 +272,31 @@ static RPCHelpMan getrpcwhitelist()
         whitelisted_rpcs.pushKV(rpc, NullUniValue);
     }
 
+    UniValue whitelisted_wallets(UniValue::VOBJ);
+#ifdef ENABLE_WALLET
+    std::string authorized_wallet_name;
+    const bool have_wallet_restriction = GetWalletRestrictionFromJSONRPCRequest(request, authorized_wallet_name);
+    if (have_wallet_restriction) {
+        if (authorized_wallet_name != "-") {
+            whitelisted_wallets.pushKV(authorized_wallet_name, NullUniValue);
+        }
+    } else {
+        // All wallets are allowed
+        auto node_context = util::AnyPtr<node::NodeContext>(request.context);
+        if (node_context && node_context->wallet_loader && node_context->wallet_loader->context()) {
+            for (const std::shared_ptr<wallet::CWallet>& wallet : wallet::GetWallets(*node_context->wallet_loader->context())) {
+                if (!wallet.get()) continue;
+
+                LOCK(wallet->cs_wallet);
+                whitelisted_wallets.pushKV(wallet->GetName(), NullUniValue);
+            }
+        }
+    }
+#endif
+
     UniValue result(UniValue::VOBJ);
     result.pushKV("methods", whitelisted_rpcs);
+    result.pushKV("wallets", whitelisted_wallets);
 
     return result;
 }
@@ -427,6 +460,13 @@ static inline JSONRPCRequest transformNamedArguments(const JSONRPCRequest& in, c
     int hole = 0;
     int initial_hole_size = 0;
     const std::string* initial_param = nullptr;
+    auto positional_args{argsIn.extract("args")};
+    if (!positional_args) {
+        // nothing to do
+    } else if (!positional_args.mapped()->isArray()) {
+        argsIn.insert(std::move(positional_args));
+        positional_args = {};
+    }
     UniValue options{UniValue::VOBJ};
     for (const auto& [argNamePattern, named_only]: argNames) {
         std::vector<std::string> vargNames = SplitString(argNamePattern, '|');
@@ -442,6 +482,14 @@ static inline JSONRPCRequest transformNamedArguments(const JSONRPCRequest& in, c
         // object, and then pushing the accumulated options as the next
         // positional argument.
         if (named_only) {
+            if (options.empty()) {
+                if (options.isNull()) continue;
+                if (positional_args && positional_args.mapped()->size() > (size_t)hole) {
+                    // some alternative to options is specified positionally; we can't use options at all
+                    options = UniValue::VNULL;
+                    continue;
+                }
+            }
             if (fr != argsIn.end()) {
                 if (options.exists(fr->first)) {
                     throw JSONRPCError(RPC_INVALID_PARAMETER, "Parameter " + fr->first + " specified multiple times");
@@ -485,8 +533,7 @@ static inline JSONRPCRequest transformNamedArguments(const JSONRPCRequest& in, c
     // arguments and add named arguments after. This is a convenience for
     // clients that want to pass a combination of named and positional
     // arguments as described in doc/JSON-RPC-interface.md#parameter-passing
-    auto positional_args{argsIn.extract("args")};
-    if (positional_args && positional_args.mapped()->isArray()) {
+    if (positional_args) {
         if (initial_hole_size < (int)positional_args.mapped()->size() && initial_param) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Parameter " + *initial_param + " specified twice both as positional and named argument");
         }
@@ -499,6 +546,9 @@ static inline JSONRPCRequest transformNamedArguments(const JSONRPCRequest& in, c
     }
     // If there are still arguments in the argsIn map, this is an error.
     if (!argsIn.empty()) {
+        if (options.isNull()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Cannot specify both 'options' and named parameter " + argsIn.begin()->first);
+        }
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Unknown named parameter " + argsIn.begin()->first);
     }
     // Return request with named arguments transformed to positional arguments

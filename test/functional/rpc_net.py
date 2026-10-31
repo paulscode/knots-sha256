@@ -37,7 +37,7 @@ def assert_net_servicesnames(servicesflag, servicenames):
     """
     servicesflag_generated = 0
     for servicename in servicenames:
-        servicesflag_generated |= getattr(test_framework.messages, 'NODE_' + servicename)
+        servicesflag_generated |= getattr(test_framework.messages, 'NODE_' + servicename.rstrip('?'))
     assert servicesflag_generated == servicesflag
 
 
@@ -146,6 +146,7 @@ class NetTest(BitcoinTestFramework):
         # The next two fields will vary for v2 connections because we send a rng-based number of decoy messages
         peer_info.pop("bytesrecv")
         peer_info.pop("bytessent")
+        peer_info.pop("cpu_load", None)
         assert_equal(
             peer_info,
             {
@@ -169,6 +170,7 @@ class NetTest(BitcoinTestFramework):
                 "minfeefilter": Decimal("0E-8"),
                 "network": "not_publicly_routable",
                 "permissions": [],
+                "forced_inbound": False,
                 "presynced_headers": -1,
                 "relaytxes": False,
                 "inv_to_send": 0,

@@ -31,13 +31,12 @@ class Chainstate;
 class ChainstateManager;
 
 namespace Consensus { struct Params; };
+namespace node { struct NodeContext; };
 
 using interfaces::BlockRef;
 
 namespace node {
 class KernelNotifications;
-
-static const bool DEFAULT_PRINT_MODIFIED_FEE = false;
 
 struct CBlockTemplate
 {
@@ -61,10 +60,13 @@ class BlockAssembler
 {
 private:
     // The constructed block template
-    std::unique_ptr<CBlockTemplate> pblocktemplate;
+    std::shared_ptr<CBlockTemplate> pblocktemplate;
+
+    bool fNeedSizeAccounting;
 
     // Information on the current status of the block
     uint64_t nBlockWeight;
+    uint64_t nBlockSize;
     uint64_t nBlockTx;
     uint64_t nBlockSigOpsCost;
     CAmount nFees;
@@ -76,26 +78,21 @@ private:
     const CChainParams& chainparams;
     const CTxMemPool* const m_mempool;
     Chainstate& m_chainstate;
+    const NodeContext& m_node;
 
 public:
-    struct Options : BlockCreateOptions {
-        // Configuration parameters for the block size
-        size_t nBlockMaxWeight{DEFAULT_BLOCK_MAX_WEIGHT};
-        CFeeRate blockMinFeeRate{DEFAULT_BLOCK_MIN_TX_FEE};
-        // Whether to call TestBlockValidity() at the end of CreateNewBlock().
-        bool test_block_validity{true};
-        bool print_modified_fee{DEFAULT_PRINT_MODIFIED_FEE};
-    };
+    using Options = BlockCreateOptions;
 
-    explicit BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool, const Options& options);
+    explicit BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool, const Options& options, const NodeContext& node);
 
     /** Construct a new block template */
-    std::unique_ptr<CBlockTemplate> CreateNewBlock();
+    std::shared_ptr<CBlockTemplate> CreateNewBlock();
 
     /** The number of transactions in the last assembled block (excluding coinbase transaction) */
     inline static std::optional<int64_t> m_last_block_num_txs{};
     /** The weight of the last assembled block (including reserved weight for block header, txs count and coinbase tx) */
     inline static std::optional<int64_t> m_last_block_weight{};
+    inline static std::optional<int64_t> m_last_block_size{};
 
 private:
     const Options m_options;
@@ -147,12 +144,13 @@ void InterruptWait(KernelNotifications& kernel_notifications, bool& interrupt_wa
  * Return a new block template when fees rise to a certain threshold or after a
  * new tip; return nullopt if timeout is reached.
  */
-std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
+std::shared_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
                                                       KernelNotifications& kernel_notifications,
                                                       CTxMemPool* mempool,
-                                                      const std::unique_ptr<CBlockTemplate>& block_template,
+                                                      const std::shared_ptr<CBlockTemplate>& block_template,
                                                       const BlockWaitOptions& options,
                                                       const BlockAssembler::Options& assemble_options,
+                                                      const NodeContext& node,
                                                       bool& interrupt_wait);
 
 /* Locks cs_main and returns the block hash and block height of the active chain if it exists; otherwise, returns nullopt.*/

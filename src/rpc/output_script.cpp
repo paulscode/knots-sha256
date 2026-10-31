@@ -33,6 +33,7 @@ static RPCHelpMan validateaddress()
         "Return information about the given bitcoin address.\n",
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The bitcoin address to validate"},
+            {"address_type", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "DEPRECATED", RPCArgOptions{.hidden=true}},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -45,6 +46,7 @@ static RPCHelpMan validateaddress()
                 {RPCResult::Type::NUM, "witness_version", /*optional=*/true, "The version number of the witness program"},
                 {RPCResult::Type::STR_HEX, "witness_program", /*optional=*/true, "The hex value of the witness program"},
                 {RPCResult::Type::STR, "error", /*optional=*/true, "Error message, if any"},
+                {RPCResult::Type::NUM, "error_index", /*optional=*/true, "DEPRECATED. The index of the first likely error location, if known"},
                 {RPCResult::Type::ARR, "error_locations", /*optional=*/true, "Indices of likely error locations in address, if known (e.g. Bech32 errors)",
                     {
                         {RPCResult::Type::NUM, "index", "index of a potential error"},
@@ -60,6 +62,14 @@ static RPCHelpMan validateaddress()
             std::string error_msg;
             std::vector<int> error_locations;
             CTxDestination dest = DecodeDestination(request.params[0].get_str(), error_msg, &error_locations);
+
+            // Merely validate address_type is an actual address type, so we don't silently ignore potential future parameters
+            if (!request.params[1].isNull()) {
+                if (!ParseOutputType(request.params[1].get_str())) {
+                    throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Unknown address type '%s'", request.params[1].get_str()));
+                }
+            }
+
             const bool isValid = IsValidDestination(dest);
             CHECK_NONFATAL(isValid == error_msg.empty());
 
@@ -75,6 +85,9 @@ static RPCHelpMan validateaddress()
                 UniValue detail = DescribeAddress(dest);
                 ret.pushKVs(std::move(detail));
             } else {
+                if (!error_locations.empty()) {
+                    ret.pushKV("error_index", error_locations.at(0));
+                }
                 UniValue error_indices(UniValue::VARR);
                 for (int i : error_locations) error_indices.push_back(i);
                 ret.pushKV("error_locations", std::move(error_indices));
@@ -309,6 +322,12 @@ static RPCHelpMan deriveaddresses()
         {
             {"descriptor", RPCArg::Type::STR, RPCArg::Optional::NO, "The descriptor."},
             {"range", RPCArg::Type::RANGE, RPCArg::Optional::OMITTED, "If a ranged descriptor is used, this specifies the end or the range (in [begin,end] notation) to derive."},
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+                {
+                    {"require_checksum", RPCArg::Type::BOOL, RPCArg::Default{true}, "Require a checksum. If a checksum is provided it will be verified regardless of this parameter."},
+                },
+                RPCArgOptions{.oneline_description="options"}
+            },
         },
         {
             RPCResult{"for single derivation descriptors",
@@ -330,13 +349,29 @@ static RPCHelpMan deriveaddresses()
             },
         },
         RPCExamples{
-            "First three native segwit receive addresses\n" +
+            "First three native segwit receive addresses:\n" +
             HelpExampleCli("deriveaddresses", "\"" + EXAMPLE_DESCRIPTOR + "\" \"[0,2]\"") +
-            HelpExampleRpc("deriveaddresses", "\"" + EXAMPLE_DESCRIPTOR + "\", \"[0,2]\"")
+            HelpExampleRpc("deriveaddresses", "\"" + EXAMPLE_DESCRIPTOR + "\", \"[0,2]\"") +
+            "Derive the PKH address from a WIF, which has a built-in checksum:\n" +
+            HelpExampleCli("deriveaddresses", "\"pkh(cPsQTSmMZ8e3AEUWGjS73f5R364yJxH6RxcgnwbHjbKbFPUP2Dtu)\" null '{\"require_checksum\": false}'")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
             auto desc_str{self.Arg<std::string_view>("descriptor")};
+            bool require_checksum = true;
+
+            if (!request.params[2].isNull()) {
+                const UniValue& options = request.params[2];
+                RPCTypeCheckObj(options,
+                    {
+                        {"require_checksum", UniValueType(UniValue::VBOOL)},
+                    },
+                    true, true);
+
+                if (options.exists("require_checksum")) {
+                    require_checksum = options["require_checksum"].get_bool();
+                }
+            }
 
             int64_t range_begin = 0;
             int64_t range_end = 0;
@@ -347,16 +382,16 @@ static RPCHelpMan deriveaddresses()
 
             FlatSigningProvider key_provider;
             std::string error;
-            auto descs = Parse(desc_str, key_provider, error, /* require_checksum = */ true);
+            auto descs = Parse(desc_str, key_provider, error, require_checksum);
             if (descs.empty()) {
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, error);
             }
             auto& desc = descs.at(0);
-            if (!desc->IsRange() && request.params.size() > 1) {
+            if (!desc->IsRange() && !request.params[1].isNull()) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "Range should not be specified for an un-ranged descriptor");
             }
 
-            if (desc->IsRange() && request.params.size() == 1) {
+            if (desc->IsRange() && request.params[1].isNull()) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "Range must be specified for a ranged descriptor");
             }
 

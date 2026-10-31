@@ -7,7 +7,9 @@
 
 #include <util/fs_helpers.h>
 
+#include <random.h>
 #include <sync.h>
+#include <tinyformat.h>
 #include <util/fs.h>
 #include <util/log.h>
 #include <util/syserror.h>
@@ -17,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -185,11 +188,14 @@ void AllocateFileRange(FILE* file, uint64_t offset, unsigned int length)
     HANDLE hFile = (HANDLE)_get_osfhandle(_fileno(file));
     LARGE_INTEGER nFileSize;
     int64_t nEndPos = (int64_t)offset + length;
-    nFileSize.u.LowPart = nEndPos & 0xFFFFFFFF;
-    nFileSize.u.HighPart = nEndPos >> 32;
-    SetFilePointerEx(hFile, nFileSize, 0, FILE_BEGIN);
-    SetEndOfFile(hFile);
-#elif defined(__APPLE__)
+    if (GetFileSizeEx(hFile, &nFileSize) && (int64_t{nFileSize.u.HighPart} << 32 | nFileSize.u.LowPart) <= nEndPos) {
+        nFileSize.u.LowPart = nEndPos & 0xFFFFFFFF;
+        nFileSize.u.HighPart = nEndPos >> 32;
+        if (SetFilePointerEx(hFile, nFileSize, 0, FILE_BEGIN)) {
+            SetEndOfFile(hFile);
+        }
+    }
+#elif 0
     // OSX specific version
     // NOTE: Contrary to other OS versions, the OSX version assumes that
     // NOTE: offset is the size of the file.
@@ -207,19 +213,31 @@ void AllocateFileRange(FILE* file, uint64_t offset, unsigned int length)
 #else
 #if defined(HAVE_POSIX_FALLOCATE)
     // Version using posix_fallocate
-    off_t nEndPos = (off_t)offset + length;
-    if (0 == posix_fallocate(fileno(file), 0, nEndPos)) return;
+    if (0 == posix_fallocate(fileno(file), offset, length)) return;
 #endif
     // Fallback version
     // TODO: just write one byte per block
-    static const char buf[65536] = {};
+    uint8_t buf[65536];
     if (FileSeek64(file, offset, SEEK_SET)) {
         return;
     }
+    clearerr(file);
     while (length > 0) {
         unsigned int now = 65536;
         if (length < now)
             now = length;
+        const size_t rlen = fread(buf, 1, now, file);
+        if (rlen < now) {
+            if (ferror(file)) {
+                // Don't clobber anything, just give up
+                clearerr(file);
+                return;
+            }
+            memset(&buf[rlen], 0, now - rlen);
+            if (0 != fseek(file, -rlen, SEEK_CUR)) {
+                return;
+            }
+        }
         fwrite(buf, 1, now, file); // allowed to fail; this function is advisory anyway
         length -= now;
     }
@@ -313,21 +331,37 @@ std::string PermsToSymbolicString(fs::perms p)
 {
     std::string perm_str(9, '-');
 
-    auto set_perm = [&](size_t pos, fs::perms required_perm, char letter) {
+    auto set_perm = [&](size_t pos, fs::perms required_perm, char letter, char else_letter = '\0') {
         if ((p & required_perm) != fs::perms::none) {
             perm_str[pos] = letter;
+        } else if (else_letter) {
+            perm_str[pos] = else_letter;
         }
     };
 
     set_perm(0, fs::perms::owner_read,   'r');
     set_perm(1, fs::perms::owner_write,  'w');
-    set_perm(2, fs::perms::owner_exec,   'x');
+    if ((p & fs::perms::owner_exec) != fs::perms::none) {
+        set_perm(2, fs::perms::set_uid,  's', 'x');
+    } else {
+        set_perm(2, fs::perms::set_uid,  'S');
+    }
+
     set_perm(3, fs::perms::group_read,   'r');
     set_perm(4, fs::perms::group_write,  'w');
-    set_perm(5, fs::perms::group_exec,   'x');
+    if ((p & fs::perms::group_exec) != fs::perms::none) {
+        set_perm(5, fs::perms::set_gid,  's', 'x');
+    } else {
+        set_perm(5, fs::perms::set_gid,  'S');
+    }
+
     set_perm(6, fs::perms::others_read,  'r');
     set_perm(7, fs::perms::others_write, 'w');
-    set_perm(8, fs::perms::others_exec,  'x');
+    if ((p & fs::perms::others_exec)  != fs::perms::none) {
+        set_perm(8, fs::perms::sticky_bit, 't', 'x');
+    } else {
+        set_perm(8, fs::perms::sticky_bit, 'T');
+    }
 
     return perm_str;
 }
@@ -359,3 +393,19 @@ FSType GetFilesystemType(const fs::path& path)
     return FSType::OTHER;
 }
 #endif
+
+bool IsDirWritable(const fs::path& dir_path)
+{
+    // Attempt to create a tmp file in the directory
+    if (!fs::is_directory(dir_path)) throw std::runtime_error(strprintf("Path %s is not a directory", fs::PathToString(dir_path)));
+    FastRandomContext rng;
+    const auto tmp = dir_path / fs::PathFromString(strprintf(".tmp_%d", rng.rand64()));
+
+    if (const auto created{fsbridge::fopen(tmp, "wbx")}) {
+        std::fclose(created);
+        std::error_code ec;
+        fs::remove(tmp, ec); // clean up, ignore errors
+        return true;
+    }
+    return false;
+}

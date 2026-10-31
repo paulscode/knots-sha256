@@ -40,7 +40,6 @@
 #include <test/util/coverage.h>
 #include <test/util/net.h>
 #include <test/util/random.h>
-#include <test/util/transaction_utils.h>
 #include <test/util/txmempool.h>
 #include <txdb.h>
 #include <txmempool.h>
@@ -414,7 +413,7 @@ CBlock TestChain100Setup::CreateBlock(
     BlockAssembler::Options options;
     options.coinbase_output_script = scriptPubKey;
     options.include_dummy_extranonce = true;
-    CBlock block = BlockAssembler{chainstate, nullptr, options}.CreateNewBlock()->block;
+    CBlock block = BlockAssembler{chainstate, nullptr, options, m_node}.CreateNewBlock()->block;
 
     Assert(block.vtx.size() == 1);
     for (const CMutableTransaction& tx : txns) {
@@ -577,7 +576,7 @@ std::vector<CTransactionRef> TestChain100Setup::PopulateMempool(FastRandomContex
             auto changeset = m_node.mempool->GetChangeSet();
             changeset->StageAddition(ptx, /*fee=*/(total_in - num_outputs * amount_per_output),
                     /*time=*/0, /*entry_height=*/1, /*entry_sequence=*/0,
-                    /*spends_coinbase=*/false, /*sigops_cost=*/4, lp);
+                    /*spends_coinbase=*/false, /*extra_weight=*/0, /*sigops_cost=*/4, lp);
             if (changeset->CheckMemPoolPolicyLimits()) {
                 changeset->Apply();
                 --num_transactions;
