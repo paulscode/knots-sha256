@@ -7,6 +7,8 @@
 #include <hash.h>
 #include <key.h>
 #include <key_io.h>
+#include <addresstype.h>
+#include <outputtype.h>
 #include <pubkey.h>
 #include <uint256.h>
 #include <util/strencodings.h>
@@ -23,6 +25,31 @@
  */
 const std::string MESSAGE_MAGIC = "Bitcoin Signed Message:\n";
 
+namespace {
+//! Destination a message-signing key stands for, per output type (BIP 137 / Electrum): the former Core
+//! GetDestinationForKey(), removed upstream as unused (bitcoin@fafee85358) — kept here for message verification only.
+CTxDestination DestinationForSigningKey(const CPubKey& key, OutputType type)
+{
+    switch (type) {
+    case OutputType::LEGACY: return PKHash(key);
+    case OutputType::P2SH_SEGWIT:
+    case OutputType::BECH32: {
+        if (!key.IsCompressed()) return PKHash(key);
+        CTxDestination witdest = WitnessV0KeyHash(key);
+        CScript witprog = GetScriptForDestination(witdest);
+        if (type == OutputType::P2SH_SEGWIT) {
+            return ScriptHash(witprog);
+        } else {
+            return witdest;
+        }
+    }
+    case OutputType::BECH32M:
+    case OutputType::UNKNOWN: {} // never used for these; fall through to the assert
+    } // no default case, so the compiler can warn about missing cases
+    assert(false);
+}
+} // namespace
+
 MessageVerificationResult MessageVerify(
     const std::string& address,
     const std::string& signature,
@@ -33,7 +60,14 @@ MessageVerificationResult MessageVerify(
         return MessageVerificationResult::ERR_INVALID_ADDRESS;
     }
 
-    if (std::get_if<PKHash>(&destination) == nullptr) {
+    OutputType signed_for_outputtype;
+    if (std::holds_alternative<PKHash>(destination)) {
+        signed_for_outputtype = OutputType::LEGACY;
+    } else if (std::holds_alternative<ScriptHash>(destination)) {
+        signed_for_outputtype = OutputType::P2SH_SEGWIT;
+    } else if (std::holds_alternative<WitnessV0KeyHash>(destination)) {
+        signed_for_outputtype = OutputType::BECH32;
+    } else {
         return MessageVerificationResult::ERR_ADDRESS_NO_KEY;
     }
 
@@ -42,12 +76,27 @@ MessageVerificationResult MessageVerify(
         return MessageVerificationResult::ERR_MALFORMED_SIGNATURE;
     }
 
+    uint8_t sigtype{(*signature_bytes)[0]};
+    if (sigtype < 27 || sigtype > 42) {
+        return MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED;
+    }
+    sigtype = (sigtype - 27) >> 2;
+    if (sigtype == 3) {
+        (*signature_bytes)[0] -= 8;
+        signed_for_outputtype = OutputType::BECH32;
+    } else if (sigtype == 2) {
+        (*signature_bytes)[0] -= 4;
+        signed_for_outputtype = OutputType::P2SH_SEGWIT;
+    }
+
     CPubKey pubkey;
     if (!pubkey.RecoverCompact(MessageHash(message), *signature_bytes)) {
         return MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED;
     }
 
-    if (!(PKHash(pubkey) == *std::get_if<PKHash>(&destination))) {
+    CTxDestination recovered_dest = DestinationForSigningKey(pubkey, signed_for_outputtype);
+
+    if (!(recovered_dest == destination)) {
         return MessageVerificationResult::ERR_NOT_SIGNED;
     }
 
