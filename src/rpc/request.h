@@ -9,6 +9,7 @@
 #include <any>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include <univalue.h>
 #include <util/fs.h>
@@ -38,7 +39,7 @@ enum class GenerateAuthCookieResult : uint8_t {
  * @retval GenerateAuthCookieResult::ERROR Error occurred, auth data could not be saved to disk.
  * @retval GenerateAuthCookieResult::OK Auth data was generated, saved to disk and in `user` and `pass`.
  */
-GenerateAuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cookie_perms,
+GenerateAuthCookieResult GenerateAuthCookie(const std::pair<std::optional<fs::perms>, bool>& cookie_perms,
                                             std::string& user,
                                             std::string& pass);
 
@@ -58,6 +59,7 @@ public:
     enum Mode { EXECUTE, GET_HELP, GET_ARGS } mode = EXECUTE;
     std::string URI;
     std::string authUser;
+    std::string m_wallet_restriction{"-"};
     std::string peerAddr;
     std::any context;
     JSONRPCVersion m_json_version = JSONRPCVersion::V1_LEGACY;

@@ -29,6 +29,9 @@ static const std::map<uint64_t, std::string> WALLET_FLAG_CAVEATS{
      "You need to rescan the blockchain in order to correctly mark used "
      "destinations in the past. Until this is done, some destinations may "
      "be considered unused, even if the opposite is the case."},
+    {WALLET_FLAG_EXTERNAL_SIGNER,
+     "Wallet must be unloaded and loaded for change to take effect. "
+     "The ability to toggle this flag may be removed in a future update."},
 };
 
 static RPCHelpMan getwalletinfo()
@@ -249,6 +252,14 @@ static RPCHelpMan loadwallet()
     WalletContext& context = EnsureWalletContext(request.context);
     const std::string name(request.params[0].get_str());
 
+    {
+        std::string authorized_wallet_name;
+        const bool have_wallet_restriction = GetWalletRestrictionFromJSONRPCRequest(request, authorized_wallet_name);
+        if (have_wallet_restriction && authorized_wallet_name != name) {
+            throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Wallet usage is restricted.");
+        }
+    }
+
     DatabaseOptions options;
     DatabaseStatus status;
     ReadDatabaseArgs(*context.args, options);
@@ -317,6 +328,16 @@ static RPCHelpMan setwalletflag()
 
     auto flag = STRING_TO_WALLET_FLAG.at(flag_str);
 
+    if (flag == WALLET_FLAG_EXTERNAL_SIGNER) {
+#ifdef ENABLE_EXTERNAL_SIGNER
+        if (!pwallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS) || !pwallet->IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "This flag can only be set on a watch-only descriptor wallet");
+        }
+#else
+        throw JSONRPCError(RPC_WALLET_ERROR, "Compiled without external signing support (required for external signing)");
+#endif
+    }
+
     if (!(flag & MUTABLE_WALLET_FLAGS)) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Wallet flag is immutable: %s", flag_str));
     }
@@ -378,6 +399,14 @@ static RPCHelpMan createwallet()
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    {
+        std::string authorized_wallet_name;
+        const bool have_wallet_restriction = GetWalletRestrictionFromJSONRPCRequest(request, authorized_wallet_name);
+        if (have_wallet_restriction && authorized_wallet_name != request.params[0].get_str()) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Wallet usage is restricted.");
+        }
+    }
+
     WalletContext& context = EnsureWalletContext(request.context);
     uint64_t flags = 0;
     if (!request.params[1].isNull() && request.params[1].get_bool()) {
@@ -457,7 +486,14 @@ static RPCHelpMan unloadwallet()
     const std::string wallet_name{EnsureUniqueWalletName(request, self.MaybeArg<std::string_view>("wallet_name"))};
 
     WalletContext& context = EnsureWalletContext(request.context);
-    std::shared_ptr<CWallet> wallet = GetWallet(context, wallet_name);
+    std::shared_ptr<CWallet> wallet;
+    {
+        std::string authorized_wallet_name;
+        const bool have_wallet_restriction = GetWalletRestrictionFromJSONRPCRequest(request, authorized_wallet_name);
+        if ((!have_wallet_restriction) || authorized_wallet_name == wallet_name) {
+            wallet = GetWallet(context, wallet_name);
+        }
+    }
     if (!wallet) {
         throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Requested wallet does not exist or is not loaded");
     }
@@ -611,6 +647,9 @@ static RPCHelpMan migratewallet()
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
+            // New wallets do not necessarily have the same name as the migrated wallet
+            EnsureNotWalletRestricted(request);
+
             const std::string wallet_name{EnsureUniqueWalletName(request, self.MaybeArg<std::string_view>("wallet_name"))};
 
             SecureString wallet_pass;

@@ -48,7 +48,7 @@ static void WalletCreate(CWallet* wallet_instance, uint64_t wallet_creation_flag
     wallet_instance->TopUpKeyPool();
 }
 
-static std::shared_ptr<CWallet> MakeWallet(const std::string& name, const fs::path& path, DatabaseOptions options)
+static std::shared_ptr<CWallet> MakeWallet(const std::string& name, const fs::path& path, DatabaseOptions options, CWallet::do_init_used_flag do_init_used_flag_val = CWallet::do_init_used_flag::Init)
 {
     DatabaseStatus status;
     bilingual_str error;
@@ -63,7 +63,7 @@ static std::shared_ptr<CWallet> MakeWallet(const std::string& name, const fs::pa
     std::shared_ptr<CWallet> wallet_instance{new CWallet(/*chain=*/nullptr, name, std::move(database)), WalletToolReleaseWallet};
     DBErrors load_wallet_ret;
     try {
-        load_wallet_ret = wallet_instance->PopulateWalletFromDB(error, warnings);
+        load_wallet_ret = wallet_instance->PopulateWalletFromDB(error, warnings, do_init_used_flag_val);
     } catch (const std::runtime_error&) {
         tfm::format(std::cerr, "Error loading %s. Is wallet being used by another process?\n", name);
         return nullptr;
@@ -160,7 +160,8 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
         DatabaseOptions options;
         ReadDatabaseArgs(args, options);
         options.require_existing = true;
-        const std::shared_ptr<CWallet> wallet_instance = MakeWallet(name, path, options);
+        // NOTE: We need to skip initialisation of the m_used flag, or else the address book count might be wrong
+        const std::shared_ptr<CWallet> wallet_instance = MakeWallet(name, path, options, CWallet::do_init_used_flag::Skip);
         if (!wallet_instance) return false;
         WalletShowInfo(wallet_instance.get());
         wallet_instance->Close();
@@ -168,6 +169,14 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
         DatabaseOptions options;
         ReadDatabaseArgs(args, options);
         options.require_existing = true;
+
+        // Get the dumpfile
+        std::string dump_filename = args.GetArg("-dumpfile", "");
+        if (dump_filename.empty()) {
+            tfm::format(std::cerr, "No dump file provided. To use dump, -dumpfile=<filename> must be provided.\n");
+            return false;
+        }
+
         DatabaseStatus status;
 
         if (IsBDBFile(BDBDataFile(path))) {
@@ -181,19 +190,19 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
             return false;
         }
 
-        bool ret = DumpWallet(args, *database, error);
+        bool ret = DumpWallet(*database, error, dump_filename);
         if (!ret && !error.empty()) {
             tfm::format(std::cerr, "%s\n", error.original);
             return ret;
         }
-        tfm::format(std::cout, "The dumpfile may contain private keys. To ensure the safety of your Bitcoin, do not share the dumpfile.\n");
+        tfm::format(std::cerr, "The dumpfile may contain private keys. To ensure the safety of your Bitcoin, do not share the dumpfile.\n");
         return ret;
     } else if (command == "createfromdump") {
         bilingual_str error;
         std::vector<bilingual_str> warnings;
         bool ret = CreateFromDump(args, name, path, error, warnings);
         for (const auto& warning : warnings) {
-            tfm::format(std::cout, "%s\n", warning.original);
+            tfm::format(std::cerr, "%s\n", warning.original);
         }
         if (!ret && !error.empty()) {
             tfm::format(std::cerr, "%s\n", error.original);

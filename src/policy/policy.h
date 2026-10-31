@@ -62,6 +62,8 @@ static constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 static constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{1};
 /** Default for -rejecttokens */
 static constexpr bool DEFAULT_REJECT_TOKENS{false};
+/** Default for -subdustfeepenalty */
+static constexpr bool DEFAULT_SUBDUSTFEEPENALTY{false};
 
 // NOTE: Changes to these three require manually adjusting doc in init.cpp
 /** Default for -permitephemeral=send */
@@ -77,6 +79,8 @@ static constexpr bool DEFAULT_PERMITBAREANCHOR{true};
 static constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
 /** Default for -permitbaremultisig */
 static constexpr bool DEFAULT_PERMIT_BAREMULTISIG{true};
+/** Default for -rejectparasites */
+static constexpr bool DEFAULT_REJECT_PARASITES{false};
 /** The maximum number of witness stack items in a standard P2WSH script */
 static constexpr unsigned int MAX_STANDARD_P2WSH_STACK_ITEMS{100};
 /** The maximum size in bytes of each witness stack item in a standard P2WSH script */

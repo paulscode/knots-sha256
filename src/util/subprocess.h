@@ -36,6 +36,8 @@ Documentation for C++ subprocessing library.
 #ifndef BITCOIN_UTIL_SUBPROCESS_H
 #define BITCOIN_UTIL_SUBPROCESS_H
 
+#include <util/fs.h>
+#include <util/strencodings.h>
 #include <util/syserror.h>
 
 #include <algorithm>
@@ -533,6 +535,20 @@ namespace util
  */
 
 /*!
+ * Option to close all file descriptors
+ * when the child process is spawned.
+ * The close fd list does not include
+ * input/output/error if they are explicitly
+ * set as part of the Popen arguments.
+ *
+ * Default value is false.
+ */
+struct close_fds {
+  explicit close_fds(bool c): close_all(c) {}
+  bool close_all = false;
+};
+
+/*!
  * Base class for all arguments involving string value.
  */
 struct string_arg
@@ -729,6 +745,7 @@ struct ArgumentDeducer
   void set_option(input&& inp);
   void set_option(output&& out);
   void set_option(error&& err);
+  void set_option(close_fds&& cfds);
 
 private:
   Popen* popen_ = nullptr;
@@ -920,6 +937,8 @@ private:
  *    Command provided as a sequence.
  * wait()             - Wait for the child to exit.
  * retcode()          - The return code of the exited child.
+ * poll()             - Check the status of the running child.
+ * kill(sig_num)      - Kill the child. SIGTERM used by default.
  * send(...)          - Send input to the input channel of the child.
  * communicate(...)   - Get the output/error from the child and close the channels
  *                      from the parent side.
@@ -958,6 +977,12 @@ public:
   int retcode() const noexcept { return retcode_; }
 
   int wait() noexcept(false);
+
+  int poll() noexcept(false);
+
+  // Does not fail, Caller is expected to recheck the
+  // status with a call to poll()
+  void kill(int sig_num = 9);
 
   void set_out_buf_cap(size_t cap) { stream_.set_out_buf_cap(cap); }
 
@@ -1014,12 +1039,15 @@ private:
   int child_pid_ = -1;
 #endif
 
+  bool close_fds_ = false;
+
   std::string exe_name_;
 
   // Command provided as sequence
   std::vector<std::string> vargs_;
   std::vector<char*> cargv_;
 
+  bool child_created_ = false;
   int retcode_ = -1;
 };
 
@@ -1075,6 +1103,68 @@ inline int Popen::wait() noexcept(false)
   return 0;
 #endif
 }
+
+inline int Popen::poll() noexcept(false)
+{
+#ifdef WIN32
+  int ret = WaitForSingleObject(process_handle_, 0);
+  if (ret != WAIT_OBJECT_0) return -1;
+
+  DWORD dretcode_;
+  if (FALSE == GetExitCodeProcess(process_handle_, &dretcode_))
+      throw OSError("GetExitCodeProcess", 0);
+
+  retcode_ = (int)dretcode_;
+  CloseHandle(process_handle_);
+
+  return retcode_;
+#else
+  if (!child_created_) return -1; // TODO: ??
+
+  int status;
+
+  // Returns zero if child is still running
+  int ret = waitpid(child_pid_, &status, WNOHANG);
+  if (ret == 0) return -1;
+
+  if (ret == child_pid_) {
+    if (WIFSIGNALED(status)) {
+      retcode_ = WTERMSIG(status);
+    } else if (WIFEXITED(status)) {
+      retcode_ = WEXITSTATUS(status);
+    } else {
+      retcode_ = 255;
+    }
+    return retcode_;
+  }
+
+  if (ret == -1) {
+    // From subprocess.py
+    // This happens if SIGCHLD is set to be ignored
+    // or waiting for child process has otherwise been disabled
+    // for our process. This child is dead, we cannot get the
+    // status.
+    if (errno == ECHILD) retcode_ = 0;
+    else throw OSError("waitpid failed", errno);
+  } else {
+    retcode_ = ret;
+  }
+
+  return retcode_;
+#endif
+}
+
+inline void Popen::kill(int sig_num)
+{
+#ifdef WIN32
+  if (!TerminateProcess(this->process_handle_, (UINT)sig_num)) {
+    throw OSError("TerminateProcess", 0);
+  }
+#else
+  ::kill(child_pid_, sig_num);
+#endif
+}
+
 
 inline void Popen::execute_process() noexcept(false)
 {
@@ -1183,6 +1273,8 @@ inline void Popen::execute_process() noexcept(false)
     throw OSError("fork failed", errno);
   }
 
+  child_created_ = true;
+
   if (child_pid_ == 0)
   {
     // Close descriptors belonging to parent
@@ -1257,6 +1349,14 @@ namespace detail {
     if (err.rd_ch_ != -1) popen_->stream_.err_read_ = err.rd_ch_;
   }
 
+  inline void ArgumentDeducer::set_option(close_fds&& cfds) {
+    popen_->close_fds_ = cfds.close_all;
+  }
+
+#ifndef WIN32
+  void subprocess_close_all_fds(int except_fd);
+#endif
+
 
 #ifndef WIN32
   inline void Child::execute_child() {
@@ -1302,6 +1402,11 @@ namespace detail {
 
       if (stream.err_write_ != -1 && stream.err_write_ > 2)
         subprocess_close(stream.err_write_);
+
+      // Close all the inherited fd's except the error write pipe
+      if (parent_->close_fds_) {
+        subprocess_close_all_fds(/*except_fd=*/ err_wr_pipe_);
+      }
 
       // Replace the current image with the executable
       sys_ret = execvp(parent_->exe_name_.c_str(), parent_->cargv_.data());

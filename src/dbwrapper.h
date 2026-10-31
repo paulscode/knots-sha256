@@ -11,6 +11,7 @@
 #include <streams.h>
 #include <util/check.h>
 #include <util/fs.h>
+#include <util/result.h>
 
 #include <cstddef>
 #include <exception>
@@ -19,14 +20,20 @@
 #include <stdexcept>
 #include <string>
 
+util::Result<void> dbwrapper_SanityCheck();
+
 static const size_t DBWRAPPER_PREALLOC_KEY_SIZE = 64;
 static const size_t DBWRAPPER_PREALLOC_VALUE_SIZE = 1024;
 static const size_t DBWRAPPER_MAX_FILE_SIZE = 32 << 20; // 32 MiB
+
+static constexpr size_t DEFAULT_DB_FILE_SIZE{64};
 
 //! User-controlled performance and debug options.
 struct DBOptions {
     //! Compact database on startup.
     bool force_compact = false;
+    //! Target size of files.
+    size_t max_file_size{DEFAULT_DB_FILE_SIZE << 20};
 };
 
 //! Application-specific storage settings.

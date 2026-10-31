@@ -580,6 +580,12 @@ class TestNode():
         assert_equal(type(unexpected_msgs), list)
         remaining_expected = list(expected_msgs)
 
+        if not self.debug_log_path.exists():
+            # File must exist for this to work
+            os.makedirs(self.debug_log_path.parent, exist_ok=True)
+            with open(self.debug_log_path, mode='a', encoding='utf-8'):
+                pass
+
         time_end = time.time() + timeout * self.timeout_factor
         prev_size = self.debug_log_size(encoding="utf-8")  # Must use same encoding that is used to read() below
 
@@ -608,7 +614,7 @@ class TestNode():
                                     f'not found in log:\n\n{join_log(log)}\n\n')
 
     @contextlib.contextmanager
-    def busy_wait_for_debug_log(self, expected_msgs, timeout=60):
+    def busy_wait_for_debug_log(self, expected_msgs, timeout=60, *, forbid_msgs=()):
         """
         Block until we see a particular debug log message fragment or until we exceed the timeout.
         """
@@ -622,6 +628,13 @@ class TestNode():
             with open(self.debug_log_path, "rb") as dl:
                 dl.seek(prev_size)
                 log = dl.read()
+
+            for msg in forbid_msgs:
+                if msg in log:
+                    print_log = " - " + "\n - ".join(log.decode("utf8", errors="replace").splitlines())
+                    self._raise_assertion_error(
+                        'Forbidden message "{}" partially matched log:\n\n{}\n\n'.format(
+                            str(msg), print_log))
 
             while remaining_expected and remaining_expected[-1] in log:
                 remaining_expected.pop()

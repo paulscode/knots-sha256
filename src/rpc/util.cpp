@@ -766,7 +766,7 @@ std::vector<std::pair<std::string, bool>> RPCHelpMan::GetArgNames() const
 size_t RPCHelpMan::GetParamIndex(std::string_view key) const
 {
     auto it{std::find_if(
-        m_args.begin(), m_args.end(), [&key](const auto& arg) { return arg.GetName() == key;}
+        m_args.begin(), m_args.end(), [&key](const auto& arg) { return arg.GetFirstName() == key;}
     )};
 
     CHECK_NONFATAL(it != m_args.end());  // TODO: ideally this is checked at compile time
@@ -1400,6 +1400,23 @@ std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, Fl
     return ret;
 }
 
+std::vector<CTransactionRef> ParseTransactionVector(const UniValue txns_param)
+{
+    std::vector<CTransactionRef> txns;
+    const UniValue& raw_transactions = txns_param.get_array();
+    txns.reserve(raw_transactions.size());
+
+    for (const auto& rawtx : raw_transactions.getValues()) {
+        CMutableTransaction mtx;
+        if (!DecodeHexTx(mtx, rawtx.get_str())) {
+            throw JSONRPCError(RPC_DESERIALIZATION_ERROR,
+                               "TX decode failed: " + rawtx.get_str() + " Make sure the prev tx has at least one input.");
+        }
+        txns.emplace_back(MakeTransactionRef(std::move(mtx)));
+    }
+    return txns;
+}
+
 /** Convert a vector of bilingual strings to a UniValue::VARR containing their original untranslated values. */
 [[nodiscard]] static UniValue BilingualStringsToUniValue(const std::vector<bilingual_str>& bilingual_strings)
 {
@@ -1421,6 +1438,22 @@ void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj)
 {
     if (warnings.empty()) return;
     obj.pushKV("warnings", BilingualStringsToUniValue(warnings));
+}
+
+bool GetWalletRestrictionFromJSONRPCRequest(const JSONRPCRequest& request, std::string& out_wallet_allowed)
+{
+    if (request.m_wallet_restriction.empty()) return false;
+    out_wallet_allowed = request.m_wallet_restriction;
+    return true;
+}
+
+void EnsureNotWalletRestricted(const JSONRPCRequest& request)
+{
+    std::string authorized_wallet_name;
+    const bool have_wallet_restriction = GetWalletRestrictionFromJSONRPCRequest(request, authorized_wallet_name);
+    if (have_wallet_restriction) {
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not available for wallet-restricted RPC users");
+    }
 }
 
 std::vector<RPCResult> ScriptPubKeyDoc() {

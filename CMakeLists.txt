@@ -103,6 +103,7 @@ option(BUILD_BITCOIN_BIN "Build bitcoin executable." ON)
 option(BUILD_DAEMON "Build bitcoind executable." ON)
 option(BUILD_GUI "Build bitcoin-qt executable." OFF)
 option(BUILD_CLI "Build bitcoin-cli executable." ON)
+option(BUILD_BITCOINCONSENSUS_LIB "Build libbitcoinconsensus library." OFF)
 
 option(BUILD_TESTS "Build test_bitcoin and other unit test executables." ON)
 option(BUILD_TX "Build bitcoin-tx executable." ${BUILD_TESTS})
@@ -111,6 +112,55 @@ option(BUILD_UTIL "Build bitcoin-util executable." ${BUILD_TESTS})
 option(BUILD_UTIL_CHAINSTATE "Build experimental bitcoin-chainstate executable." OFF)
 option(BUILD_KERNEL_LIB "Build experimental bitcoinkernel library." ${BUILD_UTIL_CHAINSTATE})
 cmake_dependent_option(BUILD_KERNEL_TEST "Build tests for the experimental bitcoinkernel library." ON "BUILD_KERNEL_LIB" OFF)
+
+option(WITH_SYSTEM_LEVELDB "Build with system LevelDB instead of embedded fork." OFF)
+mark_as_advanced(WITH_SYSTEM_LEVELDB)
+if(WITH_SYSTEM_LEVELDB)
+  find_package(LevelDB MODULE REQUIRED)
+else()
+  set(EMBEDDED_LEVELDB TRUE)
+endif()  # WITH_SYSTEM_LEVELDB
+
+option(WITH_SYSTEM_LIBSECP256K1 "Build with system libsecp256k1 instead of embedded copy." OFF)
+mark_as_advanced(WITH_SYSTEM_LIBSECP256K1)
+if(WITH_SYSTEM_LIBSECP256K1)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(libsecp256k1 REQUIRED IMPORTED_TARGET libsecp256k1)
+  add_library(secp256k1 ALIAS PkgConfig::libsecp256k1)
+
+  if(NOT (libsecp256k1_HAS_SECP256K1_ELLSWIFT_CREATE AND libsecp256k1_HAS_SECP256K1_XONLY_PUBKEY_PARSE AND libsecp256k1_HAS_SECP256K1_ECDSA_RECOVER AND libsecp256k1_HAS_SECP256K1_SCHNORRSIG_VERIFY))
+    include(CheckSymbolExists)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
+    string(APPEND CMAKE_REQUIRED_FLAGS " ${libsecp256k1_CFLAGS_OTHER}")
+    list(APPEND CMAKE_REQUIRED_INCLUDES ${libsecp256k1_INCLUDE_DIRS})
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS ${libsecp256k1_LDFLAGS})
+    list(APPEND CMAKE_REQUIRED_LIBRARIES ${libsecp256k1_LIBRARIES})
+    unset(missing_modules)
+    macro(check_secp256k1_module module symbol)
+      string(TOUPPER "${symbol}" VAR)
+      set(VAR "libsecp256k1_HAS_${VAR}")
+      unset(${VAR})
+      check_symbol_exists("${symbol}" "secp256k1_${module}.h" ${VAR})
+      if(NOT ${VAR})
+        list(APPEND missing_modules "${module}")
+      endif()
+    endmacro()
+    message(CHECK_START "Checking for required libsecp256k1 modules")
+    list(APPEND CMAKE_MESSAGE_INDENT "  ")
+    check_secp256k1_module(ellswift secp256k1_ellswift_create)
+    check_secp256k1_module(extrakeys secp256k1_xonly_pubkey_parse)
+    check_secp256k1_module(recovery secp256k1_ecdsa_recover)
+    check_secp256k1_module(schnorrsig secp256k1_schnorrsig_verify)
+    list(POP_BACK CMAKE_MESSAGE_INDENT)
+    if(missing_modules)
+      list(JOIN missing_modules ", " missing_modules)
+      message(FATAL_ERROR "System-installed libsecp256k1 lacks these required modules: ${missing_modules}.")
+    endif()
+    message(CHECK_PASS "all were found")
+    cmake_pop_check_state()
+  endif()
+endif()  # WITH_SYSTEM_LIBSECP256K1
 
 option(ENABLE_WALLET "Enable wallet." ON)
 if(ENABLE_WALLET)
@@ -144,6 +194,8 @@ if(WITH_USDT)
 endif()
 
 option(ENABLE_EXTERNAL_SIGNER "Enable external signer support." ON)
+
+option(ENABLE_TOR_SUBPROCESS "Enable support for executing a dedicated Tor node." ON)
 
 cmake_dependent_option(WITH_QRENCODE "Enable QR code support." ON "BUILD_GUI" OFF)
 if(WITH_QRENCODE)
@@ -218,6 +270,7 @@ if(BUILD_FOR_FUZZING)
   set(BUILD_BITCOIN_BIN OFF)
   set(BUILD_DAEMON OFF)
   set(BUILD_CLI OFF)
+  set(BUILD_BITCOINCONSENSUS_LIB OFF)
   set(BUILD_TX OFF)
   set(BUILD_UTIL OFF)
   set(BUILD_UTIL_CHAINSTATE OFF)
@@ -239,8 +292,19 @@ if(BUILD_FOR_FUZZING)
   )
 endif()
 
+# The external_lib_interface interface library aims to encapsulate build flags, which
+# are specific to non-internal libraries.
+# It is intended to be a usage requirement for non-internal library
+# targets.
+add_library(external_lib_interface INTERFACE)
+
 include(TryAppendCXXFlags)
 include(TryAppendLinkerFlag)
+
+# Sanitizers require leaving undefined symbols in the library
+if(NOT SANITIZERS)
+try_append_linker_flag("-Wl,--no-undefined" TARGET external_lib_interface)
+endif()
 
 # Redefine/adjust per-configuration flags.
 target_compile_definitions(core_interface_debug INTERFACE
@@ -317,6 +381,13 @@ if(WIN32)
     # As a best effort, target Windows 8.
     try_append_linker_flag("-Wl,--major-subsystem-version,6" TARGET core_interface)
     try_append_linker_flag("-Wl,--minor-subsystem-version,2" TARGET core_interface)
+
+    find_library(MINGWTHRD_LIBRARY mingwthrd)
+    if (MINGWTHRD_LIBRARY)
+      target_link_libraries(core_interface INTERFACE
+        ${MINGWTHRD_LIBRARY}
+      )
+    endif()
   endif()
 
   # Workaround producing large object files, which cannot be handled by the assembler.
@@ -431,6 +502,8 @@ if(BUILD_DAEMON OR BUILD_GUI OR BUILD_CLI OR BUILD_TESTS OR BUILD_BENCH OR BUILD
   find_package(Libevent 2.1.8 MODULE REQUIRED)
 endif()
 
+include(cmake/iopriority.cmake)
+
 include(cmake/introspection.cmake)
 
 include(cmake/mempressure.cmake)
@@ -472,7 +545,7 @@ else()
   try_append_cxx_flags("-Woverloaded-virtual" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wsuggest-override" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wimplicit-fallthrough" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wunreachable-code" TARGET warn_interface SKIP_LINK)
+  try_append_cxx_flags("-Wunreachable-code-loop-increment" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wdocumentation" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wself-assign" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wbidi-chars=any" TARGET warn_interface SKIP_LINK)
@@ -582,6 +655,10 @@ if(REDUCE_EXPORTS)
   try_append_linker_flag("-Wl,-no_exported_symbols" VAR CMAKE_EXE_LINKER_FLAGS)
 endif()
 
+if(BUILD_BITCOINCONSENSUS_LIB)
+  set(HAVE_CONSENSUS_LIB TRUE)
+endif()
+
 # Prefer Unix-style package components over frameworks on macOS.
 # This improves compatibility with Python version managers.
 set(Python3_FIND_FRAMEWORK LAST CACHE STRING "")
@@ -589,7 +666,11 @@ set(Python3_FIND_FRAMEWORK LAST CACHE STRING "")
 # improves compatibility with Python version managers that use shims.
 set(Python3_FIND_UNVERSIONED_NAMES FIRST CACHE STRING "")
 mark_as_advanced(Python3_FIND_FRAMEWORK Python3_FIND_UNVERSIONED_NAMES)
+if(BUILD_GUI)
+  find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+else()
 find_package(Python3 3.10 COMPONENTS Interpreter)
+endif()
 if(NOT TARGET Python3::Interpreter)
   list(APPEND configure_warnings
     "Minimum required Python not found."
@@ -648,6 +729,7 @@ else()
 endif()
 message("  bitcoin-gui (GUI, multiprocess) ..... ${bitcoin_gui_status}")
 message("  bitcoin-cli ......................... ${BUILD_CLI}")
+message("  libbitcoinconsensus ................. ${BUILD_BITCOINCONSENSUS_LIB}")
 message("  bitcoin-tx .......................... ${BUILD_TX}")
 message("  bitcoin-util ........................ ${BUILD_UTIL}")
 message("  bitcoin-wallet ...................... ${BUILD_WALLET_TOOL}")
@@ -657,6 +739,7 @@ message("  kernel-test (experimental) .......... ${BUILD_KERNEL_TEST}")
 message("Optional features:")
 message("  wallet support ...................... ${ENABLE_WALLET}")
 message("  external signer ..................... ${ENABLE_EXTERNAL_SIGNER}")
+message("  tor subprocess ...................... ${ENABLE_TOR_SUBPROCESS}")
 message("  ZeroMQ .............................. ${WITH_ZMQ}")
 if(ENABLE_IPC)
   if (WITH_EXTERNAL_LIBMULTIPROCESS)

@@ -32,6 +32,7 @@
 #include <util/check.h>
 #include <util/sock.h>
 #include <util/threadinterrupt.h>
+#include <util/time.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -101,6 +102,9 @@ static const size_t DEFAULT_MAXSENDBUFFER    = 1 * 1000;
 static constexpr bool DEFAULT_V2_TRANSPORT{true};
 
 typedef int64_t NodeId;
+
+/** Get the score of a local address. */
+int GetnScore(const CService& addr);
 
 struct AddedNodeParams {
     std::string m_added_node;
@@ -227,6 +231,10 @@ public:
     TransportProtocolType m_transport_type;
     /** BIP324 session id string in hex, if any. */
     std::string m_session_id;
+    /** whether this peer forced its connection by evicting another */
+    bool m_forced_inbound;
+    /** CPU time spent processing messages to/from the peer. */
+    std::chrono::nanoseconds m_cpu_time;
 };
 
 
@@ -672,6 +680,8 @@ struct CNodeOptions
     std::optional<Proxy> proxy_override = {};
     std::unique_ptr<i2p::sam::Session> i2p_sam_session = nullptr;
     bool prefer_evict = false;
+    // True if ForceInbound connection required evicting a peer
+    bool forced_inbound{false};
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
 };
@@ -733,6 +743,7 @@ public:
      */
     std::string cleanSubVer GUARDED_BY(m_subver_mutex){};
     const bool m_prefer_evict{false}; // This peer is preferred for eviction.
+    const bool m_forced_inbound{false}; // This peer forced an inbound connection
     bool HasPermission(NetPermissionFlags permission) const {
         return NetPermissions::HasFlag(m_permission_flags, permission);
     }
@@ -972,6 +983,25 @@ public:
 
     void CopyStats(CNodeStats& stats) EXCLUSIVE_LOCKS_REQUIRED(!m_subver_mutex, !m_addr_local_mutex, !cs_vSend, !cs_vRecv);
 
+    bool PunishInvalidBlocks() const
+    {
+        if (HasPermission(NetPermissionFlags::NoBan)) {
+            return false;
+        }
+        switch (m_conn_type) {
+            case ConnectionType::INBOUND:
+            case ConnectionType::MANUAL:
+            case ConnectionType::FEELER:
+                return false;
+            case ConnectionType::OUTBOUND_FULL_RELAY:
+            case ConnectionType::BLOCK_RELAY:
+            case ConnectionType::ADDR_FETCH:
+                return true;
+        } // no default case, so the compiler can warn about missing cases
+
+        assert(false);
+    }
+
     std::string ConnectionTypeAsString() const { return ::ConnectionTypeAsString(m_conn_type); }
 
     /**
@@ -995,6 +1025,9 @@ public:
         m_last_ping_time = ping_time;
         m_min_ping_time = std::min(m_min_ping_time.load(), ping_time);
     }
+
+    /** CPU time spent processing messages to/from the peer. */
+    std::atomic<std::chrono::nanoseconds> m_cpu_time;
 
 private:
     const NodeId id;
@@ -1096,6 +1129,7 @@ public:
         std::vector<NetWhitebindPermissions> vWhiteBinds;
         std::vector<CService> vBinds;
         std::vector<CService> onion_binds;
+        bool listenonion{false};
         /// True if the user did not specify -bind= or -whitebind= and thus
         /// we should bind on `0.0.0.0` (IPv4) and `::` (IPv6).
         bool bind_on_any;
@@ -1106,6 +1140,7 @@ public:
         bool whitelist_forcerelay = DEFAULT_WHITELISTFORCERELAY;
         bool whitelist_relay = DEFAULT_WHITELISTRELAY;
         bool m_capture_messages = false;
+        bool disable_v1conn_clearnet = false;
     };
 
     void Init(const Options& connOptions) EXCLUSIVE_LOCKS_REQUIRED(!m_added_nodes_mutex, !m_total_bytes_sent_mutex)
@@ -1140,10 +1175,13 @@ public:
                 m_added_node_params.push_back({added_node, use_v2transport});
             }
         }
+        m_normal_binds = connOptions.vBinds;
         m_onion_binds = connOptions.onion_binds;
+        m_listenonion = connOptions.listenonion;
         whitelist_forcerelay = connOptions.whitelist_forcerelay;
         whitelist_relay = connOptions.whitelist_relay;
         m_capture_messages = connOptions.m_capture_messages;
+        disable_v1conn_clearnet = connOptions.disable_v1conn_clearnet;
     }
 
     // test only
@@ -1408,6 +1446,9 @@ public:
 
     bool MultipleManualOrFullOutboundConns(Network net) const EXCLUSIVE_LOCKS_REQUIRED(m_nodes_mutex);
 
+    /* Returns true if outbound v1 connections need to be disabled on IPV4/IPV6 network. */
+    bool DisableV1OnClearnet(Network net) const;
+
 private:
     struct ListenSocket {
     public:
@@ -1512,7 +1553,13 @@ private:
      */
     bool AlreadyConnectedToAddress(const CNetAddr& addr) const;
 
-    bool AttemptToEvictConnection();
+    /**
+     * Attempt to disconnect a connected peer.
+     * Used to make room for new inbound connections, returns true if successful.
+     * @param[in] force     Try to evict a random inbound ban-able peer if
+     *                      all connections are otherwise protected.
+     */
+    bool AttemptToEvictConnection(bool force);
 
     /**
      * Open a new P2P connection.
@@ -1740,11 +1787,14 @@ private:
      */
     std::atomic_bool m_start_extra_block_relay_peers{false};
 
+    std::vector<CService> m_normal_binds;
+
     /**
      * A vector of -bind=<address>:<port>=onion arguments each of which is
      * an address and port that are designated for incoming Tor connections.
      */
     std::vector<CService> m_onion_binds;
+    bool m_listenonion;
 
     /**
      * flag for adding 'forcerelay' permission to whitelisted inbound
@@ -1762,6 +1812,13 @@ private:
      * flag for whether messages are captured
      */
     bool m_capture_messages{false};
+
+    /**
+     * option for disabling outbound v1 connections on IPV4 and IPV6.
+     * outbound connections on IPV4/IPV6 need to be v2 connections.
+     * outbound connections on Tor/I2P/CJDNS can be v1 or v2 connections.
+     */
+    bool disable_v1conn_clearnet;
 
     /**
      * Mutex protecting m_i2p_sam_sessions.
