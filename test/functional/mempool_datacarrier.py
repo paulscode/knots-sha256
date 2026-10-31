@@ -40,12 +40,14 @@ CUSTOM_DATACARRIER_ARG = 83
 
 class DataCarrierTest(BitcoinTestFramework):
     def set_test_params(self):
-        self.num_nodes = 4
+        self.num_nodes = 5
         self.extra_args = [
-            ["-acceptnonstddatacarrier=1", "-datacarrierfullcount"], # default size is uncapped
+            ["-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-datacarrierunprovenkeys=1"], # default size is uncapped
             ["-datacarrier=0"], # no relay of datacarrier
             ["-datacarrier=1", f"-datacarriersize={CUSTOM_DATACARRIER_ARG}"],
-            ["-datacarrier=1", "-datacarriersize=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount"],
+            ["-datacarrier=1", "-datacarriersize=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-datacarrierunprovenkeys=1"],
+            # Knots #422 expectations assume an 83-byte limit (Core 29 default); Core 31 -corepolicy leaves node 0 uncapped
+            ["-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-datacarrierunprovenkeys=1", f"-datacarriersize={CUSTOM_DATACARRIER_ARG}"],
         ]
 
     def test_null_data_transaction(self, node: TestNode, data, success: bool) -> None:
@@ -287,17 +289,19 @@ class DataCarrierTest(BitcoinTestFramework):
         self.test_bare_envelope(node=self.nodes[0], data_len=MAX_OP_RETURN_RELAY, success=False, interleave_pushnum=True)
 
         self.log.info("Testing ordinary multisig, which is charged nothing however wide.")
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=2, n=3, success=True)
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=3, n=5, success=True)
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=2, n=6, success=True)
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=11, n=15, success=True)
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=14, n=17, success=True)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=2, n=3, success=True)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=3, n=5, success=True)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=2, n=6, success=True)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=11, n=15, success=True)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=14, n=17, success=True)
         # Several inputs of the same shape, since the budget is per transaction
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=2, n=5, success=True, num_inputs=3)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=2, n=5, success=True, num_inputs=3)
 
         self.log.info("Testing a multisig padded out with keys no signature can prove.")
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=1, n=11, success=True)
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=1, n=15, success=False)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=1, n=11, success=True)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=1, n=15, success=False)
+        self.log.info("Testing that the counting is off by default (-datacarrierunprovenkeys=0): the same spend is accepted.")
+        self.test_unproven_pubkeys_transaction(node=self.nodes[2], m=1, n=15, success=True)
 
         self.log.info("Testing that -datacarriersize governs the spare keys, and that multisig "
                       "with nothing to spare is unaffected by it.")
@@ -306,13 +310,13 @@ class DataCarrierTest(BitcoinTestFramework):
 
         self.log.info("Testing that what is charged is charged per script, so it adds up over "
                       "the inputs of a transaction.")
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=1, n=12, success=True, num_inputs=2)
-        self.test_unproven_pubkeys_transaction(node=self.nodes[0], m=1, n=12, success=False, num_inputs=3)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=1, n=12, success=True, num_inputs=2)
+        self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=1, n=12, success=False, num_inputs=3)
 
         self.log.info("Testing multisig key slots that hold a push of another size, which the spend never examines.")
-        self.test_odd_key_slots_transaction(node=self.nodes[0], slot_size=37, success=False)
-        self.test_odd_key_slots_transaction(node=self.nodes[0], slot_size=100, success=False)
-        self.test_odd_key_slots_transaction(node=self.nodes[0], slot_size=5, success=False, n=20)
+        self.test_odd_key_slots_transaction(node=self.nodes[4], slot_size=37, success=False)
+        self.test_odd_key_slots_transaction(node=self.nodes[4], slot_size=100, success=False)
+        self.test_odd_key_slots_transaction(node=self.nodes[4], slot_size=5, success=False, n=20)
 
 
 if __name__ == '__main__':
