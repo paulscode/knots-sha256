@@ -115,6 +115,11 @@ GenerateAuthCookieResult GenerateAuthCookie(const std::pair<std::optional<fs::pe
     if (filepath_tmp.empty()) {
         return GenerateAuthCookieResult::DISABLED; // -norpccookiefile
     }
+    try {
+        fs::remove(filepath_tmp);
+    } catch (const fs::filesystem_error&) {
+        // ignore
+    }
     file.open(filepath_tmp.std_path());
     if (!file.is_open()) {
         LogWarning("Unable to open cookie authentication file %s for writing", fs::PathToString(filepath_tmp));
@@ -134,6 +139,11 @@ GenerateAuthCookieResult GenerateAuthCookie(const std::pair<std::optional<fs::pe
     file.close();
 
     fs::path filepath = GetAuthCookieFile(false);
+    try {
+        fs::remove(filepath);
+    } catch (const fs::filesystem_error&) {
+        // ignore
+    }
     if (!RenameOver(filepath_tmp, filepath)) {
         LogWarning("Unable to rename cookie authentication file %s to %s", fs::PathToString(filepath_tmp), fs::PathToString(filepath));
         return GenerateAuthCookieResult::ERR;
