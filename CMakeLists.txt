@@ -433,6 +433,8 @@ endif()
 
 include(cmake/introspection.cmake)
 
+include(cmake/mempressure.cmake)
+
 include(cmake/ccache.cmake)
 
 add_library(warn_interface INTERFACE)
