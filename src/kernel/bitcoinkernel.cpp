@@ -306,7 +306,7 @@ public:
     {
         if (m_cbs.progress) m_cbs.progress(m_cbs.user_data, title.original.c_str(), title.original.length(), progress_percent, resume_possible ? 1 : 0);
     }
-    void warningSet(kernel::Warning id, const bilingual_str& message) override
+    void warningSet(kernel::Warning id, const bilingual_str& message, bool update) override
     {
         if (m_cbs.warning_set) m_cbs.warning_set(m_cbs.user_data, cast_btck_warning(id), message.original.c_str(), message.original.length());
     }
