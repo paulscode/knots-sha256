@@ -64,6 +64,8 @@ static_assert(TRUC_MAX_VSIZE + TRUC_CHILD_MAX_VSIZE <= DEFAULT_CLUSTER_SIZE_LIMI
  *   applicable.
  */
 std::optional<std::pair<std::string, CTransactionRef>> SingleTRUCChecks(const CTxMemPool& pool, const CTransactionRef& ptx,
+                                          const std::string& reason_prefix, std::string& out_reason,
+                                          const ignore_rejects_type& ignore_rejects,
                                           const std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef>& mempool_parents,
                                           const std::set<Txid>& direct_conflicts,
                                           int64_t vsize) EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
@@ -90,6 +92,8 @@ std::optional<std::pair<std::string, CTransactionRef>> SingleTRUCChecks(const CT
  * @returns debug string if an error occurs, std::nullopt otherwise.
  * */
 std::optional<std::string> PackageTRUCChecks(const CTxMemPool& pool, const CTransactionRef& ptx, int64_t vsize,
+                                           const std::string& reason_prefix, std::string& out_reason,
+                                           const ignore_rejects_type& ignore_rejects,
                                            const Package& package,
                                            const std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef>& mempool_parents) EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
 
