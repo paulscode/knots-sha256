@@ -34,7 +34,8 @@ TransactionError BroadcastTransaction(NodeContext& node,
                                       std::string& err_string,
                                       const std::variant<CAmount, CFeeRate>& max_tx_fee,
                                       TxBroadcast broadcast_method,
-                                      bool wait_callback)
+                                      bool wait_callback,
+                                      const ignore_rejects_type& ignore_rejects)
 {
     // BroadcastTransaction can be called by RPC or by the wallet.
     // chainman, mempool and peerman are initialized before the RPC server and wallet are started
@@ -71,11 +72,14 @@ TransactionError BroadcastTransaction(NodeContext& node,
             wtxid = mempool_tx->GetWitnessHash();
         } else {
             // Transaction is not already in the mempool.
-            const bool check_max_fee{(std::holds_alternative<CAmount>(max_tx_fee) ? std::get<CAmount>(max_tx_fee) : std::get<CFeeRate>(max_tx_fee).GetFeePerK()) > 0};
+            bool check_max_fee{(std::holds_alternative<CAmount>(max_tx_fee) ? std::get<CAmount>(max_tx_fee) : std::get<CFeeRate>(max_tx_fee).GetFeePerK()) > 0};
+            if (ignore_rejects.count("absurdly-high-fee") || ignore_rejects.count("max-fee-exceeded")) {
+                check_max_fee = false;
+            }
             if (check_max_fee || broadcast_method == TxBroadcast::NO_MEMPOOL_PRIVATE_BROADCAST) {
                 // First, call ATMP with test_accept and check the fee. If ATMP
                 // fails here, return error immediately.
-                const MempoolAcceptResult result = node.chainman->ProcessTransaction(tx, /*test_accept=*/ true);
+                const MempoolAcceptResult result = node.chainman->ProcessTransaction(tx, /*test_accept=*/ true, ignore_rejects);
                 if (result.m_result_type != MempoolAcceptResult::ResultType::VALID) {
                     return HandleATMPError(result.m_state, err_string);
                 } else if (check_max_fee) {
@@ -97,7 +101,7 @@ TransactionError BroadcastTransaction(NodeContext& node,
                 // Try to submit the transaction to the mempool.
                 {
                     const MempoolAcceptResult result =
-                        node.chainman->ProcessTransaction(tx, /*test_accept=*/false);
+                        node.chainman->ProcessTransaction(tx, /*test_accept=*/false, ignore_rejects);
                     if (result.m_result_type != MempoolAcceptResult::ResultType::VALID) {
                         return HandleATMPError(result.m_state, err_string);
                     }
