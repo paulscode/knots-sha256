@@ -11,6 +11,7 @@
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
+#include <kernel/mempool_options.h>
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
@@ -76,6 +77,10 @@ std::vector<uint32_t> GetDust(const CTransaction& tx, CFeeRate dust_relay_rate)
     return dust_outputs;
 }
 
+/**
+ * Note this must assign whichType even if returning false, in case
+ * IsStandardTx ignores the "scriptpubkey" rejection.
+ */
 bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
 {
     std::vector<std::vector<unsigned char> > vSolutions;
@@ -111,7 +116,7 @@ static inline bool MaybeReject_(std::string& out_reason, const std::string& reas
     }  \
 } while(0)
 
-bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& out_reason, const ignore_rejects_type& ignore_rejects)
+bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, std::string& out_reason, const ignore_rejects_type& ignore_rejects)
 {
     const std::string reason_prefix;
 
@@ -146,7 +151,7 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
         }
     }
 
-    unsigned int datacarrier_bytes_left = max_datacarrier_bytes.value_or(0);
+    unsigned int datacarrier_bytes_left = opts.max_datacarrier_bytes.value_or(0);
     TxoutType whichType;
     for (const CTxOut& txout : tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
@@ -165,13 +170,13 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
             } else {
                 datacarrier_bytes_left -= size;
             }
-        } else if ((whichType == TxoutType::MULTISIG) && (!permit_bare_multisig)) {
+        } else if ((whichType == TxoutType::MULTISIG) && (!opts.permit_bare_multisig)) {
             MaybeReject("bare-multisig");
         }
     }
 
     // Only MAX_DUST_OUTPUTS_PER_TX dust is permitted(on otherwise valid ephemeral dust)
-    if (GetDust(tx, dust_relay_fee).size() > MAX_DUST_OUTPUTS_PER_TX) {
+    if (GetDust(tx, opts.dust_relay_feerate).size() > MAX_DUST_OUTPUTS_PER_TX) {
         MaybeReject("dust");
     }
 
