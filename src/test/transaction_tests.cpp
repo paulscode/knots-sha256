@@ -781,6 +781,10 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
 
     CheckIsStandard(t);
 
+    g_mempool_opts.permitephemeral_anchor = true;
+    g_mempool_opts.permitephemeral_dust = true;
+    g_mempool_opts.permitephemeral_send = true;
+
     // Check dust with default relay fee:
     CAmount nDustThreshold = 182 * g_mempool_opts.dust_relay_feerate.GetFeePerK() / 1000;
     BOOST_CHECK_EQUAL(nDustThreshold, 546);
@@ -830,6 +834,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     CheckIsNotStandard(t, "scriptpubkey");
 
     // Custom 83-byte TxoutType::NULL_DATA (standard with max_op_return_relay of 83)
+    g_mempool_opts.permitbaredatacarrier = true;
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3804678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     BOOST_CHECK_EQUAL(83, t.vout[0].scriptPubKey.size());
     CheckIsStandard(t, /*max_op_return_relay=*/83);
@@ -863,6 +868,10 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout[0].nValue = 0;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     t.vout[1].nValue = 0;
+    // Core 31 accepts several OP_RETURN outputs within -datacarriersize; Bitcoin Knots SHA256 requires
+    // -datacarriermultiple for that (single-output rule by default, decisions/0013)
+    CheckIsNotStandard(t, "multi-op-return");
+    g_mempool_opts.datacarrier_multiple = true;
     CheckIsStandard(t);
 
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
@@ -879,6 +888,17 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     CheckIsStandard(t); // Default max relay should never trigger
     CheckIsStandard(t, /*max_op_return_relay=*/datacarrier_size);
     CheckIsNotStandard(t, "datacarrier", /*max_op_return_relay=*/datacarrier_size-1);
+    g_mempool_opts.datacarrier_multiple = DEFAULT_DATACARRIER_MULTIPLE;
+
+    // Test permitbaredatacarrier
+    g_mempool_opts.permitbaredatacarrier = false;
+    t.vout[1].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
+    t.vout[1].nValue = COIN;
+    CheckIsStandard(t);
+    t.vout.resize(1);
+    CheckIsNotStandard(t, "bare-datacarrier");
+    g_mempool_opts.permitbaredatacarrier = true;
+    CheckIsStandard(t);
 
     // Check large scriptSig (non-standard if size is >1650 bytes)
     t.vout.resize(1);
@@ -1027,6 +1047,34 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     CheckIsStandard(t);
     t.vout[0].nValue = 239;
     CheckIsNotStandard(t, "dust");
+
+    // Test permitbareanchor
+    g_mempool_opts.permitbareanchor = false;
+    t.vout[1].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
+    t.vout[1].nValue = COIN;
+    CheckIsStandard(t);
+    t.vout.resize(1);
+    CheckIsNotStandard(t, "bare-anchor");
+    g_mempool_opts.permitbareanchor = true;
+    CheckIsStandard(t);
+
+    // Test permitephemeral
+    g_mempool_opts.permitephemeral_anchor = false;
+    CheckIsNotStandard(t, "anchor");
+    t.vout[0].nValue = 0;
+    CheckIsNotStandard(t, "anchor");
+    g_mempool_opts.permitephemeral_anchor = true;
+    g_mempool_opts.permitephemeral_dust = false;
+    CheckIsStandard(t);
+    t.vout[0].nValue = 1;
+    CheckIsNotStandard(t, "dust-nonzero");
+    g_mempool_opts.permitephemeral_dust = true;
+    g_mempool_opts.permitephemeral_send = false;
+    CheckIsStandard(t);
+    t.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
+    CheckIsNotStandard(t, "dust-nonanchor");
+    g_mempool_opts.permitephemeral_send = true;
+    CheckIsStandard(t);
 }
 
 BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
