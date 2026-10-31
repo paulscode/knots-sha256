@@ -6,6 +6,7 @@
 #define BITCOIN_POLICY_RBF_H
 
 #include <consensus/amount.h>
+#include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <threadsafety.h>
 #include <txmempool.h>
@@ -68,7 +69,8 @@ RBFTransactionState IsRBFOptInEmptyMempool(const CTransaction& tx);
  */
 std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx, CTxMemPool& pool,
                                                   const CTxMemPool::setEntries& iters_conflicting,
-                                                  CTxMemPool::setEntries& all_conflicts)
+                                                  CTxMemPool::setEntries& all_conflicts,
+                                                  const ignore_rejects_type& ignore_rejects=empty_ignore_rejects)
     EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
 
 /** Check the intersection between two sets of transactions (a set of mempool entries and a set of
@@ -78,11 +80,12 @@ std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx, CTxMem
  * @param[in]   direct_conflicts    Set of txids corresponding to the mempool conflicts
  *                                  (candidates to be replaced).
  * @param[in]   txid                Transaction ID, included in the error message if violation occurs.
- * @returns error message if the sets intersect, std::nullopt if they are disjoint.
+ * @param[out]  out_violates_policy Assigned to true if there are any policy-only conflicts.
+ * @returns error message if the sets intersect (consensus-only conflicts), std::nullopt if they are disjoint or only intersect on policy matters.
  */
 std::optional<std::string> EntriesAndTxidsDisjoint(const CTxMemPool::setEntries& ancestors,
-                                                   const std::set<Txid>& direct_conflicts,
-                                                   const Txid& txid);
+                                                   const std::map<Txid, bool>& direct_conflicts,
+                                                   const Txid& txid, bool* out_violates_policy);
 
 /** The replacement transaction must pay more fees than the original transactions. The additional
  * fees must pay for the replacement's bandwidth at or above the incremental relay feerate.
