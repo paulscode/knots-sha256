@@ -119,6 +119,16 @@ GenerateAuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cook
         LogWarning("Unable to open cookie authentication file %s for writing", fs::PathToString(filepath_tmp));
         return GenerateAuthCookieResult::ERR;
     }
+
+    if (cookie_perms) {
+        std::error_code code;
+        fs::permissions(filepath_tmp, cookie_perms.value(), fs::perm_options::replace, code);
+        if (code) {
+            LogWarning("Unable to set permissions on cookie authentication file %s", fs::PathToString(filepath_tmp));
+            return GenerateAuthCookieResult::ERR;
+        }
+    }
+
     file << COOKIEAUTH_USER << ":" << rand_pwd_hex;
     file.close();
 
@@ -126,14 +136,6 @@ GenerateAuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cook
     if (!RenameOver(filepath_tmp, filepath)) {
         LogWarning("Unable to rename cookie authentication file %s to %s", fs::PathToString(filepath_tmp), fs::PathToString(filepath));
         return GenerateAuthCookieResult::ERR;
-    }
-    if (cookie_perms) {
-        std::error_code code;
-        fs::permissions(filepath, cookie_perms.value(), fs::perm_options::replace, code);
-        if (code) {
-            LogWarning("Unable to set permissions on cookie authentication file %s", fs::PathToString(filepath));
-            return GenerateAuthCookieResult::ERR;
-        }
     }
 
     g_generated_cookie = COOKIEAUTH_USER + ":" + rand_pwd_hex;
