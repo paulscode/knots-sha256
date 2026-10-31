@@ -36,6 +36,8 @@ Documentation for C++ subprocessing library.
 #ifndef BITCOIN_UTIL_SUBPROCESS_H
 #define BITCOIN_UTIL_SUBPROCESS_H
 
+#include <util/fs.h>
+#include <util/strencodings.h>
 #include <util/syserror.h>
 
 #include <algorithm>
@@ -533,6 +535,20 @@ namespace util
  */
 
 /*!
+ * Option to close all file descriptors
+ * when the child process is spawned.
+ * The close fd list does not include
+ * input/output/error if they are explicitly
+ * set as part of the Popen arguments.
+ *
+ * Default value is false.
+ */
+struct close_fds {
+  explicit close_fds(bool c): close_all(c) {}
+  bool close_all = false;
+};
+
+/*!
  * Base class for all arguments involving string value.
  */
 struct string_arg
@@ -729,6 +745,7 @@ struct ArgumentDeducer
   void set_option(input&& inp);
   void set_option(output&& out);
   void set_option(error&& err);
+  void set_option(close_fds&& cfds);
 
 private:
   Popen* popen_ = nullptr;
@@ -1014,6 +1031,8 @@ private:
   int child_pid_ = -1;
 #endif
 
+  bool close_fds_ = false;
+
   std::string exe_name_;
 
   // Command provided as sequence
@@ -1257,6 +1276,14 @@ namespace detail {
     if (err.rd_ch_ != -1) popen_->stream_.err_read_ = err.rd_ch_;
   }
 
+  inline void ArgumentDeducer::set_option(close_fds&& cfds) {
+    popen_->close_fds_ = cfds.close_all;
+  }
+
+#ifndef WIN32
+  void subprocess_close_all_fds(int except_fd);
+#endif
+
 
 #ifndef WIN32
   inline void Child::execute_child() {
@@ -1302,6 +1329,11 @@ namespace detail {
 
       if (stream.err_write_ != -1 && stream.err_write_ > 2)
         subprocess_close(stream.err_write_);
+
+      // Close all the inherited fd's except the error write pipe
+      if (parent_->close_fds_) {
+        subprocess_close_all_fds(/*except_fd=*/ err_wr_pipe_);
+      }
 
       // Replace the current image with the executable
       sys_ret = execvp(parent_->exe_name_.c_str(), parent_->cargv_.data());
