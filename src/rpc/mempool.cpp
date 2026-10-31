@@ -111,9 +111,6 @@ static RPCHelpMan sendrawtransaction()
 
             const CFeeRate max_raw_tx_fee_rate{ParseFeeRate(self.Arg<UniValue>("maxfeerate"))};
 
-            int64_t virtual_size = GetVirtualTransactionSize(*tx);
-            CAmount max_raw_tx_fee = max_raw_tx_fee_rate.GetFee(virtual_size);
-
             std::string err_string;
             AssertLockNotHeld(cs_main);
             NodeContext& node = EnsureAnyNodeContext(request.context);
@@ -132,7 +129,7 @@ static RPCHelpMan sendrawtransaction()
             const TransactionError err = BroadcastTransaction(node,
                                                               tx,
                                                               err_string,
-                                                              max_raw_tx_fee,
+                                                              max_raw_tx_fee_rate,
                                                               method,
                                                               /*wait_callback=*/true);
             if (TransactionError::OK != err) {
@@ -1217,7 +1214,7 @@ static UniValue OrphanToJSON(const node::TxOrphanage::OrphanInfo& orphan)
     o.pushKV("txid", orphan.tx->GetHash().ToString());
     o.pushKV("wtxid", orphan.tx->GetWitnessHash().ToString());
     o.pushKV("bytes", orphan.tx->ComputeTotalSize());
-    o.pushKV("vsize", GetVirtualTransactionSize(*orphan.tx));
+    o.pushKV("vsize", GetVirtualTransactionSize(*orphan.tx, 0, 0)); // orphans are not in the mempool: sigop cost unknown, BIP141 vsize
     o.pushKV("weight", GetTransactionWeight(*orphan.tx));
     UniValue from(UniValue::VARR);
     for (const auto fromPeer: orphan.announcers) {
