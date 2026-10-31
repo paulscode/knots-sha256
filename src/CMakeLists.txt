@@ -91,6 +91,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   chain.cpp
   chainparams.cpp
   chainparamsbase.cpp
+  codex32.cpp
   coins.cpp
   common/args.cpp
   common/bloom.cpp
@@ -166,6 +167,7 @@ if(ENABLE_WALLET)
       bitcoin_wallet
       bitcoin_common
       bitcoin_util
+      univalue
       Boost::headers
     )
     install_binary_component(bitcoin-wallet HAS_MANPAGE)
