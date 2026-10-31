@@ -9,6 +9,7 @@
 #include <node/types.h>
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
+#include <policy/policy.h>
 
 #include <variant>
 
@@ -57,7 +58,8 @@ static const CAmount DEFAULT_MAX_BURN_AMOUNT{0};
                                                     std::string& err_string,
                                                     const std::variant<CAmount, CFeeRate>& max_tx_fee,
                                                     TxBroadcast broadcast_method,
-                                                    bool wait_callback);
+                                                    bool wait_callback,
+                                                    const ignore_rejects_type& ignore_rejects = empty_ignore_rejects);
 
 /**
  * Return transaction with a given hash.
