@@ -1052,8 +1052,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             raise SkipTest("bench_bitcoin has not been compiled")
 
     def skip_if_no_cli(self):
-        """Skip the running test if bitcoin-cli has not been compiled."""
-        if not self.is_cli_compiled():
+        """Skip the running test if bitcoin-cli is not available."""
+        if not self.is_cli_available():
             raise SkipTest("bitcoin-cli has not been compiled.")
 
     def skip_if_no_ipc(self):
@@ -1090,6 +1090,13 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def is_cli_compiled(self):
         """Checks whether bitcoin-cli was compiled."""
+        return self.config["components"].getboolean("BUILD_CLI")
+
+    def is_cli_available(self):
+        """Checks whether bitcoin-cli is available (an external one via BITCOINCLI, or the compiled one)."""
+        if "BITCOINCLI" in os.environ:
+            return os.environ["BITCOINCLI"]
+
         return self.config["components"].getboolean("ENABLE_CLI")
 
     def is_external_signer_compiled(self):
