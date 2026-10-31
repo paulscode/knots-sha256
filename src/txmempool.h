@@ -18,6 +18,7 @@
 #include <policy/packages.h>
 #include <primitives/transaction.h>
 #include <primitives/transaction_identifier.h>
+#include <script/script.h>
 #include <sync.h>
 #include <txgraph.h>
 #include <util/feefrac.h>
@@ -42,9 +43,15 @@
 #include <vector>
 
 class CChain;
+class CScript;
+
+/** Hash key under which a scriptPubKey is tracked in the mempool (-spkreuse). */
+uint160 ScriptHashkey(const CScript& script);
 class ValidationSignals;
 
 struct bilingual_str;
+
+static constexpr std::chrono::minutes DYNAMIC_DUST_FEERATE_UPDATE_INTERVAL{15};
 
 /** Fake height value used in Coin to signify they are only in the memory pool (since 0.8) */
 static const uint32_t MEMPOOL_HEIGHT = 0x7FFFFFFF;
@@ -109,6 +116,8 @@ public:
 // Multi_index tag names
 struct entry_time {};
 struct index_by_wtxid {};
+
+class CBlockPolicyEstimator;
 
 /**
  * Information about a mempool transaction.
@@ -280,6 +289,8 @@ public:
     std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> GetChildren(const CTxMemPoolEntry &entry) const;
     std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> GetParents(const CTxMemPoolEntry &entry) const;
 
+    std::map<uint160, std::pair<const CTransaction *, const CTransaction *>> mapUsedSPK;
+
 private:
     std::vector<indexed_transaction_set::const_iterator> GetSortedScoreWithTopology() const EXCLUSIVE_LOCKS_REQUIRED(cs);
 
@@ -345,6 +356,8 @@ public:
      * the tx is not dependent on other mempool transactions to be included in a block.
      */
     bool HasNoInputsOf(const CTransaction& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs);
+
+    void UpdateDynamicDustFeerate();
 
     /** Affect CreateNewBlock prioritisation of transactions */
     void PrioritiseTransaction(const Txid& hash, const CAmount& nFeeDelta);
@@ -539,6 +552,8 @@ public:
     std::vector<CTxMemPoolEntryRef> entryAll() const EXCLUSIVE_LOCKS_REQUIRED(cs);
     std::vector<TxMempoolInfo> infoAll() const;
 
+    void FindScriptPubKey(const std::set<CScript>& needles, std::map<COutPoint, Coin>& out_results);
+
     size_t DynamicMemoryUsage() const;
 
     /** Adds a transaction to the unbroadcast set */
@@ -636,7 +651,10 @@ public:
 
         using TxHandle = CTxMemPool::txiter;
 
-        TxHandle StageAddition(const CTransactionRef& tx, CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int64_t sigops_cost, LockPoints lp);
+        /** Modify a staged (not yet applied) entry in place; Knots uses this to attach the scriptPubKey states. */
+        template <typename Modifier>
+        void ModifyEntry(TxHandle it, Modifier&& fn) { m_to_add.modify(it, std::forward<Modifier>(fn)); }
+        TxHandle StageAddition(const CTransactionRef& tx, CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int32_t extra_weight, int64_t sigops_cost, LockPoints lp);
 
         void StageRemoval(CTxMemPool::txiter it);
 
@@ -686,6 +704,7 @@ public:
 
         CTxMemPool* m_pool;
         CTxMemPool::indexed_transaction_set m_to_add;
+    private:
         std::vector<CTxMemPool::txiter> m_entry_vec; // track the added transactions' insertion order
         // map from the m_to_add index to the ancestors for the transaction
         std::map<CTxMemPool::txiter, CTxMemPool::setEntries, CompareIteratorByHash> m_ancestors;
@@ -751,6 +770,9 @@ public:
  * It also allows you to sign a double-spend directly in
  * signrawtransactionwithkey and signrawtransactionwithwallet,
  * as long as the conflicting transaction is not yet confirmed.
+ *
+ * Its Cursor also doesn't work. In general, it is broken as a CCoinsView
+ * implementation outside of a few use cases.
  */
 class CCoinsViewMemPool : public CCoinsViewBacked
 {
