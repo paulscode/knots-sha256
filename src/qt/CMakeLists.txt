@@ -58,9 +58,9 @@ configure_file(bitcoin_locale.qrc bitcoin_locale.qrc USE_SOURCE_PERMISSIONS COPY
 qt6_add_resources(BITCOIN_QRC bitcoin.qrc)
 qt6_add_resources(BITCOIN_LOCALE_QRC ${CMAKE_CURRENT_BINARY_DIR}/bitcoin_locale.qrc)
 
-# The bundled font (Tonal digits and BTC symbol) ships base85+lzma-encoded; decode it at configure time so the
+# The bundled font (OCR-Bitcoin: Tonal digits and BTC symbol) ships base85+lzma-encoded; decode it at configure time so the
 # resource compiler can see it.
-set(FONT_PATH "res/fonts/RobotoTonalMono-Bold.ttf")
+set(FONT_PATH "res/fonts/OCR-Bitcoin.ttf")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/res/fonts")
 execute_process(
   COMMAND ${Python3_EXECUTABLE} -c "import base64, lzma, sys; sys.stdout.buffer.write(lzma.decompress(base64.b85decode(sys.stdin.read())))"
