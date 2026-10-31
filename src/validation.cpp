@@ -1002,8 +1002,21 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     }
 
     // The mempool holds txs for the next block, so pass height+1 to CheckTxInputs
-    if (!Consensus::CheckTxInputs(tx, state, m_view, m_active_chainstate.m_chain.Height() + 1, ws.m_base_fees)) {
+    const auto block_height_current = m_active_chainstate.m_chain.Height();
+    const auto block_height_next = block_height_current + 1;
+    if (!Consensus::CheckTxInputs(tx, state, m_view, block_height_next, ws.m_base_fees)) {
         return false; // state filled in by CheckTxInputs
+    }
+
+    if (m_pool.m_opts.minrelaymaturity) {
+        auto max_coin_height = block_height_next - m_pool.m_opts.minrelaymaturity;
+        static_assert(std::is_signed_v<decltype(max_coin_height)>, "Unsigned max_coin_height needs a range check");
+        for (const CTxIn &txin : tx.vin) {
+            const Coin &coin = m_view.AccessCoin(txin.prevout);
+            if (coin.nHeight > max_coin_height) {
+                MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-input-immature-depth");
+            }
+        }
     }
 
     if (spk_reuse_mode != SRM_ALLOW) {
@@ -1059,6 +1072,21 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
+    // "Coin blocks" of the confirmed inputs (value in atoms x confirmations at the next height). The coin-age
+    // helper belonged to the superseded mining_priority topic (decisions/0017), so it is computed here.
+    if (m_pool.m_opts.minrelaycoinblocks > 0) {
+        double inputs_coin_age{0};
+        for (const CTxIn& txin : tx.vin) {
+            const Coin& coin = m_view.AccessCoin(txin.prevout);
+            if (!coin.IsSpent() && coin.nHeight <= block_height_next) {
+                inputs_coin_age += (double)(coin.out.nValue) * (block_height_next - coin.nHeight);
+            }
+        }
+        if (inputs_coin_age < m_pool.m_opts.minrelaycoinblocks) {
+            MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-input-immature-coinblocks");
+        }
+    }
+
     // Set entry_sequence to 0 when rejectmsg_zero_mempool_entry_seq is used; this allows txs from a block
     // reorg to be marked earlier than any child txs that were already in the mempool.
     const uint64_t entry_sequence = args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) ? 0 : m_pool.GetSequence();
@@ -1066,7 +1094,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     if (!m_subpackage.m_changeset) {
         m_subpackage.m_changeset = m_pool.GetChangeSet();
     }
-    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, m_active_chainstate.m_chain.Height(), entry_sequence, fSpendsCoinbase, /*extra_weight=*/ extra_weight, /*sigops_cost=*/ nSigOpsCost, lock_points.value());
+    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, block_height_current, entry_sequence, fSpendsCoinbase, /*extra_weight=*/ extra_weight, /*sigops_cost=*/ nSigOpsCost, lock_points.value());
 
     if (spk_reuse_mode != SRM_ALLOW) {
         m_subpackage.m_changeset->ModifyEntry(ws.m_tx_handle, [=](CTxMemPoolEntry& e) {
