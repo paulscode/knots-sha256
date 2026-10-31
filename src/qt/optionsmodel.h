@@ -60,6 +60,7 @@ public:
         ProxyIPTor,             // QString
         ProxyPortTor,           // int
         DisplayUnit,            // BitcoinUnit
+        DisplayAddresses,       // bool
         ThirdPartyTxUrls,       // QString
         Language,               // QString
         FontForMoney,           // FontChoice
@@ -105,6 +106,7 @@ public:
     bool getMinimizeToTray() const { return fMinimizeToTray; }
     bool getMinimizeOnClose() const { return fMinimizeOnClose; }
     BitcoinUnit getDisplayUnit() const { return m_display_bitcoin_unit; }
+    bool getDisplayAddresses() const { return bDisplayAddresses; }
     QString getThirdPartyTxUrls() const { return strThirdPartyTxUrls; }
     QFont getFontForMoney(BitcoinUnit) const;
     FontChoice getFontChoiceForQRCodes() const { return m_font_qrcodes; }
@@ -134,6 +136,7 @@ private:
     bool fMinimizeOnClose;
     QString language;
     BitcoinUnit m_display_bitcoin_unit;
+    bool bDisplayAddresses;
     QString strThirdPartyTxUrls;
     FontChoice m_font_money{FontChoiceAbstract::EmbeddedFont};
     bool m_font_money_supports_tonal;
