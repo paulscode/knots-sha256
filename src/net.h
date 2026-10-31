@@ -1096,6 +1096,7 @@ public:
         std::vector<NetWhitebindPermissions> vWhiteBinds;
         std::vector<CService> vBinds;
         std::vector<CService> onion_binds;
+        bool listenonion{false};
         /// True if the user did not specify -bind= or -whitebind= and thus
         /// we should bind on `0.0.0.0` (IPv4) and `::` (IPv6).
         bool bind_on_any;
@@ -1140,7 +1141,9 @@ public:
                 m_added_node_params.push_back({added_node, use_v2transport});
             }
         }
+        m_normal_binds = connOptions.vBinds;
         m_onion_binds = connOptions.onion_binds;
+        m_listenonion = connOptions.listenonion;
         whitelist_forcerelay = connOptions.whitelist_forcerelay;
         whitelist_relay = connOptions.whitelist_relay;
         m_capture_messages = connOptions.m_capture_messages;
@@ -1740,11 +1743,14 @@ private:
      */
     std::atomic_bool m_start_extra_block_relay_peers{false};
 
+    std::vector<CService> m_normal_binds;
+
     /**
      * A vector of -bind=<address>:<port>=onion arguments each of which is
      * an address and port that are designated for incoming Tor connections.
      */
     std::vector<CService> m_onion_binds;
+    bool m_listenonion;
 
     /**
      * flag for adding 'forcerelay' permission to whitelisted inbound
