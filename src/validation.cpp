@@ -53,6 +53,7 @@
 #include <util/fs.h>
 #include <util/fs_helpers.h>
 #include <util/hasher.h>
+#include <util/ioprio.h>
 #include <util/log.h>
 #include <util/mempressure.h>
 #include <util/moneystr.h>
@@ -107,12 +108,6 @@ const std::vector<std::string> CHECKLEVEL_DOC {
     "level 4 tries to reconnect the blocks",
     "each level includes the checks of the previous levels",
 };
-/** The number of blocks to keep below the deepest prune lock.
- *  There is nothing special about this number. It is higher than what we
- *  expect to see in regular mainnet reorgs, but not so high that it would
- *  noticeably interfere with the pruning mechanism.
- * */
-static constexpr int PRUNE_LOCK_BUFFER{10};
 
 // Return whether the completed full flush should compact chainstate
 static bool ShouldCompactChainstate(bool in_ibd)
@@ -1007,8 +1002,21 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     }
 
     // The mempool holds txs for the next block, so pass height+1 to CheckTxInputs
-    if (!Consensus::CheckTxInputs(tx, state, m_view, m_active_chainstate.m_chain.Height() + 1, ws.m_base_fees)) {
+    const auto block_height_current = m_active_chainstate.m_chain.Height();
+    const auto block_height_next = block_height_current + 1;
+    if (!Consensus::CheckTxInputs(tx, state, m_view, block_height_next, ws.m_base_fees)) {
         return false; // state filled in by CheckTxInputs
+    }
+
+    if (m_pool.m_opts.minrelaymaturity) {
+        auto max_coin_height = block_height_next - m_pool.m_opts.minrelaymaturity;
+        static_assert(std::is_signed_v<decltype(max_coin_height)>, "Unsigned max_coin_height needs a range check");
+        for (const CTxIn &txin : tx.vin) {
+            const Coin &coin = m_view.AccessCoin(txin.prevout);
+            if (coin.nHeight > max_coin_height) {
+                MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-input-immature-depth");
+            }
+        }
     }
 
     if (spk_reuse_mode != SRM_ALLOW) {
@@ -1064,6 +1072,21 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
+    // "Coin blocks" of the confirmed inputs (value in atoms x confirmations at the next height). The coin-age
+    // helper belonged to the superseded mining_priority topic (decisions/0017), so it is computed here.
+    if (m_pool.m_opts.minrelaycoinblocks > 0) {
+        double inputs_coin_age{0};
+        for (const CTxIn& txin : tx.vin) {
+            const Coin& coin = m_view.AccessCoin(txin.prevout);
+            if (!coin.IsSpent() && coin.nHeight <= block_height_next) {
+                inputs_coin_age += (double)(coin.out.nValue) * (block_height_next - coin.nHeight);
+            }
+        }
+        if (inputs_coin_age < m_pool.m_opts.minrelaycoinblocks) {
+            MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-input-immature-coinblocks");
+        }
+    }
+
     // Set entry_sequence to 0 when rejectmsg_zero_mempool_entry_seq is used; this allows txs from a block
     // reorg to be marked earlier than any child txs that were already in the mempool.
     const uint64_t entry_sequence = args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) ? 0 : m_pool.GetSequence();
@@ -1071,7 +1094,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     if (!m_subpackage.m_changeset) {
         m_subpackage.m_changeset = m_pool.GetChangeSet();
     }
-    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, m_active_chainstate.m_chain.Height(), entry_sequence, fSpendsCoinbase, /*extra_weight=*/ extra_weight, /*sigops_cost=*/ nSigOpsCost, lock_points.value());
+    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, block_height_current, entry_sequence, fSpendsCoinbase, /*extra_weight=*/ extra_weight, /*sigops_cost=*/ nSigOpsCost, lock_points.value());
 
     if (spk_reuse_mode != SRM_ALLOW) {
         m_subpackage.m_changeset->ModifyEntry(ws.m_tx_handle, [=](CTxMemPoolEntry& e) {
@@ -2761,7 +2784,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // for as long as `control`.
     std::vector<PrecomputedTransactionData> txsdata(block.vtx.size());
     std::optional<CCheckQueueControl<CScriptCheck>> control;
-    if (auto& queue = m_chainman.GetCheckQueue(); queue.HasThreads() && fScriptChecks) control.emplace(queue);
+    if (auto& queue = m_chainman.GetCheckQueue(); m_chainman.m_script_check_queue_enabled && queue.HasThreads() && fScriptChecks) control.emplace(queue);
 
     std::vector<int> prevheights;
     CAmount nFees = 0;
@@ -2969,21 +2992,6 @@ bool Chainstate::FlushStateToDisk(
             // make sure we don't prune above any of the prune locks bestblocks
             // pruning is height-based
             int last_prune{m_chain.Height()}; // last height we can prune
-            std::optional<std::string> limiting_lock; // prune lock that actually was the limiting factor, only used for logging
-
-            for (const auto& prune_lock : m_blockman.m_prune_locks) {
-                if (prune_lock.second.height_first == std::numeric_limits<int>::max()) continue;
-                // Remove the buffer and one additional block here to get actual height that is outside of the buffer
-                const int lock_height{prune_lock.second.height_first - PRUNE_LOCK_BUFFER - 1};
-                last_prune = std::max(1, std::min(last_prune, lock_height));
-                if (last_prune == lock_height) {
-                    limiting_lock = prune_lock.first;
-                }
-            }
-
-            if (limiting_lock) {
-                LogDebug(BCLog::PRUNE, "%s limited pruning to height %d\n", limiting_lock.value(), last_prune);
-            }
 
             if (nManualPruneHeight > 0) {
                 LOG_TIME_MILLIS_WITH_CATEGORY("find files to prune (manual)", BCLog::BENCH);
@@ -3167,14 +3175,72 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
     if (!m_chainman.IsInitialBlockDownload()) {
         auto bits = m_chainman.m_versionbitscache.CheckUnknownActivations(pindexNew, m_chainman.GetParams());
         for (auto [bit, active] : bits) {
-            const bilingual_str warning = strprintf(_("Unknown new rules activated (versionbit %i)"), bit);
-            if (active) {
+            // Knots: warn as soon as an unknown deployment is LOCKED_IN, not only once it is active
+            const bilingual_str warning = strprintf(_("WARNING: Unknown new rules activated (versionbit %i) - this software is not secure"), bit);
+            {
                 m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_ACTIVATED, warning);
-            } else {
                 warning_messages.push_back(warning);
             }
         }
+
+        // Check the version of the last 100 blocks to see if we need to upgrade:
+        const CBlockIndex* pindex = pindexNew;
+        int unexpected_bit_count[VERSIONBITS_NUM_BITS], nonversionbit_count = 0;
+        for (size_t i = 0; i < VERSIONBITS_NUM_BITS; ++i) unexpected_bit_count[i] = 0;
+        // NOTE: The warning_threshold_hit* variables are static to ensure the warnings persist even after the condition changes, until the node is restarted
+        static std::set<uint8_t> warning_threshold_hit_bits;
+        static int32_t warning_threshold_hit_int{-1};
+        for (int i = 0; i < 100 && pindex != nullptr; i++)
+        {
+            int32_t nExpectedVersion = m_chainman.m_versionbitscache.ComputeBlockVersion(pindex->pprev, m_chainman.GetConsensus());
+            if (pindex->nVersion <= VERSIONBITS_LAST_OLD_BLOCK_VERSION) {
+                // We don't care
+            } else if ((pindex->nVersion & VERSIONBITS_TOP_MASK) != VERSIONBITS_TOP_BITS) {
+                // Non-versionbits upgrade
+                static constexpr int WARNING_THRESHOLD = 100/2;
+                if (++nonversionbit_count > WARNING_THRESHOLD) {
+                    if (warning_threshold_hit_int == -1) {
+                        warning_threshold_hit_int = pindex->nVersion;
+                    } else if (warning_threshold_hit_int != pindex->nVersion) {
+                        warning_threshold_hit_int = -2;
+                    }
+                }
+            } else if ((pindex->nVersion & ~nExpectedVersion) != 0) {
+                for (int bit = 0; bit < VERSIONBITS_NUM_BITS; ++bit) {
+                    const int32_t mask = 1 << bit;
+                    if ((pindex->nVersion & mask) && !(nExpectedVersion & mask)) {
+                        const int warning_threshold = (bit > 12 ? 75 : 50);
+                        if (++unexpected_bit_count[bit] > warning_threshold) {
+                            warning_threshold_hit_bits.insert(bit);
+                        }
+                    }
+                }
+            }
+            pindex = pindex->pprev;
+        }
+        if (!warning_threshold_hit_bits.empty()) {
+            const auto warning = strprintf(_("Warning: Miners are attempting to activate unknown new rules (bit %s)! You may or may not need to act to remain secure"), util::Join(warning_threshold_hit_bits, ", ", [](const uint8_t bit){ return util::ToString(int(bit)); }));
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_VBITS, warning, /*update=*/true);
+            warning_messages.push_back(warning);
+        }
+        if (warning_threshold_hit_int != -1) {
+            bilingual_str warning;
+            if (warning_threshold_hit_int == -2) {
+                warning = _("Warning: Unrecognised block versions are being mined! Unknown rules may or may not be in effect");
+            } else {
+                warning = strprintf(_("Warning: Unrecognised block version (0x%08x) is being mined! Unknown rules may or may not be in effect"), warning_threshold_hit_int);
+            }
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_INTVER, warning, /*update=*/true);
+            warning_messages.push_back(warning);
+        }
     }
+
+    static constexpr int32_t BIP320_MASK = 0x1fffe000UL;
+    if ((pindexNew->nVersion & BIP320_MASK) && pindexNew->nVersion != m_chainman.m_versionbitscache.ComputeBlockVersion(pindexNew->pprev, m_chainman.GetConsensus())) {
+        const auto warning = _("Miner violated version bit protocol");
+        warning_messages.push_back(warning);
+    }
+
     UpdateTipLog(m_chainman, coins_tip, pindexNew, __func__, "",
                  util::Join(warning_messages, Untranslated(", ")).original);
 }
@@ -3219,13 +3285,14 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
              Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
 
     {
-        // Prune locks that began at or after the tip should be moved backward so they get a chance to reorg
-        const int max_height_first{pindexDelete->nHeight - 1};
+        // Prune locks that began around the tip should be moved backward so they get a chance to reorg
+        const uint64_t max_height_first{static_cast<uint64_t>(pindexDelete->nHeight - 1)};
         for (auto& prune_lock : m_blockman.m_prune_locks) {
-            if (prune_lock.second.height_first <= max_height_first) continue;
+            if (prune_lock.second.height_first < max_height_first) continue;
 
-            prune_lock.second.height_first = max_height_first;
-            LogDebug(BCLog::PRUNE, "%s prune lock moved back to %d\n", prune_lock.first, max_height_first);
+            --prune_lock.second.height_first;
+            LogDebug(BCLog::PRUNE, "%s prune lock moved back to %d\n", prune_lock.first, prune_lock.second.height_first);
+            // NOTE: Don't need to write to db here, since it will get synced with the rest of the chainstate
         }
     }
 
@@ -4970,7 +5037,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
         }
         CBlock block;
         // check level 0: read from disk
-        if (!chainstate.m_blockman.ReadBlock(block, *pindex)) {
+        if (!chainstate.m_blockman.ReadBlock(block, *pindex, /*lowprio=*/true)) {
             LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
             return VerifyDBResult::CORRUPTED_BLOCK_DB;
         }
@@ -5036,7 +5103,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
             m_notifications.progress(_("Verifying blocks…"), percentageDone, false);
             pindex = chainstate.m_chain.Next(pindex);
             CBlock block;
-            if (!chainstate.m_blockman.ReadBlock(block, *pindex)) {
+            if (!chainstate.m_blockman.ReadBlock(block, *pindex, /*lowprio=*/true)) {
                 LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
@@ -5065,7 +5132,7 @@ bool Chainstate::RollforwardBlock(const CBlockIndex* pindex, CCoinsViewCache& in
     AssertLockHeld(cs_main);
     // TODO: merge with ConnectBlock
     CBlock block;
-    if (!m_blockman.ReadBlock(block, *pindex)) {
+    if (!m_blockman.ReadBlock(block, *pindex, /*lowprio=*/true)) {
         LogError("ReplayBlock(): ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
         return false;
     }
@@ -5126,7 +5193,7 @@ bool Chainstate::ReplayBlocks()
         while (pindexOld != pindexFork) {
             if (pindexOld->nHeight > 0) { // Never disconnect the genesis block.
                 CBlock block;
-                if (!m_blockman.ReadBlock(block, *pindexOld)) {
+                if (!m_blockman.ReadBlock(block, *pindexOld, /*lowprio=*/true)) {
                     LogError("RollbackBlock(): ReadBlock() failed at %d, hash=%s\n", pindexOld->nHeight, pindexOld->GetBlockHash().ToString());
                     return false;
                 }
@@ -5278,6 +5345,9 @@ void ChainstateManager::LoadExternalBlockFile(
 
     int nLoaded = 0;
     try {
+        IOPRIO_IDLER(/*lowprio=*/true);
+        file_in.SetIdlePriority();
+
         BufferedFile blkdat{file_in, 2 * MAX_BLOCK_SERIALIZED_SIZE, MAX_BLOCK_SERIALIZED_SIZE + 8};
         // nRewind indicates where to resume scanning in case something goes wrong,
         // such as a block fails to deserialize.
