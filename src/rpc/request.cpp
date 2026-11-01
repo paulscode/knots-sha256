@@ -115,6 +115,11 @@ GenerateAuthCookieResult GenerateAuthCookie(const std::pair<std::optional<fs::pe
     if (filepath_tmp.empty()) {
         return GenerateAuthCookieResult::DISABLED; // -norpccookiefile
     }
+    try {
+        fs::remove(filepath_tmp);
+    } catch (const fs::filesystem_error&) {
+        // ignore
+    }
     file.open(filepath_tmp.std_path());
     if (!file.is_open()) {
         LogWarning("Unable to open cookie authentication file %s for writing", fs::PathToString(filepath_tmp));
@@ -134,6 +139,11 @@ GenerateAuthCookieResult GenerateAuthCookie(const std::pair<std::optional<fs::pe
     file.close();
 
     fs::path filepath = GetAuthCookieFile(false);
+    try {
+        fs::remove(filepath);
+    } catch (const fs::filesystem_error&) {
+        // ignore
+    }
     if (!RenameOver(filepath_tmp, filepath)) {
         LogWarning("Unable to rename cookie authentication file %s to %s", fs::PathToString(filepath_tmp), fs::PathToString(filepath));
         return GenerateAuthCookieResult::ERR;
@@ -220,18 +230,8 @@ void JSONRPCRequest::parse(const UniValue& valRequest)
     m_json_version = JSONRPCVersion::V1_LEGACY;
     const UniValue& jsonrpc_version = request.find_value("jsonrpc");
     if (!jsonrpc_version.isNull()) {
-        if (!jsonrpc_version.isStr()) {
-            throw JSONRPCError(RPC_INVALID_REQUEST, "jsonrpc field must be a string");
-        }
-        // The "jsonrpc" key was added in the 2.0 spec, but some older documentation
-        // incorrectly included {"jsonrpc":"1.0"} in a request object, so we
-        // maintain that for backwards compatibility.
-        if (jsonrpc_version.get_str() == "1.0") {
-            m_json_version = JSONRPCVersion::V1_LEGACY;
-        } else if (jsonrpc_version.get_str() == "2.0") {
+        if (jsonrpc_version.isStr() && jsonrpc_version.get_str() == "2.0") {
             m_json_version = JSONRPCVersion::V2;
-        } else {
-            throw JSONRPCError(RPC_INVALID_REQUEST, "JSON-RPC version not supported");
         }
     }
 
