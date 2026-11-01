@@ -244,6 +244,12 @@ int64_t GetSigOpsAdjustedWeight(int64_t weight, int64_t sigop_cost, unsigned int
 
 static inline FeePerVSize ToFeePerVSize(FeePerWeight feerate) { return {feerate.fee, (feerate.size + WITNESS_SCALE_FACTOR - 1) / WITNESS_SCALE_FACTOR}; }
 
+/** Default for -rejectbpub */
+static constexpr bool DEFAULT_REJECT_BPUB{true};
+extern bool g_reject_bpub;
+/** Witness script bytes of the inputs that carry a BPUB stream. */
+size_t BPUBBytes(const CTransaction& tx);
+
 std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript, const CTxIn&);
 
 std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view);
