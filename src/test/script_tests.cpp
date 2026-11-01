@@ -2024,6 +2024,8 @@ BOOST_AUTO_TEST_CASE(script_DataCarrierBytes)
 
 BOOST_AUTO_TEST_CASE(script_DataCarrierBytes_unproven_pubkeys)
 {
+    const bool prev_unproven{g_datacarrier_unproven_pubkeys};
+    g_datacarrier_unproven_pubkeys = true;  // the counting under test is off by default (-datacarrierunprovenkeys)
     using zeros = std::vector<unsigned char>;
 
     // A key a signature is offered for is a spending condition, not data
@@ -2094,10 +2096,13 @@ BOOST_AUTO_TEST_CASE(script_DataCarrierBytes_unproven_pubkeys)
     BOOST_CHECK_EQUAL("0+171", DatacarrierBytesStr(CScript() << zeros(33) << zeros(33) << zeros(33)
                                                              << zeros(33) << zeros(33)
                                                              << OP_2DROP << OP_2DROP << OP_DROP));
+    g_datacarrier_unproven_pubkeys = prev_unproven;
 }
 
 BOOST_AUTO_TEST_CASE(script_DataCarrierBytes_odd_key_slots)
 {
+    const bool prev_unproven{g_datacarrier_unproven_pubkeys};
+    g_datacarrier_unproven_pubkeys = true;  // the counting under test is off by default (-datacarrierunprovenkeys)
     using zeros = std::vector<unsigned char>;
     const zeros key(33, 2);
     // 1-of-15 with the signing key last: consensus never examines the 14 slots before it, so they
@@ -2245,10 +2250,13 @@ BOOST_AUTO_TEST_CASE(script_DataCarrierBytes_odd_key_slots)
     // A script without OP_CHECKMULTISIG is not this rule's to judge
     BOOST_CHECK_EQUAL("0+0", DatacarrierBytesStr(CScript() << zeros(37) << zeros(37) << OP_EQUAL));
     BOOST_CHECK_EQUAL("0+0", DatacarrierBytesStr(CScript() << zeros(5) << zeros(5) << OP_EQUAL));
+    g_datacarrier_unproven_pubkeys = prev_unproven;
 }
 
 BOOST_AUTO_TEST_CASE(script_DataCarrierBytes_tapscript_unproven_pubkeys)
 {
+    const bool prev_unproven{g_datacarrier_unproven_pubkeys};
+    g_datacarrier_unproven_pubkeys = true;  // the counting under test is off by default (-datacarrierunprovenkeys)
     using zeros = std::vector<unsigned char>;
 
     // The same payload costs the same whichever way it is written. A 1-of-15 under P2WSH and
@@ -2349,6 +2357,7 @@ BOOST_AUTO_TEST_CASE(script_DataCarrierBytes_tapscript_unproven_pubkeys)
     BOOST_CHECK_EQUAL("0+496", DatacarrierBytesStr(CScript{stranded} << OP_2DROP << OP_2DROP << OP_2DROP
                                                                      << OP_2DROP << OP_2DROP << OP_2DROP
                                                                      << OP_2DROP << OP_DROP));
+    g_datacarrier_unproven_pubkeys = prev_unproven;
 }
 
 BOOST_AUTO_TEST_CASE(script_GetScriptForTransactionInput)

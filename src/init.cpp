@@ -718,6 +718,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                    strprintf("Relay and mine non-OP_RETURN datacarrier injection (default: %u)",
                              DEFAULT_ACCEPT_NON_STD_DATACARRIER),
                    ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-datacarrierunprovenkeys", strprintf("Count multisig public keys beyond ten per script that no signature can prove, and odd pushes in multisig key slots, as datacarrier bytes (default: %u)", DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-acceptnonstdtxn", strprintf("Relay and mine \"non-standard\" transactions (default: %u)", DEFAULT_ACCEPT_NON_STD_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-acceptunknownwitness",
                    strprintf("Relay transactions sending to unknown/future witness script versions (default: %u)", DEFAULT_ACCEPTUNKNOWNWITNESS),
@@ -1244,6 +1245,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     g_script_size_policy_limit = args.GetIntArg("-maxscriptsize", g_script_size_policy_limit);
 
     nBytesPerSigOp = args.GetIntArg("-bytespersigop", nBytesPerSigOp);
+    g_datacarrier_unproven_pubkeys = args.GetBoolArg("-datacarrierunprovenkeys", DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS);
     nBytesPerSigOpStrict = args.GetIntArg("-bytespersigopstrict", nBytesPerSigOpStrict);
 
     if (!g_wallet_init_interface.ParameterInteraction()) return false;

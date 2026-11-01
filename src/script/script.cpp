@@ -13,6 +13,8 @@
 #include <uint256.h>
 #include <util/hash_type.h>
 
+bool g_datacarrier_unproven_pubkeys{DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS};
+
 #include <algorithm>
 #include <string>
 
@@ -750,7 +752,9 @@ std::pair<size_t, size_t> CScript::DatacarrierBytes(const size_t remaining_outpu
             counted += it - data_began;
         }
     }
-    return {UnprovenPubkeyBytes(*this, witness), counted};
+    // Knots #422 has no switch of its own; ours keeps it off by default (-datacarrierunprovenkeys, decisions/0023):
+    // with -datacarriersize=42 it rejects multisig spends Knots (83) accepts.
+    return {g_datacarrier_unproven_pubkeys ? UnprovenPubkeyBytes(*this, witness) : 0, counted};
 }
 
 bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator end, opcodetype& opcodeRet, std::vector<unsigned char>* pvchRet)
