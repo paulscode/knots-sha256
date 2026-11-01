@@ -168,12 +168,14 @@ BASE_SCRIPTS = [
     'wallet_labels.py',
     'p2p_compactblocks.py',
     'p2p_compactblocks_blocksonly.py',
+    'p2p_compactblocks_extratxs.py',
     'wallet_hd.py',
     'wallet_blank.py',
     'wallet_keypool_topup.py',
     'wallet_fast_rescan.py',
     'wallet_gethdkeys.py',
     'wallet_createwalletdescriptor.py',
+    'feature_fee_estimates_persist.py',
     'interface_zmq.py',
     'rpc_invalid_address_message.py',
     'rpc_validateaddress.py',
@@ -182,6 +184,7 @@ BASE_SCRIPTS = [
     'mempool_resurrect.py',
     'wallet_sweepprivkeys.py',
     'wallet_txn_doublespend.py --mineblock',
+    'tool_cli_completion.py',
     'tool_bitcoin_chainstate.py',
     'tool_wallet.py',
     'tool_utils.py',
@@ -197,6 +200,7 @@ BASE_SCRIPTS = [
     'mempool_reorg.py',
     'p2p_block_sync.py --v1transport',
     'p2p_block_sync.py --v2transport',
+    'p2p_block_times.py',
     'wallet_createwallet.py --usecli',
     'wallet_createwallet.py',
     'wallet_reindex.py',
@@ -210,6 +214,7 @@ BASE_SCRIPTS = [
     'interface_usdt_validation.py',
     'rpc_users.py',
     'rpc_whitelist.py',
+    'rpc_getrpcwhitelist.py',
     'feature_proxy.py',
     'wallet_signrawtransactionwithwallet.py',
     'rpc_signrawtransactionwithkey.py',
@@ -290,7 +295,9 @@ BASE_SCRIPTS = [
     'p2p_addr_selfannouncement.py',
     'mempool_fee_histogram.py',
     'mempool_expiry.py',
+    'rpc_sort_multisig.py',
     'wallet_importdescriptors.py',
+    'wallet_importseed.py',
     'wallet_crosschain.py',
     'mining_basic.py',
     'mining_mainnet.py',
@@ -342,10 +349,12 @@ BASE_SCRIPTS = [
     'feature_chain_tiebreaks.py',
     'feature_fastprune.py',
     'feature_framework_miniwallet.py',
+    'feature_sync_coins_tip_after_chain_sync.py',
     'mempool_unbroadcast.py',
     'mempool_compatibility.py',
     'mempool_accept_wtxid.py',
     'mempool_dust.py',
+    'mempool_subdust_fee_penalty.py',
     'mempool_sigoplimit.py',
     'rpc_deriveaddresses.py',
     'rpc_deriveaddresses.py --usecli',
@@ -380,6 +389,7 @@ BASE_SCRIPTS = [
     'feature_settings.py',
     'rpc_getdescriptorinfo.py',
     'rpc_gettxspendingprevout.py',
+    'rpc_getgeneralinfo.py',
     'rpc_help.py',
     'feature_framework_testshell.py',
     'tool_rpcauth.py',
@@ -705,7 +715,6 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
     if not os.listdir(tmpdir):
         os.rmdir(tmpdir)
 
-    all_passed = all_passed and coverage_passed
 
     # Clean up dangling processes if any. This may only happen with --failfast option.
     # Killing the process group will also terminate the current process but that is

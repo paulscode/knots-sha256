@@ -18,12 +18,14 @@
 #include <walletinitinterface.h>
 
 #include <algorithm>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using util::SplitString;
@@ -60,7 +62,7 @@ static void JSONErrorReply(HTTPRequest* req, UniValue objError, const JSONRPCReq
 
 //This function checks username and password against -rpcauth
 //entries from config file.
-static bool CheckUserAuthorized(std::string_view user, std::string_view pass)
+static bool CheckUserAuthorized(std::string_view user, std::string_view pass, std::string& out_wallet_restriction)
 {
     for (const auto& fields : g_rpcauth) {
         if (!TimingResistantEqual(std::string_view(fields[0]), user)) {
@@ -75,13 +77,14 @@ static bool CheckUserAuthorized(std::string_view user, std::string_view pass)
         std::string hash_from_pass = HexStr(out);
 
         if (TimingResistantEqual(hash_from_pass, hash)) {
+            out_wallet_restriction = (fields.size() > 3) ? fields[3] : "";
             return true;
         }
     }
     return false;
 }
 
-static bool RPCAuthorized(const std::string& strAuth, std::string& strAuthUsernameOut)
+static bool RPCAuthorized(const std::string& strAuth, std::string& strAuthUsernameOut, std::string& out_wallet_restriction)
 {
     if (!strAuth.starts_with("Basic "))
         return false;
@@ -98,7 +101,7 @@ static bool RPCAuthorized(const std::string& strAuth, std::string& strAuthUserna
     std::string user = strUserPass.substr(0, colon_pos);
     std::string pass = strUserPass.substr(colon_pos + 1);
     strAuthUsernameOut = user;
-    return CheckUserAuthorized(user, pass);
+    return CheckUserAuthorized(user, pass, out_wallet_restriction);
 }
 
 static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
@@ -119,7 +122,7 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
     JSONRPCRequest jreq;
     jreq.context = context;
     jreq.peerAddr = req->GetPeer().ToStringAddrPort();
-    if (!RPCAuthorized(authHeader.second, jreq.authUser)) {
+    if (!RPCAuthorized(authHeader.second, jreq.authUser, jreq.m_wallet_restriction)) {
         LogWarning("ThreadRPCServer incorrect password attempt from %s", jreq.peerAddr);
 
         /* Deter brute-forcing
@@ -255,7 +258,7 @@ static bool InitRPCAuthentication()
             cookie_perms = *perm_opt;
         }
 
-        switch (GenerateAuthCookie(cookie_perms, user, pass)) {
+        switch (GenerateAuthCookie(std::make_pair(cookie_perms, bool(cookie_perms_arg)), user, pass)) {
         case GenerateAuthCookieResult::ERR:
             return false;
         case GenerateAuthCookieResult::DISABLED:
@@ -287,18 +290,41 @@ static bool InitRPCAuthentication()
         g_rpcauth.push_back({user, salt, hash});
     }
 
-    if (!gArgs.GetArgs("-rpcauth").empty()) {
+    constexpr auto AddRPCAuth = [](const std::string& rpcauth) {
+        std::vector<std::string> fields{SplitString(rpcauth, ':')};
+        if (fields.size() < 2 || fields.size() > 3) {
+            return false;
+        }
+        const std::vector<std::string> salt_hmac{SplitString(fields[1], '$')};
+        if (salt_hmac.size() == 2) {
+            fields.erase(fields.begin() + 1);
+            fields.insert(fields.begin() + 1, salt_hmac.begin(), salt_hmac.end());
+            g_rpcauth.push_back(fields);
+        } else {
+            return false;
+        }
+        return true;
+    };
+    if (!(gArgs.IsArgNegated("-rpcauth") || (gArgs.GetArgs("-rpcauth").empty() && gArgs.GetArgs("-rpcauthfile").empty()))) {
         LogInfo("Using rpcauth authentication.\n");
         for (const std::string& rpcauth : gArgs.GetArgs("-rpcauth")) {
-            std::vector<std::string> fields{SplitString(rpcauth, ':')};
-            const std::vector<std::string> salt_hmac{SplitString(fields.back(), '$')};
-            if (fields.size() == 2 && salt_hmac.size() == 2) {
-                fields.pop_back();
-                fields.insert(fields.end(), salt_hmac.begin(), salt_hmac.end());
-                g_rpcauth.push_back(fields);
-            } else {
+            if (rpcauth.empty()) continue;
+            if (!AddRPCAuth(rpcauth)) {
                 LogWarning("Invalid -rpcauth argument.");
                 return false;
+            }
+        }
+        for (const std::string& path : gArgs.GetArgs("-rpcauthfile")) {
+            std::ifstream file;
+            file.open(path);
+            if (!file.is_open()) continue;
+            std::string rpcauth;
+            size_t lineno = 0;
+            while (std::getline(file, rpcauth)) {
+                ++lineno;
+                if (!AddRPCAuth(rpcauth)) {
+                    LogWarning("Invalid line %s in -rpcauthfile=%s; ignoring", lineno, path);
+                }
             }
         }
     }
@@ -356,4 +382,21 @@ void StopHTTPRPC()
     if (g_wallet_init_interface.HasWalletSupport()) {
         UnregisterHTTPHandler("/wallet/", false);
     }
+}
+
+std::set<std::string> GetWhitelistedRpcs(const std::string& user_name)
+{
+    if (auto it = g_rpc_whitelist.find(user_name); it != g_rpc_whitelist.end()) {
+        return it->second;
+    }
+    if (g_rpc_whitelist_default) {
+        return std::set<std::string>();
+    }
+
+    // Build a list of every method
+    std::set<std::string> allowed_methods;
+    for (const auto& method_name : tableRPC.listCommands()) {
+        allowed_methods.insert(method_name);
+    }
+    return allowed_methods;
 }

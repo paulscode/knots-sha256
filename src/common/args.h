@@ -26,6 +26,7 @@ class ArgsManager;
 
 extern const char * const BITCOIN_CONF_FILENAME;
 extern const char * const BITCOIN_SETTINGS_FILENAME;
+extern const char * const BITCOIN_RW_CONF_FILENAME;
 
 // Return true if -datadir option points to a valid directory or is not specified.
 bool CheckDataDirOption(const ArgsManager& args);
@@ -66,6 +67,7 @@ enum class OptionsCategory {
     REGISTER_COMMANDS,
     CLI_COMMANDS,
     IPC,
+    STATS,
 
     HIDDEN // Always the last option to avoid printing these in the help
 };
@@ -100,6 +102,8 @@ std::optional<int64_t> SettingToFixedPoint(const common::SettingsValue&, int dec
 
 bool SettingToBool(const common::SettingsValue&, bool);
 std::optional<bool> SettingToBool(const common::SettingsValue&);
+
+void ModifyRWConfigStream(std::istream& stream_in, std::ostream& stream_out, const std::map<std::string, std::string>& settings_to_change);
 
 class ArgsManager
 {
@@ -147,11 +151,12 @@ protected:
     bool m_accept_any_command GUARDED_BY(cs_args){true};
     std::list<SectionInfo> m_config_sections GUARDED_BY(cs_args);
     std::optional<fs::path> m_config_path GUARDED_BY(cs_args);
+    mutable std::optional<fs::path> m_rwconf_path GUARDED_BY(cs_args);
     mutable fs::path m_cached_blocks_path GUARDED_BY(cs_args);
     mutable fs::path m_cached_datadir_path GUARDED_BY(cs_args);
     mutable fs::path m_cached_network_datadir_path GUARDED_BY(cs_args);
 
-    [[nodiscard]] bool ReadConfigStream(std::istream& stream, const std::string& filepath, std::string& error, bool ignore_invalid_keys = false);
+    [[nodiscard]] bool ReadConfigStream(std::istream& stream, const std::string& filepath, std::string& error, bool ignore_invalid_keys = false, std::map<std::string, std::vector<common::SettingsValue>>* settings_target = nullptr);
 
     /**
      * Returns true if settings values from the default section should be used,
@@ -190,7 +195,13 @@ protected:
      */
     fs::path GetConfigFilePath() const;
     void SetConfigFilePath(fs::path);
+    fs::path GetRWConfigFilePath() const;
     [[nodiscard]] bool ReadConfigFiles(std::string& error, bool ignore_invalid_keys = false);
+
+    void ModifyRWConfigFile(const std::map<std::string, std::string>& settings_to_change);
+    void ModifyRWConfigFile(const std::string& setting_to_change, const std::string& new_value);
+    //! Move bitcoin_rw.conf aside to bitcoin_rw.conf.reset. Returns false (and keeps the file) if that fails.
+    bool EraseRWConfigFile();
 
     /**
      * Log warnings for options in m_section_only_args when
@@ -347,7 +358,9 @@ protected:
 
     // Forces an arg setting. Called by SoftSetArg() if the arg hasn't already
     // been set. Also called directly in testing.
-    void ForceSetArg(const std::string& strArg, const std::string& strValue);
+    void ForceSetArg(const std::string& arg, const std::string& value);
+    void ForceSetArg(const std::string& arg, int64_t value);
+    void ForceSetArgV(const std::string& arg, const common::SettingsValue& value);
 
     /**
      * Returns the appropriate chain type from the program arguments.
@@ -376,7 +389,7 @@ protected:
     /**
      * Add many hidden arguments
      */
-    void AddHiddenArgs(const std::vector<std::string>& args);
+    void AddHiddenArgs(const std::vector<std::string>& args, unsigned int flags = ArgsManager::ALLOW_ANY);
 
     /**
      * Clear available arguments

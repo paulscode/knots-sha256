@@ -224,6 +224,18 @@ def assert_array_result(object_array, to_match, expected, should_not_find=False)
     if num_matched > 0 and should_not_find:
         raise AssertionError("Objects were found %s" % (str(to_match)))
 
+def assert_scale(number, expected_scale=8):
+    """Assert number has expected scale, e.g. fractional digits; number of
+    digits after the decimal. The default of 8 corresponds to a Bitcoin amount."""
+    number = str(number)
+    mantissa = number.split('.')[-1].upper()
+    if mantissa[:3] == '0E-':
+        assert_equal(mantissa, '0E-{}'.format(expected_scale))  # zeros in exponent notation
+    elif mantissa == number:
+        assert_equal(0, expected_scale)  # no mantissa, ergo, expected scale must be 0
+    else:
+        assert_equal(len(mantissa), expected_scale)
+
 
 # Utility functions
 ###################
@@ -746,3 +758,13 @@ def wallet_importprivkey(wallet_rpc, privkey, timestamp, *, label=""):
     }]
     import_res = wallet_rpc.importdescriptors(req)
     assert_equal(import_res[0]["success"], True)
+
+def is_dir_writable(dir_path: pathlib.Path) -> bool:
+    """Return True if we can create a file in the directory, False otherwise"""
+    try:
+        tmp = dir_path / f".tmp_{random.randrange(1 << 32)}"
+        tmp.touch()
+        tmp.unlink()
+        return True
+    except OSError:
+        return False

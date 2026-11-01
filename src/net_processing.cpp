@@ -12,6 +12,7 @@
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <common/args.h>
 #include <common/bloom.h>
 #include <consensus/amount.h>
 #include <consensus/params.h>
@@ -537,7 +538,7 @@ public:
     /** Implement PeerManager */
     void StartScheduledTasks(CScheduler& scheduler) override;
     void CheckForStaleTipAndEvictPeers() override;
-    util::Expected<void, std::string> FetchBlock(NodeId peer_id, const CBlockIndex& block_index) override
+    util::Expected<void, std::string> FetchBlock(NodeId peer_id, const uint256& hash, const CBlockIndex* block_index) override
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     bool GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) const override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     std::vector<node::TxOrphanage::OrphanInfo> GetOrphanTransactions() override EXCLUSIVE_LOCKS_REQUIRED(!m_tx_download_mutex);
@@ -555,6 +556,7 @@ public:
     void UnitTestMisbehaving(NodeId peer_id) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex) { Misbehaving(*Assert(GetPeerRef(peer_id)), ""); };
     void UpdateLastBlockAnnounceTime(NodeId node, int64_t time_in_seconds) override;
     ServiceFlags GetDesirableServiceFlags(ServiceFlags services) const override;
+    int GetNumberOfPeersWithValidatedDownloads() const override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 private:
     void ProcessMessage(Peer& peer, CNode& pfrom, const std::string& msg_type, DataStream& vRecv, std::chrono::microseconds time_received,
@@ -891,6 +893,7 @@ private:
 
     /** Have we requested this block from a peer */
     bool IsBlockRequested(const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool IsBlockRequestedFromPeer(const uint256& hash, NodeId peer) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** Have we requested this block from an outbound peer */
     bool IsBlockRequestedFromOutbound(const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main, !m_peer_mutex);
@@ -1184,6 +1187,16 @@ std::chrono::microseconds PeerManagerImpl::NextInvToInbounds(std::chrono::micros
 bool PeerManagerImpl::IsBlockRequested(const uint256& hash)
 {
     return mapBlocksInFlight.contains(hash);
+}
+
+bool PeerManagerImpl::IsBlockRequestedFromPeer(const uint256& hash, NodeId peer)
+{
+    for (auto range = mapBlocksInFlight.equal_range(hash); range.first != range.second; range.first++) {
+        auto [nodeid, block_it] = range.first->second;
+        if (nodeid == peer) return true;
+    }
+
+    return false;
 }
 
 bool PeerManagerImpl::IsBlockRequestedFromOutbound(const uint256& hash)
@@ -1614,6 +1627,9 @@ void PeerManagerImpl::InitializeNode(const CNode& node, ServiceFlags our_service
     if (NetPermissions::HasFlag(node.m_permission_flags, NetPermissionFlags::BloomFilter)) {
         our_services = static_cast<ServiceFlags>(our_services | NODE_BLOOM);
     }
+    if (NetPermissions::HasFlag(node.m_permission_flags, NetPermissionFlags::BlockFilters)) {
+        our_services = static_cast<ServiceFlags>(our_services | NODE_COMPACT_FILTERS);
+    }
 
     PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn());
     {
@@ -1800,6 +1816,7 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
             if (queue.pindex)
                 stats.vHeightInFlight.push_back(queue.pindex->nHeight);
         }
+        stats.m_last_block_announcement = NodeSeconds{std::chrono::seconds{state->m_last_block_announcement}};
     }
 
     PeerRef peer = GetPeerRef(nodeid);
@@ -1884,6 +1901,12 @@ std::vector<CTransactionRef> PeerManagerImpl::AbortPrivateBroadcast(const uint25
     return removed_txs;
 }
 
+int PeerManagerImpl::GetNumberOfPeersWithValidatedDownloads() const
+{
+    AssertLockHeld(m_chainman.GetMutex());
+    return m_peers_downloading_from;
+}
+
 void PeerManagerImpl::AddToCompactExtraTransactions(const CTransactionRef& tx)
 {
     if (m_opts.max_extra_txs <= 0)
@@ -1907,10 +1930,23 @@ void PeerManagerImpl::Misbehaving(Peer& peer, const std::string& message)
     );
 }
 
+static void HandleDoSPunishment(CConnman& connman, NodeId node_id, const int nDoS, const char * const what_is_it) {
+    // We never actually DoS ban for invalid blocks, merely disconnect nodes if we're relying on them as a primary node
+    const std::string msg = strprintf("peer=%d got DoS score %d on invalid %s", node_id, nDoS, what_is_it);
+    connman.ForNode(node_id, [msg](CNode* node) {
+        if (node->PunishInvalidBlocks()) {
+            LogDebug(BCLog::NET, "%s; simply disconnecting\n", msg);
+            node->fDisconnect = true;
+        } else {
+            LogDebug(BCLog::NET, "%s; tolerating\n", msg);
+        }
+        return true;
+    });
+}
+
 void PeerManagerImpl::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidationState& state,
                                               bool via_compact_block, const std::string& message)
 {
-    PeerRef peer{GetPeerRef(nodeid)};
     switch (state.GetResult()) {
     case BlockValidationResult::BLOCK_RESULT_UNSET:
         break;
@@ -1922,7 +1958,7 @@ void PeerManagerImpl::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidati
     case BlockValidationResult::BLOCK_CONSENSUS:
     case BlockValidationResult::BLOCK_MUTATED:
         if (!via_compact_block) {
-            if (peer) Misbehaving(*peer, message);
+            HandleDoSPunishment(m_connman, nodeid, 100, "block");
             return;
         }
         break;
@@ -1930,19 +1966,19 @@ void PeerManagerImpl::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidati
         {
             // Discourage outbound (but not inbound) peers if on an invalid chain.
             // Exempt HB compact block peers. Manual connections are always protected from discouragement.
-            if (peer && !via_compact_block && !peer->m_is_inbound) {
-                if (peer) Misbehaving(*peer, message);
+            if (!via_compact_block) {
+                HandleDoSPunishment(m_connman, nodeid, 100, "block");
                 return;
             }
             break;
         }
     case BlockValidationResult::BLOCK_INVALID_HEADER:
     case BlockValidationResult::BLOCK_INVALID_PREV:
-        if (peer) Misbehaving(*peer, message);
+        HandleDoSPunishment(m_connman, nodeid, 100, "block header");
         return;
     // Conflicting (but not necessarily invalid) data or different policy:
     case BlockValidationResult::BLOCK_MISSING_PREV:
-        if (peer) Misbehaving(*peer, message);
+        HandleDoSPunishment(m_connman, nodeid, 100, "block header");
         return;
     case BlockValidationResult::BLOCK_TIME_FUTURE:
         break;
@@ -1961,7 +1997,7 @@ bool PeerManagerImpl::BlockRequestAllowed(const CBlockIndex& block_index)
            (GetBlockProofEquivalentTime(*m_chainman.m_best_header, block_index, *m_chainman.m_best_header, m_chainparams.GetConsensus()) < STALE_RELAY_AGE_LIMIT);
 }
 
-util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const CBlockIndex& block_index)
+util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const uint256& hash, const CBlockIndex* block_index)
 {
     if (m_chainman.m_blockman.LoadingBlocks()) return util::Unexpected{"Loading blocks ..."};
 
@@ -1974,14 +2010,18 @@ util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, co
 
     LOCK(cs_main);
 
+    if (IsBlockRequestedFromPeer(hash, peer_id)) return util::Unexpected{"Already requested from this peer"};
+
+    // Mark block as in-flight unless we don't have the header.
+    if (block_index != nullptr) {
     // Forget about all prior requests
-    RemoveBlockRequest(block_index.GetBlockHash(), std::nullopt);
+    RemoveBlockRequest(hash, std::nullopt);
 
     // Mark block as in-flight
-    if (!BlockRequested(peer_id, block_index)) return util::Unexpected{"Already requested from this peer"};
+        Assume(BlockRequested(peer_id, *block_index));
+    }
 
     // Construct message to request the block
-    const uint256& hash{block_index.GetBlockHash()};
     std::vector<CInv> invs{CInv(MSG_BLOCK | MSG_WITNESS_FLAG, hash)};
 
     // Send block request message to the peer
@@ -1995,6 +2035,12 @@ util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, co
     LogDebug(BCLog::NET, "Requesting block %s from peer=%d\n",
                  hash.ToString(), peer_id);
     return {};
+}
+
+util::Expected<void, std::string> PeerManager::FetchBlock(NodeId peer_id, const CBlockIndex& block_index)
+{
+    const uint256& hash{block_index.GetBlockHash()};
+    return FetchBlock(peer_id, hash, &block_index);
 }
 
 std::unique_ptr<PeerManager> PeerManager::make(CConnman& connman, AddrMan& addrman,
@@ -2383,7 +2429,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         }
         // disconnect node in case we have reached the outbound limit for serving historical blocks
         if (m_connman.OutboundTargetReached(true) &&
-            (((m_chainman.m_best_header != nullptr) && (m_chainman.m_best_header->GetBlockTime() - pindex->GetBlockTime() > HISTORICAL_BLOCK_AGE)) || inv.IsMsgFilteredBlk()) &&
+            (((m_chainman.m_best_header != nullptr) && (m_chainman.m_best_header->GetBlockTime() - pindex->GetBlockTime() > HISTORICAL_BLOCK_AGE)) || inv.IsMsgFilteredBlk() || inv.IsMsgFilteredWitnessBlk()) &&
             !pfrom.HasPermission(NetPermissionFlags::Download) // nodes with the download permission may exceed target
         ) {
             LogDebug(BCLog::NET, "historical block serving limit reached, %s\n", pfrom.DisconnectMsg(fLogIPs));
@@ -2415,7 +2461,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
     } else if (inv.IsMsgWitnessBlk()) {
         // Fast-path: in this case it is possible to serve the block directly from disk,
         // as the network format matches the format on disk
-        if (const auto block_data{m_chainman.m_blockman.ReadRawBlock(block_pos)}) {
+        if (const auto block_data{m_chainman.m_blockman.ReadRawBlock(block_pos, /*block_part=*/std::nullopt, /*lowprio=*/true)}) {
             MakeAndPushMessage(pfrom, NetMsgType::BLOCK, std::span{*block_data});
         } else {
             if (WITH_LOCK(m_chainman.GetMutex(), return m_chainman.m_blockman.IsBlockPruned(*pindex))) {
@@ -2430,7 +2476,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
     } else {
         // Send block from disk
         std::shared_ptr<CBlock> pblockRead = std::make_shared<CBlock>();
-        if (!m_chainman.m_blockman.ReadBlock(*pblockRead, block_pos, inv.hash)) {
+        if (!m_chainman.m_blockman.ReadBlock(*pblockRead, block_pos, inv.hash, /*lowprio=*/true)) {
             if (WITH_LOCK(m_chainman.GetMutex(), return m_chainman.m_blockman.IsBlockPruned(*pindex))) {
                 LogDebug(BCLog::NET, "Block was pruned before it could be read, %s\n", pfrom.DisconnectMsg(fLogIPs));
             } else {
@@ -2446,7 +2492,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
             MakeAndPushMessage(pfrom, NetMsgType::BLOCK, TX_NO_WITNESS(*pblock));
         } else if (inv.IsMsgWitnessBlk()) {
             MakeAndPushMessage(pfrom, NetMsgType::BLOCK, TX_WITH_WITNESS(*pblock));
-        } else if (inv.IsMsgFilteredBlk()) {
+        } else if (inv.IsMsgFilteredBlk() || inv.IsMsgFilteredWitnessBlk()) {
             bool sendMerkleBlock = false;
             CMerkleBlock merkleBlock;
             if (auto tx_relay = peer.GetTxRelay(); tx_relay != nullptr) {
@@ -2464,8 +2510,9 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
                 // they must either disconnect and retry or request the full block.
                 // Thus, the protocol spec specified allows for us to provide duplicate txn here,
                 // however we MUST always provide at least what the remote peer needs
+                const auto maybe_with_witness = (inv.IsMsgFilteredWitnessBlk() ? TX_WITH_WITNESS : TX_NO_WITNESS);
                 for (const auto& [tx_idx, _] : merkleBlock.vMatchedTxn)
-                    MakeAndPushMessage(pfrom, NetMsgType::TX, TX_NO_WITNESS(*pblock->vtx[tx_idx]));
+                    MakeAndPushMessage(pfrom, NetMsgType::TX, maybe_with_witness(*pblock->vtx[tx_idx]));
             }
             // else
             // no response
@@ -2677,6 +2724,10 @@ void PeerManagerImpl::HandleUnconnectingHeaders(CNode& pfrom, Peer& peer,
     // eventually get the headers - even from a different peer -
     // we can use this peer to download.
     WITH_LOCK(cs_main, UpdateBlockAvailability(pfrom.GetId(), headers.back().GetHash()));
+
+    if (pfrom.PunishInvalidBlocks()) {
+        pfrom.fDisconnect = true;
+    }
 }
 
 bool PeerManagerImpl::CheckHeadersAreContinuous(const std::vector<CBlockHeader>& headers) const
@@ -3647,7 +3698,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (!vRecv.empty()) {
             std::string strSubVer;
             vRecv >> LIMITED_STRING(strSubVer, MAX_SUBVERSION_LENGTH);
-            cleanSubVer = SanitizeString(strSubVer);
+            cleanSubVer = SanitizeString(strSubVer, SAFE_CHARS_PRINTABLE);
         }
         if (!vRecv.empty()) {
             vRecv >> starting_height;
@@ -3676,15 +3727,15 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // Change version
         const int greatest_common_version = std::min(nVersion, PROTOCOL_VERSION);
         pfrom.SetCommonVersion(greatest_common_version);
+        {
+            LOCK(pfrom.m_subver_mutex);
+            pfrom.cleanSubVer = cleanSubVer;
+        }
         pfrom.nVersion = nVersion;
 
         pfrom.m_has_all_wanted_services = HasAllDesirableServiceFlags(nServices);
         peer.m_their_services = nServices;
         pfrom.SetAddrLocal(addrMe);
-        {
-            LOCK(pfrom.m_subver_mutex);
-            pfrom.cleanSubVer = cleanSubVer;
-        }
         peer.m_starting_height = starting_height;
 
         // Only initialize the Peer::TxRelay m_relay_txs data structure if:
@@ -3706,7 +3757,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         const auto mapped_as{m_connman.GetMappedAS(pfrom.addr)};
         LogDebug(BCLog::NET, "receive version message: %s: version %d, blocks=%d, us=%s, txrelay=%d, peer=%d%s%s\n",
-                  cleanSubVer, pfrom.nVersion,
+                  SanitizeString(cleanSubVer, SAFE_CHARS_DEFAULT, true), pfrom.nVersion,
                   peer.m_starting_height, addrMe.ToStringAddrPort(), fRelay, pfrom.GetId(),
                   pfrom.LogIP(fLogIPs), (mapped_as ? strprintf(", mapped_as=%d", mapped_as) : ""));
 
@@ -4377,7 +4428,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         if (!block_pos.IsNull()) {
             CBlock block;
-            const bool ret{m_chainman.m_blockman.ReadBlock(block, block_pos, req.blockhash)};
+            const bool ret{m_chainman.m_blockman.ReadBlock(block, block_pos, req.blockhash, /*lowprio=*/true)};
             // If height is above MAX_BLOCKTXN_DEPTH then this block cannot get
             // pruned after we release cs_main above, so this read should never fail.
             assert(ret);
@@ -5644,6 +5695,7 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
 {
     if (m_opts.ignore_incoming_txs) return;
     if (pto.GetCommonVersion() < FEEFILTER_VERSION) return;
+    if (!gArgs.GetBoolArg("-feefilter", DEFAULT_FEEFILTER)) return;
     // peers with the forcerelay permission should not filter txs to us
     if (pto.HasPermission(NetPermissionFlags::ForceRelay)) return;
     // Don't send feefilter messages to outbound block-relay-only peers since they should never announce
@@ -5922,7 +5974,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
                         PushMessage(node, std::move(cached_cmpctblock_msg.value()));
                     } else {
                         CBlock block;
-                        const bool ret{m_chainman.m_blockman.ReadBlock(block, *pBestIndex)};
+                        const bool ret{m_chainman.m_blockman.ReadBlock(block, *pBestIndex, /*lowprio=*/true)};
                         assert(ret);
                         CBlockHeaderAndShortTxIDs cmpctblock{block, m_rng.rand64()};
                         MakeAndPushMessage(node, NetMsgType::CMPCTBLOCK, cmpctblock);

@@ -49,6 +49,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <boost/signals2/signal.hpp>
@@ -157,6 +158,7 @@ static constexpr uint64_t KNOWN_WALLET_FLAGS =
     |   WALLET_FLAG_EXTERNAL_SIGNER;
 
 static constexpr uint64_t MUTABLE_WALLET_FLAGS =
+        WALLET_FLAG_EXTERNAL_SIGNER |
         WALLET_FLAG_AVOID_REUSE;
 
 static const std::map<WalletFlags, std::string> WALLET_FLAG_TO_STRING{
@@ -245,6 +247,12 @@ struct CAddressBookData
      * non-change addresses by wallet transaction listing and fee bumping code.
      */
     std::optional<std::string> label;
+
+    /** Whether address is the destination of any wallet transation.
+     * Unlike other fields in address data struct, the used value is determined
+     * at runtime and not serialized as part of address data.
+     */
+    bool m_used{false};
 
     /**
      * Address purpose which was originally recorded for payment protocol
@@ -342,6 +350,9 @@ private:
     void AddToSpends(const COutPoint& outpoint, const Txid& txid) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     void AddToSpends(const CWalletTx& wtx) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
+    void InitialiseAddressBookUsed() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    void UpdateAddressBookUsed(const CWalletTx&) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+
     /**
      * Add a transaction to the wallet, or update it.  confirm.block_* should
      * be set when the transaction was known to be included in a block.  When
@@ -413,6 +424,13 @@ private:
      * that the wallet has scanned sequentially all blocks up to this one.
      */
     int m_last_block_processed_height GUARDED_BY(cs_wallet) = -1;
+
+    /**
+     * The following is used to track whether a confirmed transaction is in
+     * a block that background validation hasn't checked yet, or above the
+     * assume utxo snapshot height when background validation hasn't completed.
+     */
+    int m_background_validation_height GUARDED_BY(cs_wallet) = -1;
 
     std::map<OutputType, ScriptPubKeyMan*> m_external_spk_managers;
     std::map<OutputType, ScriptPubKeyMan*> m_internal_spk_managers;
@@ -545,6 +563,7 @@ public:
      * referenced in transaction, and might cause assert failures.
      */
     int GetTxDepthInMainChain(const CWalletTx& wtx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    bool IsTxAssumed(const CWalletTx& wtx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     /**
      * @return number of blocks to maturity for this transaction:
@@ -569,6 +588,8 @@ public:
     bool UnlockCoin(const COutPoint& output) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     bool UnlockAllCoins() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     void ListLockedCoins(std::vector<COutPoint>& vOutpts) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+
+    bool FindScriptPubKeyUsed(const std::set<CScript>& keys, const std::variant<std::monostate, std::function<void(const CWalletTx&)>, std::function<void(const CWalletTx&, uint32_t)>>& callback = std::monostate()) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     /*
      * Rescan abort properties
@@ -659,8 +680,8 @@ public:
     /** Fetch the inputs and sign with SIGHASH_ALL. */
     bool SignTransaction(CMutableTransaction& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     /** Sign the tx given the input coins and sighash. */
-    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const;
-    SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const;
+    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, std::optional<CAmount>* inputs_amount_sum = nullptr) const;
+    SigningResult SignMessage(const MessageSignatureFormat format, const std::string& message, const CTxDestination& address, std::string& str_sig) const;
 
     /**
      * Fills out a PSBT with information from the wallet. Fills in UTXOs if we have
@@ -744,7 +765,7 @@ public:
     int64_t m_keypool_size{DEFAULT_KEYPOOL_SIZE};
 
     /** Notify external script when a wallet transaction comes in or is updated (handled by -walletnotify) */
-    std::string m_notify_tx_changed_script;
+    std::vector<std::string> m_notify_tx_changed_scripts;
 
     size_t KeypoolCountExternalKeys() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     bool TopUpKeyPool(unsigned int kpSize = 0);
@@ -775,6 +796,11 @@ public:
     void ForEachAddrBookEntry(const ListAddrBookFunc& func) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     /**
+     * Determines if a destination is in the active spkm (not imported and not dumped for a new keypool)
+     */
+    [[nodiscard]] bool IsDestinationActive(const CTxDestination& dest) const;
+
+    /**
      * Marks all outputs in each one of the destinations dirty, so their cache is
      * reset and does not return outdated information.
      */
@@ -794,7 +820,8 @@ public:
     bool IsFromMe(const CTransaction& tx) const;
     CAmount GetDebit(const CTransaction& tx) const;
 
-    DBErrors PopulateWalletFromDB(bilingual_str& error, std::vector<bilingual_str>& warnings);
+    enum class do_init_used_flag { Init, Skip };
+    DBErrors PopulateWalletFromDB(bilingual_str& error, std::vector<bilingual_str>& warnings, const do_init_used_flag do_init_used_flag_val = do_init_used_flag::Init);
 
     /** Erases the provided transactions from the wallet. */
     util::Result<void> RemoveTxs(std::vector<Txid>& txs_to_remove) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
@@ -840,6 +867,9 @@ public:
      * @note called with lock cs_wallet held.
      */
     boost::signals2::signal<void(const Txid& hashTx, ChangeType status)> NotifyTransactionChanged;
+
+    static boost::signals2::signal<void (const CTransactionRef &ptxn,
+                                  const uint256 &blockHash)> TransactionAddedToWallet;
 
     /** Show progress e.g. for rescan */
     boost::signals2::signal<void (const std::string &title, int nProgress)> ShowProgress;
@@ -999,6 +1029,12 @@ public:
     void SetLastBlockProcessed(int block_height, uint256 block_hash) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     /** Write the current best block to database */
     void WriteBestBlock() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    /** Height of background validation. Returns -1 if there is no background validation. */
+    int GetBackgroundValidationHeight() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
+    {
+        AssertLockHeld(cs_wallet);
+        return m_background_validation_height;
+    };
 
     //! Connect the signals from ScriptPubKeyMans to the signals in CWallet
     void ConnectScriptPubKeyManNotifiers();

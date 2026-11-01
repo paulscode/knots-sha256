@@ -40,6 +40,7 @@ struct ChainstateRole;
 } // namespace kernel
 namespace node {
 struct NodeContext;
+struct PruneLockInfo;
 } // namespace node
 
 namespace interfaces {
@@ -131,6 +132,10 @@ public:
     //! Check that the block is available on disk (i.e. has not been
     //! pruned), and contains transactions.
     virtual bool haveBlockOnDisk(int height) = 0;
+
+    virtual bool pruneLockExists(const std::string& name) const = 0;
+    virtual bool updatePruneLock(const std::string& name, const node::PruneLockInfo& lock_info, bool sync=false) = 0;
+    virtual bool deletePruneLock(const std::string& name) = 0;
 
     //! Return height of the highest block on chain in common with the locator,
     //! which will either be the original block used to create the locator,
@@ -298,6 +303,9 @@ public:
 
     //! Send init error.
     virtual void initError(const bilingual_str& message) = 0;
+
+    //! Ask init question.
+    virtual bool initQuestion(const bilingual_str& message, const bilingual_str& non_interactive_message, unsigned int style) = 0;
 
     //! Send progress indicator.
     virtual void showProgress(const std::string& title, int progress, bool resume_possible) = 0;

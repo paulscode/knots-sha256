@@ -43,6 +43,7 @@
 #include <script/script.h>
 #include <script/sigcache.h>
 #include <signet.h>
+#include <stats/stats.h>
 #include <tinyformat.h>
 #include <txdb.h>
 #include <txmempool.h>
@@ -52,9 +53,11 @@
 #include <util/fs.h>
 #include <util/fs_helpers.h>
 #include <util/hasher.h>
+#include <util/ioprio.h>
 #include <util/log.h>
 #include <util/mempressure.h>
 #include <util/moneystr.h>
+#include <util/overflow.h>
 #include <util/rbf.h>
 #include <util/result.h>
 #include <util/signalinterrupt.h>
@@ -106,12 +109,6 @@ const std::vector<std::string> CHECKLEVEL_DOC {
     "level 4 tries to reconnect the blocks",
     "each level includes the checks of the previous levels",
 };
-/** The number of blocks to keep below the deepest prune lock.
- *  There is nothing special about this number. It is higher than what we
- *  expect to see in regular mainnet reorgs, but not so high that it would
- *  noticeably interfere with the pruning mechanism.
- * */
-static constexpr int PRUNE_LOCK_BUFFER{10};
 
 // Return whether the completed full flush should compact chainstate
 static bool ShouldCompactChainstate(bool in_ibd)
@@ -1083,6 +1080,21 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     ws.m_vsize = ws.m_tx_handle->GetTxSize();
 
+    // Reduce effective fee by dust threshold for each sub-dust output
+    if (m_pool.m_opts.subdustfeepenalty) {
+        CAmount dust_penalty{0};
+        for (const auto& txout : tx.vout) {
+            const CAmount dust_threshold = GetDustThreshold(txout, m_pool.m_opts.dust_relay_feerate);
+            if (txout.nValue < dust_threshold) {
+                dust_penalty = SaturatingAdd(dust_penalty, dust_threshold - txout.nValue);
+            }
+        }
+        if (dust_penalty > 0) {
+            m_subpackage.m_changeset->UpdateStagedModifiedFee(ws.m_tx_handle, -dust_penalty);
+            ws.m_modified_fees = SaturatingAdd(ws.m_modified_fees, -dust_penalty);
+        }
+    }
+
     // Enforces 0-fee for dust transactions, no incentive to be mined alone
     if (m_pool.m_opts.require_standard && !ignore_rejects.count("dust")) {
         if (!PreCheckEphemeralTx(*ptx, m_pool.m_opts.dust_relay_feerate, ws.m_base_fees, ws.m_modified_fees, state)) {
@@ -1664,6 +1676,10 @@ MempoolAcceptResult MemPoolAccept::AcceptSingleTransactionInternal(const CTransa
                  ws.m_modified_fees - m_subpackage.m_conflicting_fees,
                  ws.m_vsize - static_cast<int>(m_subpackage.m_conflicting_size));
     }
+
+    // update mempool stats cache
+    const CFeeRate min_fee_rate = std::max(m_pool.GetMinFee(), m_pool.m_opts.min_relay_feerate);
+    CStats::DefaultStats()->addMempoolSample(m_pool.size(), m_pool.DynamicMemoryUsage(), min_fee_rate.GetFeePerK());
 
     return MempoolAcceptResult::Success(std::move(m_subpackage.m_replaced_transactions), ws.m_vsize, ws.m_base_fees,
                                         effective_feerate, single_wtxid);
@@ -2756,7 +2772,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // for as long as `control`.
     std::vector<PrecomputedTransactionData> txsdata(block.vtx.size());
     std::optional<CCheckQueueControl<CScriptCheck>> control;
-    if (auto& queue = m_chainman.GetCheckQueue(); queue.HasThreads() && fScriptChecks) control.emplace(queue);
+    if (auto& queue = m_chainman.GetCheckQueue(); m_chainman.m_script_check_queue_enabled && queue.HasThreads() && fScriptChecks) control.emplace(queue);
 
     std::vector<int> prevheights;
     CAmount nFees = 0;
@@ -2964,21 +2980,6 @@ bool Chainstate::FlushStateToDisk(
             // make sure we don't prune above any of the prune locks bestblocks
             // pruning is height-based
             int last_prune{m_chain.Height()}; // last height we can prune
-            std::optional<std::string> limiting_lock; // prune lock that actually was the limiting factor, only used for logging
-
-            for (const auto& prune_lock : m_blockman.m_prune_locks) {
-                if (prune_lock.second.height_first == std::numeric_limits<int>::max()) continue;
-                // Remove the buffer and one additional block here to get actual height that is outside of the buffer
-                const int lock_height{prune_lock.second.height_first - PRUNE_LOCK_BUFFER - 1};
-                last_prune = std::max(1, std::min(last_prune, lock_height));
-                if (last_prune == lock_height) {
-                    limiting_lock = prune_lock.first;
-                }
-            }
-
-            if (limiting_lock) {
-                LogDebug(BCLog::PRUNE, "%s limited pruning to height %d\n", limiting_lock.value(), last_prune);
-            }
 
             if (nManualPruneHeight > 0) {
                 LOG_TIME_MILLIS_WITH_CATEGORY("find files to prune (manual)", BCLog::BENCH);
@@ -3162,14 +3163,72 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
     if (!m_chainman.IsInitialBlockDownload()) {
         auto bits = m_chainman.m_versionbitscache.CheckUnknownActivations(pindexNew, m_chainman.GetParams());
         for (auto [bit, active] : bits) {
-            const bilingual_str warning = strprintf(_("Unknown new rules activated (versionbit %i)"), bit);
-            if (active) {
+            // Knots: warn as soon as an unknown deployment is LOCKED_IN, not only once it is active
+            const bilingual_str warning = strprintf(_("WARNING: Unknown new rules activated (versionbit %i) - this software is not secure"), bit);
+            {
                 m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_ACTIVATED, warning);
-            } else {
                 warning_messages.push_back(warning);
             }
         }
+
+        // Check the version of the last 100 blocks to see if we need to upgrade:
+        const CBlockIndex* pindex = pindexNew;
+        int unexpected_bit_count[VERSIONBITS_NUM_BITS], nonversionbit_count = 0;
+        for (size_t i = 0; i < VERSIONBITS_NUM_BITS; ++i) unexpected_bit_count[i] = 0;
+        // NOTE: The warning_threshold_hit* variables are static to ensure the warnings persist even after the condition changes, until the node is restarted
+        static std::set<uint8_t> warning_threshold_hit_bits;
+        static int32_t warning_threshold_hit_int{-1};
+        for (int i = 0; i < 100 && pindex != nullptr; i++)
+        {
+            int32_t nExpectedVersion = m_chainman.m_versionbitscache.ComputeBlockVersion(pindex->pprev, m_chainman.GetConsensus());
+            if (pindex->nVersion <= VERSIONBITS_LAST_OLD_BLOCK_VERSION) {
+                // We don't care
+            } else if ((pindex->nVersion & VERSIONBITS_TOP_MASK) != VERSIONBITS_TOP_BITS) {
+                // Non-versionbits upgrade
+                static constexpr int WARNING_THRESHOLD = 100/2;
+                if (++nonversionbit_count > WARNING_THRESHOLD) {
+                    if (warning_threshold_hit_int == -1) {
+                        warning_threshold_hit_int = pindex->nVersion;
+                    } else if (warning_threshold_hit_int != pindex->nVersion) {
+                        warning_threshold_hit_int = -2;
+                    }
+                }
+            } else if ((pindex->nVersion & ~nExpectedVersion) != 0) {
+                for (int bit = 0; bit < VERSIONBITS_NUM_BITS; ++bit) {
+                    const int32_t mask = 1 << bit;
+                    if ((pindex->nVersion & mask) && !(nExpectedVersion & mask)) {
+                        const int warning_threshold = (bit > 12 ? 75 : 50);
+                        if (++unexpected_bit_count[bit] > warning_threshold) {
+                            warning_threshold_hit_bits.insert(bit);
+                        }
+                    }
+                }
+            }
+            pindex = pindex->pprev;
+        }
+        if (!warning_threshold_hit_bits.empty()) {
+            const auto warning = strprintf(_("Warning: Miners are attempting to activate unknown new rules (bit %s)! You may or may not need to act to remain secure"), util::Join(warning_threshold_hit_bits, ", ", [](const uint8_t bit){ return util::ToString(int(bit)); }));
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_VBITS, warning, /*update=*/true);
+            warning_messages.push_back(warning);
+        }
+        if (warning_threshold_hit_int != -1) {
+            bilingual_str warning;
+            if (warning_threshold_hit_int == -2) {
+                warning = _("Warning: Unrecognised block versions are being mined! Unknown rules may or may not be in effect");
+            } else {
+                warning = strprintf(_("Warning: Unrecognised block version (0x%08x) is being mined! Unknown rules may or may not be in effect"), warning_threshold_hit_int);
+            }
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_INTVER, warning, /*update=*/true);
+            warning_messages.push_back(warning);
+        }
     }
+
+    static constexpr int32_t BIP320_MASK = 0x1fffe000UL;
+    if ((pindexNew->nVersion & BIP320_MASK) && pindexNew->nVersion != m_chainman.m_versionbitscache.ComputeBlockVersion(pindexNew->pprev, m_chainman.GetConsensus())) {
+        const auto warning = _("Miner violated version bit protocol");
+        warning_messages.push_back(warning);
+    }
+
     UpdateTipLog(m_chainman, coins_tip, pindexNew, __func__, "",
                  util::Join(warning_messages, Untranslated(", ")).original);
 }
@@ -3214,13 +3273,14 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
              Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
 
     {
-        // Prune locks that began at or after the tip should be moved backward so they get a chance to reorg
-        const int max_height_first{pindexDelete->nHeight - 1};
+        // Prune locks that began around the tip should be moved backward so they get a chance to reorg
+        const uint64_t max_height_first{static_cast<uint64_t>(pindexDelete->nHeight - 1)};
         for (auto& prune_lock : m_blockman.m_prune_locks) {
-            if (prune_lock.second.height_first <= max_height_first) continue;
+            if (prune_lock.second.height_first < max_height_first) continue;
 
-            prune_lock.second.height_first = max_height_first;
-            LogDebug(BCLog::PRUNE, "%s prune lock moved back to %d\n", prune_lock.first, max_height_first);
+            --prune_lock.second.height_first;
+            LogDebug(BCLog::PRUNE, "%s prune lock moved back to %d\n", prune_lock.first, prune_lock.second.height_first);
+            // NOTE: Don't need to write to db here, since it will get synced with the rest of the chainstate
         }
     }
 
@@ -3246,6 +3306,13 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     if (m_chainman.m_options.signals) {
         m_chainman.m_options.signals->BlockDisconnected(pblock, pindexDelete);
     }
+
+    if (m_mempool) {
+        // add mempool stats sample
+        const CFeeRate min_fee_rate = std::max(m_mempool->GetMinFee(), m_mempool->m_opts.min_relay_feerate);
+        CStats::DefaultStats()->addMempoolSample(m_mempool->size(), m_mempool->DynamicMemoryUsage(), min_fee_rate.GetFeePerK());
+    }
+
     return true;
 }
 
@@ -3371,6 +3438,12 @@ bool Chainstate::ConnectTip(
     m_chain.SetTip(*pindexNew);
     m_chainman.UpdateIBDStatus();
     UpdateTip(pindexNew);
+
+    if (m_mempool) {
+        // add mempool stats sample
+        const CFeeRate min_fee_rate = std::max(m_mempool->GetMinFee(), m_mempool->m_opts.min_relay_feerate);
+        CStats::DefaultStats()->addMempoolSample(m_mempool->size(), m_mempool->DynamicMemoryUsage(), min_fee_rate.GetFeePerK());
+    }
 
     const auto time_6{SteadyClock::now()};
     m_chainman.time_post_connect += time_6 - time_5;
@@ -4952,7 +5025,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
         }
         CBlock block;
         // check level 0: read from disk
-        if (!chainstate.m_blockman.ReadBlock(block, *pindex)) {
+        if (!chainstate.m_blockman.ReadBlock(block, *pindex, /*lowprio=*/true)) {
             LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
             return VerifyDBResult::CORRUPTED_BLOCK_DB;
         }
@@ -5018,7 +5091,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
             m_notifications.progress(_("Verifying blocks…"), percentageDone, false);
             pindex = chainstate.m_chain.Next(pindex);
             CBlock block;
-            if (!chainstate.m_blockman.ReadBlock(block, *pindex)) {
+            if (!chainstate.m_blockman.ReadBlock(block, *pindex, /*lowprio=*/true)) {
                 LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
@@ -5047,7 +5120,7 @@ bool Chainstate::RollforwardBlock(const CBlockIndex* pindex, CCoinsViewCache& in
     AssertLockHeld(cs_main);
     // TODO: merge with ConnectBlock
     CBlock block;
-    if (!m_blockman.ReadBlock(block, *pindex)) {
+    if (!m_blockman.ReadBlock(block, *pindex, /*lowprio=*/true)) {
         LogError("ReplayBlock(): ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
         return false;
     }
@@ -5108,7 +5181,7 @@ bool Chainstate::ReplayBlocks()
         while (pindexOld != pindexFork) {
             if (pindexOld->nHeight > 0) { // Never disconnect the genesis block.
                 CBlock block;
-                if (!m_blockman.ReadBlock(block, *pindexOld)) {
+                if (!m_blockman.ReadBlock(block, *pindexOld, /*lowprio=*/true)) {
                     LogError("RollbackBlock(): ReadBlock() failed at %d, hash=%s\n", pindexOld->nHeight, pindexOld->GetBlockHash().ToString());
                     return false;
                 }
@@ -5260,6 +5333,9 @@ void ChainstateManager::LoadExternalBlockFile(
 
     int nLoaded = 0;
     try {
+        IOPRIO_IDLER(/*lowprio=*/true);
+        file_in.SetIdlePriority();
+
         BufferedFile blkdat{file_in, 2 * MAX_BLOCK_SERIALIZED_SIZE, MAX_BLOCK_SERIALIZED_SIZE + 8};
         // nRewind indicates where to resume scanning in case something goes wrong,
         // such as a block fails to deserialize.
