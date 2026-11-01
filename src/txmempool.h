@@ -654,7 +654,7 @@ public:
         /** Modify a staged (not yet applied) entry in place; Knots uses this to attach the scriptPubKey states. */
         template <typename Modifier>
         void ModifyEntry(TxHandle it, Modifier&& fn) { m_to_add.modify(it, std::forward<Modifier>(fn)); }
-        TxHandle StageAddition(const CTransactionRef& tx, CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int64_t sigops_cost, LockPoints lp);
+        TxHandle StageAddition(const CTransactionRef& tx, CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int32_t extra_weight, int64_t sigops_cost, LockPoints lp);
 
         void StageRemoval(CTxMemPool::txiter it);
 
