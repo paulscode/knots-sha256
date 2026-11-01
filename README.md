@@ -1,5 +1,15 @@
-Bitcoin Knots
+Bitcoin Knots SHA256
 =============
+
+<!-- ks:charter -->
+**Bitcoin Knots SHA256** is Bitcoin Knots' patch series maintained on top of Bitcoin Core for the SHA256 (Bitcoin) chain.
+Consensus is identical to Bitcoin Core: this node accepts every block Bitcoin Core accepts and rejects nothing Bitcoin
+Core accepts — Bitcoin Core is the system of record for consensus. What differs is *policy*: what the node relays and
+what it mines follow Bitcoin Knots' stricter defaults (spam filters, fee floors, conservative block templates). Every
+default has a one-flag override and `-corepolicy=1` restores Bitcoin Core's policy. Nothing from BIP110/RDTS or the
+BLAKE2b proof-of-work change is included, and this project will never propose a soft fork, hard fork, or leave the
+SHA256 chain.
+<!-- /ks:charter -->
 
 https://bitcoinknots.org
 
