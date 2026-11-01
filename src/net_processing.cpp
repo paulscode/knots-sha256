@@ -1858,6 +1858,7 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
         }
     }
     stats.time_offset = peer->m_time_offset;
+    stats.m_misbehavior_score = WITH_LOCK(peer->m_misbehavior_mutex, return peer->m_should_discourage) ? 100 : 0;
 
     return true;
 }
@@ -2064,11 +2065,12 @@ std::unique_ptr<PeerManager> PeerManager::make(CConnman& connman, AddrMan& addrm
     return std::make_unique<PeerManagerImpl>(connman, addrman, banman, chainman, pool, warnings, opts);
 }
 
+static_assert(CORE_INCREMENTAL_RELAY_FEE < DEFAULT_INCREMENTAL_RELAY_FEE, "Trinary logic for m_fee_filter_rounder is based on assumption that CORE_INCREMENTAL_RELAY_FEE is less than DEFAULT_INCREMENTAL_RELAY_FEE");
 PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                                  BanMan* banman, ChainstateManager& chainman,
                                  CTxMemPool& pool, node::Warnings& warnings, Options opts)
     : m_rng{opts.deterministic_rng},
-      m_fee_filter_rounder{CFeeRate{DEFAULT_MIN_RELAY_TX_FEE}, m_rng},
+      m_fee_filter_rounder{CFeeRate{pool.m_opts.incremental_relay_feerate.GetFeePerK() < DEFAULT_INCREMENTAL_RELAY_FEE ? CORE_INCREMENTAL_RELAY_FEE : DEFAULT_INCREMENTAL_RELAY_FEE}, m_rng},
       m_chainparams(chainman.GetParams()),
       m_connman(connman),
       m_addrman(addrman),

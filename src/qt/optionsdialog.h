@@ -13,8 +13,12 @@ class OptionsModel;
 class QValidatedLineEdit;
 
 QT_BEGIN_NAMESPACE
+class QBoxLayout;
 class QDataWidgetMapper;
 class QEvent;
+class QString;
+class QValueComboBox;
+class QWidget;
 QT_END_NAMESPACE
 
 namespace Ui {
@@ -84,6 +88,12 @@ private:
     ClientModel* m_client_model{nullptr};
     OptionsModel* model{nullptr};
     QDataWidgetMapper* mapper{nullptr};
+
+    QWidget *prevwidget{nullptr};
+    void FixTabOrder(QWidget *);
+    void CreateOptionUI(QBoxLayout *, QWidget *, const QString& text);
+
+    QValueComboBox *mempoolreplacement;
 };
 
 #endif // BITCOIN_QT_OPTIONSDIALOG_H
