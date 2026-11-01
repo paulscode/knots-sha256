@@ -145,6 +145,8 @@ endif()
 
 option(ENABLE_EXTERNAL_SIGNER "Enable external signer support." ON)
 
+option(ENABLE_TOR_SUBPROCESS "Enable support for executing a dedicated Tor node." ON)
+
 cmake_dependent_option(WITH_QRENCODE "Enable QR code support." ON "BUILD_GUI" OFF)
 if(WITH_QRENCODE)
   find_package(QRencode MODULE REQUIRED)
@@ -657,6 +659,7 @@ message("  kernel-test (experimental) .......... ${BUILD_KERNEL_TEST}")
 message("Optional features:")
 message("  wallet support ...................... ${ENABLE_WALLET}")
 message("  external signer ..................... ${ENABLE_EXTERNAL_SIGNER}")
+message("  tor subprocess ...................... ${ENABLE_TOR_SUBPROCESS}")
 message("  ZeroMQ .............................. ${WITH_ZMQ}")
 if(ENABLE_IPC)
   if (WITH_EXTERNAL_LIBMULTIPROCESS)
