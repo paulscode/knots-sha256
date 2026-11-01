@@ -1432,7 +1432,7 @@ bool CheckHostPortOptions(const ArgsManager& args) {
             if (!SplitHostPort(param_value_hostport, port_out, host_out)) {
 #ifdef HAVE_SOCKADDR_UN
                 // Allow unix domain sockets for some options e.g. unix:/some/file/path
-                if (!unix || !param_value.starts_with(ADDR_PREFIX_UNIX)) {
+                if (!unix || (!param_value.starts_with(ADDR_PREFIX_UNIX) && !param_value.starts_with("ipc:"))) {
                     return InitError(InvalidPortErrMsg(param_name, param_value));
                 }
 #else
