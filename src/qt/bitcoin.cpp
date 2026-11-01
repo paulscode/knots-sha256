@@ -242,7 +242,9 @@ bool BitcoinApplication::createOptionsModel(bool resetSettings)
 {
     optionsModel = new OptionsModel(node(), this);
     if (resetSettings) {
-        optionsModel->Reset();
+        if (!optionsModel->Reset()) {
+            QMessageBox::warning(nullptr, tr("Options reset"), tr("The settings file %1 could not be backed up, so it was kept and its settings still apply. See debug.log for details.").arg(GUIUtil::PathToQString(gArgs.GetRWConfigFilePath())));
+        }
     }
     bilingual_str error;
     if (!optionsModel->Init(error)) {
