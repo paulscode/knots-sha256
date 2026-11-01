@@ -914,7 +914,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << OP_RESERVED << -1 << 0 << "01"_hex << 2 << 3 << 4 << 5 << 6 << 7 << 8 << 9 << 10 << 11 << 12 << 13 << 14 << 15 << 16;
     CheckIsStandard(t);
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << 0 << "01"_hex << 2 << "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"_hex;
-    CheckIsStandard(t);
+    CheckIsStandard(t, /*max_op_return_relay=*/83);
 
     // ...so long as it only contains PUSHDATA's
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << OP_RETURN;
@@ -939,7 +939,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
 
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN;
-    CheckIsStandard(t);
+    CheckIsStandard(t, /*max_op_return_relay=*/1000);
 
     t.vout[0].scriptPubKey = CScript() << OP_RETURN;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN;
@@ -948,7 +948,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3804678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3804678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     const auto datacarrier_size = t.vout[0].scriptPubKey.size() + t.vout[1].scriptPubKey.size();
-    CheckIsNotStandard(t, "datacarrier"); // two full outputs exceed the 83-byte default
+    CheckIsNotStandard(t, "datacarrier"); // two full outputs exceed the 42-byte default
     CheckIsStandard(t, /*max_op_return_relay=*/datacarrier_size);
     CheckIsNotStandard(t, "datacarrier", /*max_op_return_relay=*/datacarrier_size-1);
     g_mempool_opts.datacarrier_multiple = DEFAULT_DATACARRIER_MULTIPLE;
@@ -957,11 +957,11 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     g_mempool_opts.permitbaredatacarrier = false;
     t.vout[1].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
     t.vout[1].nValue = COIN;
-    CheckIsStandard(t);
+    CheckIsStandard(t, /*max_op_return_relay=*/1000);
     t.vout.resize(1);
-    CheckIsNotStandard(t, "bare-datacarrier");
+    CheckIsNotStandard(t, "bare-datacarrier", /*max_op_return_relay=*/1000);
     g_mempool_opts.permitbaredatacarrier = true;
-    CheckIsStandard(t);
+    CheckIsStandard(t, /*max_op_return_relay=*/1000);
 
     // Check large scriptSig (non-standard if size is >1650 bytes)
     t.vout.resize(1);

@@ -905,6 +905,10 @@ void InitParameterInteraction(ArgsManager& args)
         args.SoftSetArg("-datacarriersize", "100000");
         args.SoftSetArg("-datacarriermultiple", "1");
         args.SoftSetArg("-rejectparasites", "0");
+        args.SoftSetArg("-rejecttokens", "0");
+        args.SoftSetArg("-rejectbpub", "0");  // Knots #463 has no -corepolicy reset; ours restores Core policy (P1)
+        args.SoftSetArg("-datacarrierunprovenkeys", "0");
+        args.SoftSetArg("-rejectdeadbranches", "0");  // Knots #400 resets it in its own -corepolicy block (P1)
         args.SoftSetArg("-subdustfeepenalty", "0");
         args.SoftSetArg("-datacarriercost", "0.25");
         args.SoftSetArg("-datacarrierfullcount", "0");
