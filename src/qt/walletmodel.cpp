@@ -10,6 +10,7 @@
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
 #include <qt/paymentserver.h>
+#include <qt/psbtoperationsdialog.h>
 #include <qt/recentrequeststablemodel.h>
 #include <qt/sendcoinsdialog.h>
 #include <qt/transactiontablemodel.h>
@@ -21,6 +22,7 @@
 #include <node/interface_ui.h>
 #include <node/types.h>
 #include <psbt.h>
+#include <util/rbf.h>
 #include <util/translation.h>
 #include <wallet/coincontrol.h>
 #include <wallet/types.h>
@@ -479,6 +481,8 @@ WalletModel::UnlockContext::~UnlockContext()
 
 bool WalletModel::bumpFee(Txid hash, Txid& new_hash)
 {
+    const CTransactionRef old_tx = m_wallet->getTx(hash);
+
     CCoinControl coin_control;
     coin_control.m_signal_bip125_rbf = true;
     std::vector<bilingual_str> errors;
@@ -493,27 +497,34 @@ bool WalletModel::bumpFee(Txid hash, Txid& new_hash)
 
     // allow a user based fee verification
     /*: Asks a user if they would like to manually increase the fee of a transaction that has already been created. */
+    const BitcoinUnit display_unit = getOptionsModel()->getDisplayUnit();
+    const QFont font_for_money = getOptionsModel()->getFontForMoney(display_unit);
     QString questionString = tr("Do you want to increase the fee?");
     questionString.append("<br />");
     questionString.append("<table style=\"text-align: left;\">");
     questionString.append("<tr><td>");
     questionString.append(tr("Current fee:"));
     questionString.append("</td><td>");
-    questionString.append(BitcoinUnits::formatHtmlWithUnit(getOptionsModel()->getDisplayUnit(), old_fee));
+    questionString.append(BitcoinUnits::formatHtmlWithUnit(font_for_money, display_unit, old_fee));
     questionString.append("</td></tr><tr><td>");
     questionString.append(tr("Increase:"));
     questionString.append("</td><td>");
-    questionString.append(BitcoinUnits::formatHtmlWithUnit(getOptionsModel()->getDisplayUnit(), new_fee - old_fee));
+    questionString.append(BitcoinUnits::formatHtmlWithUnit(font_for_money, display_unit, new_fee - old_fee));
     questionString.append("</td></tr><tr><td>");
     questionString.append(tr("New fee:"));
     questionString.append("</td><td>");
-    questionString.append(BitcoinUnits::formatHtmlWithUnit(getOptionsModel()->getDisplayUnit(), new_fee));
+    questionString.append(BitcoinUnits::formatHtmlWithUnit(font_for_money, display_unit, new_fee));
     questionString.append("</td></tr></table>");
 
     // Display warning in the "Confirm fee bump" window if the "Coin Control Features" option is enabled
     if (getOptionsModel()->getCoinControlFeatures()) {
         questionString.append("<br><br>");
         questionString.append(tr("Warning: This may pay the additional fee by reducing change outputs or adding inputs, when necessary. It may add a new change output if one does not already exist. These changes may potentially leak privacy."));
+    }
+
+    if (!SignalsOptInRBF(*old_tx)) {
+        questionString.append(QStringLiteral("<br><br>"));
+        questionString.append(tr("Warning: The old transaction did not enable BIP 125 replace-by-fee. You can still attempt to bump the fee, but it may encounter delays."));
     }
 
     const bool enable_send{!wallet().privateKeysDisabled() || wallet().hasExternalSigner()};
@@ -538,11 +549,16 @@ bool WalletModel::bumpFee(Txid hash, Txid& new_hash)
             QMessageBox::critical(nullptr, tr("Fee bump error"), tr("Can't draft transaction."));
             return false;
         }
+        auto dlg = new PSBTOperationsDialog(nullptr, this, m_client_model);
+        dlg->openWithPSBT(psbtx);
+        GUIUtil::ShowModalDialogAsynchronously(dlg, Qt::NonModal);
+#if 0
         // Serialize the PSBT
         DataStream ssTx{};
         ssTx << psbtx;
         GUIUtil::setClipboard(EncodeBase64(ssTx.str()).c_str());
         Q_EMIT message(tr("PSBT copied"), tr("Fee-bump PSBT copied to clipboard"), CClientUIInterface::MSG_INFORMATION | CClientUIInterface::MODAL);
+#endif
         return true;
     }
 

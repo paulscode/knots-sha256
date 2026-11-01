@@ -404,6 +404,10 @@ public:
     {
         return MakeSignalHandler(::uiInterface.NotifyNetworkActiveChanged_connect(fn));
     }
+    std::unique_ptr<Handler> handleNotifyNetworkLocalChanged(NotifyNetworkLocalChangedFn fn) override
+    {
+        return MakeSignalHandler(::uiInterface.NotifyNetworkLocalChanged_connect(fn));
+    }
     std::unique_ptr<Handler> handleNotifyAlertChanged(NotifyAlertChangedFn fn) override
     {
         return MakeSignalHandler(::uiInterface.NotifyAlertChanged_connect(fn));
@@ -798,6 +802,9 @@ public:
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }
     void initWarning(const bilingual_str& message) override { InitWarning(message); }
     void initError(const bilingual_str& message) override { InitError(message); }
+    bool initQuestion(const bilingual_str& message, const bilingual_str& non_interactive_message, unsigned int style) override {
+        return uiInterface.ThreadSafeQuestion(message, non_interactive_message.translated, style);
+    }
     void showProgress(const std::string& title, int progress, bool resume_possible) override
     {
         ::uiInterface.ShowProgress(title, progress, resume_possible);
@@ -892,7 +899,7 @@ class BlockTemplateImpl : public BlockTemplate
 {
 public:
     explicit BlockTemplateImpl(BlockAssembler::Options assemble_options,
-                               std::unique_ptr<CBlockTemplate> block_template,
+                               std::shared_ptr<CBlockTemplate> block_template,
                                NodeContext& node) : m_assemble_options(std::move(assemble_options)),
                                                     m_block_template(std::move(block_template)),
                                                     m_node(node)
@@ -938,7 +945,7 @@ public:
 
     std::unique_ptr<BlockTemplate> waitNext(BlockWaitOptions options) override
     {
-        auto new_template = WaitAndCreateNewBlock(chainman(), notifications(), m_node.mempool.get(), m_block_template, options, m_assemble_options, m_interrupt_wait);
+        auto new_template = WaitAndCreateNewBlock(chainman(), notifications(), m_node.mempool.get(), m_block_template, options, m_assemble_options, m_node, m_interrupt_wait);
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_assemble_options, std::move(new_template), m_node);
         return nullptr;
     }
@@ -950,7 +957,7 @@ public:
 
     const BlockAssembler::Options m_assemble_options;
 
-    const std::unique_ptr<CBlockTemplate> m_block_template;
+    const std::shared_ptr<CBlockTemplate> m_block_template;
 
     bool m_interrupt_wait{false};
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
@@ -985,13 +992,20 @@ public:
 
     std::unique_ptr<BlockTemplate> createNewBlock(const BlockCreateOptions& options, bool cooldown) override
     {
+        BlockAssembler::Options assemble_options{options};
+        ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
+        return createNewBlock2(assemble_options, cooldown);
+    }
+
+    std::unique_ptr<BlockTemplate> createNewBlock2(const BlockCreateOptions& assemble_options, bool cooldown) override
+    {
         // Reject too-small values instead of clamping so callers don't silently
         // end up mining with different options than requested. This matches the
         // behavior of the `-blockreservedweight` startup option, which rejects
         // values below MINIMUM_BLOCK_RESERVED_WEIGHT.
-        if (options.block_reserved_weight && options.block_reserved_weight < MINIMUM_BLOCK_RESERVED_WEIGHT) {
+        if (assemble_options.block_reserved_weight && assemble_options.block_reserved_weight < MINIMUM_BLOCK_RESERVED_WEIGHT) {
             throw std::runtime_error(strprintf("block_reserved_weight (%zu) must be at least %u weight units",
-                                               *options.block_reserved_weight,
+                                               *assemble_options.block_reserved_weight,
                                                MINIMUM_BLOCK_RESERVED_WEIGHT));
         }
 
@@ -1015,9 +1029,7 @@ public:
             if (!CooldownIfHeadersAhead(chainman(), notifications(), *maybe_tip, m_interrupt_mining)) return {};
         }
 
-        BlockAssembler::Options assemble_options{options};
-        ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
-        return std::make_unique<BlockTemplateImpl>(assemble_options, BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options}.CreateNewBlock(), m_node);
+        return std::make_unique<BlockTemplateImpl>(assemble_options, BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options, m_node}.CreateNewBlock(), m_node);
     }
 
     void interrupt() override

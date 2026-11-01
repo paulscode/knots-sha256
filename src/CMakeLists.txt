@@ -15,16 +15,20 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 # These need to be included before CMAKE_*_OUTPUT_DIRECTORY variables
 # are set, so output locations of subproject tests and libraries are
 # not overridden.
+if(NOT WITH_SYSTEM_LEVELDB)
 include(../cmake/crc32c.cmake)
 include(../cmake/leveldb.cmake)
-include(../cmake/minisketch.cmake)
+endif()  # WITH_SYSTEM_LEVELDB
+
 add_subdirectory(univalue)
 if (ENABLE_IPC AND NOT WITH_EXTERNAL_LIBMULTIPROCESS)
   include(../cmake/libmultiprocess.cmake)
   add_libmultiprocess(ipc/libmultiprocess)
 endif()
+if(NOT WITH_SYSTEM_LIBSECP256K1)
 include(../cmake/secp256k1.cmake)
 add_secp256k1(secp256k1)
+endif()  # WITH_SYSTEM_LIBSECP256K1
 
 # Set top-level target output locations.
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
@@ -91,6 +95,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   chain.cpp
   chainparams.cpp
   chainparamsbase.cpp
+  codex32.cpp
   coins.cpp
   common/args.cpp
   common/bloom.cpp
@@ -167,6 +172,7 @@ if(ENABLE_WALLET)
       bitcoin_wallet
       bitcoin_common
       bitcoin_util
+      univalue
       Boost::headers
     )
     install_binary_component(bitcoin-wallet HAS_MANPAGE)
@@ -228,7 +234,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/mempool_persist_args.cpp
   node/miner.cpp
   node/mini_miner.cpp
-  node/minisketchwrapper.cpp
   node/peerman_args.cpp
   node/psbt.cpp
   node/timeoffsets.cpp
@@ -284,7 +289,6 @@ target_link_libraries(bitcoin_node
     bitcoin_util
     $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>
     leveldb
-    minisketch
     univalue
     Boost::headers
     $<TARGET_NAME_IF_EXISTS:libevent::core>
@@ -398,6 +402,10 @@ if(BUILD_GUI)
   add_subdirectory(qt)
 endif()
 
+
+if(BUILD_BITCOINCONSENSUS_LIB)
+  add_subdirectory(consensus)
+endif()
 
 if(BUILD_KERNEL_LIB)
   add_subdirectory(kernel)

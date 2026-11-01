@@ -222,7 +222,7 @@ CService GetLocalAddress(const CNode& peer)
     return GetLocal(peer).value_or(CService{CNetAddr(), GetListenPort()});
 }
 
-static int GetnScore(const CService& addr)
+int GetnScore(const CService& addr)
 {
     LOCK(g_maplocalhost_mutex);
     const auto it = mapLocalHost.find(addr);
@@ -290,14 +290,20 @@ bool AddLocal(const CService& addr_, int nScore)
 
     LogInfo("AddLocal(%s,%i)\n", addr.ToStringAddrPort(), nScore);
 
+    bool fAlready;
     {
         LOCK(g_maplocalhost_mutex);
         const auto [it, is_newly_added] = mapLocalHost.emplace(addr, LocalServiceInfo());
+        fAlready = !is_newly_added;
         LocalServiceInfo &info = it->second;
         if (is_newly_added || nScore >= info.nScore) {
             info.nScore = nScore + (is_newly_added ? 0 : 1);
             info.nPort = addr.GetPort();
         }
+    }
+
+    if (!fAlready) {
+        uiInterface.NotifyNetworkLocalChanged();
     }
 
     return true;
@@ -310,9 +316,12 @@ bool AddLocal(const CNetAddr &addr, int nScore)
 
 void RemoveLocal(const CService& addr)
 {
-    LOCK(g_maplocalhost_mutex);
-    LogInfo("RemoveLocal(%s)\n", addr.ToStringAddrPort());
-    mapLocalHost.erase(addr);
+    {
+        LOCK(g_maplocalhost_mutex);
+        LogInfo("RemoveLocal(%s)\n", addr.ToStringAddrPort());
+        mapLocalHost.erase(addr);
+    }
+    uiInterface.NotifyNetworkLocalChanged();
 }
 
 /** vote for a local address */
@@ -321,7 +330,9 @@ bool SeenLocal(const CService& addr)
     LOCK(g_maplocalhost_mutex);
     const auto it = mapLocalHost.find(addr);
     if (it == mapLocalHost.end()) return false;
-    ++it->second.nScore;
+    if (it->second.nScore < std::numeric_limits<int>::max()) {
+        ++it->second.nScore;
+    }
     return true;
 }
 
@@ -652,6 +663,7 @@ void CNode::CopyStats(CNodeStats& stats)
         if (info.session_id) stats.m_session_id = HexStr(*info.session_id);
     }
     X(m_permission_flags);
+    X(m_forced_inbound);
 
     X(m_last_ping_time);
     X(m_min_ping_time);
@@ -661,6 +673,8 @@ void CNode::CopyStats(CNodeStats& stats)
     stats.addrLocal = addrLocalUnlocked.IsValid() ? addrLocalUnlocked.ToStringAddrPort() : "";
 
     X(m_conn_type);
+
+    X(m_cpu_time);
 }
 #undef X
 
@@ -1692,7 +1706,7 @@ std::pair<size_t, bool> CConnman::SocketSendData(CNode& node) const
  *   to forge.  In order to partition a node the attacker must be
  *   simultaneously better at all of them than honest peers.
  */
-bool CConnman::AttemptToEvictConnection()
+bool CConnman::AttemptToEvictConnection(bool force)
 {
     std::vector<NodeEvictionCandidate> vEvictionCandidates;
     {
@@ -1720,7 +1734,7 @@ bool CConnman::AttemptToEvictConnection()
             vEvictionCandidates.push_back(candidate);
         }
     }
-    const std::optional<NodeId> node_id_to_evict = SelectNodeToEvict(std::move(vEvictionCandidates));
+    const std::optional<NodeId> node_id_to_evict = SelectNodeToEvict(std::move(vEvictionCandidates), force);
     if (!node_id_to_evict) {
         return false;
     }
@@ -1842,13 +1856,19 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         return;
     }
 
+    bool forced{false};
     if (nInbound >= m_max_inbound)
     {
-        if (!AttemptToEvictConnection()) {
+        // If the inbound connection attempt is granted ForceInbound permission, try a little harder
+        // to make room by evicting a peer we may not have otherwise evicted.
+        if (!AttemptToEvictConnection(NetPermissions::HasFlag(permission_flags, NetPermissionFlags::ForceInbound))) {
             // No connection to evict, disconnect the new connection
             LogDebug(BCLog::NET, "failed to find an eviction candidate - connection dropped (full)\n");
             return;
         }
+
+        // We kicked someone out
+        forced = true;
     }
 
     NodeId id = GetNewNodeId();
@@ -1877,6 +1897,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
                              CNodeOptions{
                                  .permission_flags = permission_flags,
                                  .prefer_evict = discouraged,
+                                 .forced_inbound = forced,
                                  .recv_flood_size = nReceiveFloodSize,
                                  .use_v2transport = use_v2transport,
                              });
@@ -3214,6 +3235,8 @@ void CConnman::ThreadMessageHandler()
                 if (pnode->fDisconnect)
                     continue;
 
+                CpuTimer timer{[&pnode](std::chrono::nanoseconds elapsed) { pnode->m_cpu_time += elapsed; }};
+
                 // Receive messages
                 bool fMoreNodeWork{m_msgproc->ProcessMessages(*pnode, flagInterruptMsgProc)};
                 fMoreWork |= (fMoreNodeWork && !pnode->fPauseSend);
@@ -3525,7 +3548,29 @@ bool CConnman::InitBinds(const Options& options)
         inaddr_any.s_addr = htonl(INADDR_ANY);
         const CService ipv4_any{inaddr_any, GetListenPort()}; // 0.0.0.0
         if (!Bind(ipv4_any, BF_REPORT_ERROR, NetPermissionFlags::None)) {
-            return false;
+            int defaultPort = Params().GetDefaultPort();
+            // If listening failed and another port than the standard port was specified,
+            // ask if the user wants to connect via the standard port for the network instead
+            if (GetListenPort() != defaultPort) {
+                bool fRet = uiInterface.ThreadSafeQuestion(
+                    strprintf(_("Do you want to use the standard network port for %s (port %s) instead?"), CLIENT_NAME, defaultPort),
+                    strprintf(_("Listen on port %s failed."), GetListenPort()).translated,
+                    CClientUIInterface::MSG_INFORMATION | CClientUIInterface::MODAL | CClientUIInterface::BTN_OK | CClientUIInterface::BTN_ABORT);
+
+                if (fRet) {
+                    // FIXME: Unbind IPv6 on the other port
+
+                    gArgs.ForceSetArg("-port", defaultPort);
+                    // Attempt to use standard port
+                    struct in6_addr inaddr6_any = IN6ADDR_ANY_INIT;
+                    Bind(CService(inaddr6_any, defaultPort), BF_NONE, NetPermissionFlags::None);
+                    struct in_addr inaddr_any;
+                    inaddr_any.s_addr = INADDR_ANY;
+                    if (!Bind(CService(inaddr_any, defaultPort), BF_REPORT_ERROR, NetPermissionFlags::None)) {
+                        return false;
+                    }
+                }
+            }
         }
     }
     return true;
@@ -3806,12 +3851,17 @@ std::vector<CAddress> CConnman::GetAddresses(CNode& requestor, size_t max_addres
 
 bool CConnman::AddNode(const AddedNodeParams& add)
 {
-    const CService resolved(LookupNumeric(add.m_added_node, GetDefaultPort(add.m_added_node)));
-    const bool resolved_is_valid{resolved.IsValid()};
+    const CService resolved{MaybeFlipIPv6toCJDNS(LookupNumeric(add.m_added_node, GetDefaultPort(add.m_added_node)))};
+    const bool resolved_invalid{!resolved.IsValid()};
 
     LOCK(m_added_nodes_mutex);
     for (const auto& it : m_added_node_params) {
-        if (add.m_added_node == it.m_added_node || (resolved_is_valid && resolved == LookupNumeric(it.m_added_node, GetDefaultPort(it.m_added_node)))) return false;
+        if (add.m_added_node == it.m_added_node) return false;
+        if (resolved_invalid) continue;
+        const CService service{MaybeFlipIPv6toCJDNS(LookupNumeric(it.m_added_node, GetDefaultPort(it.m_added_node)))};
+        if (resolved == service) return false;
+        // Check if CJDNS address matches regardless of port to detect already-connected inbound peers.
+        if (resolved.IsCJDNS() && static_cast<CNetAddr>(resolved) == static_cast<CNetAddr>(service)) return false;
     }
 
     m_added_node_params.push_back(add);
@@ -4062,6 +4112,7 @@ CNode::CNode(NodeId idIn,
       m_dest(addrNameIn),
       m_inbound_onion{inbound_onion},
       m_prefer_evict{node_opts.prefer_evict},
+      m_forced_inbound{node_opts.forced_inbound},
       nKeyedNetGroup{nKeyedNetGroupIn},
       m_network_key{network_key},
       m_conn_type{conn_type_in},

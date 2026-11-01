@@ -1,0 +1,6 @@
+{
+  global:
+    bitcoinconsensus_*;
+  local:
+    *;
+};

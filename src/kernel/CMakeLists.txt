@@ -111,6 +111,7 @@ target_compile_definitions(bitcoinkernel
 target_link_libraries(bitcoinkernel
   PRIVATE
     core_interface
+    external_lib_interface
     kernel_warn_interface
     secp256k1_objs
     $<$<PLATFORM_ID:Windows>:bcrypt>

@@ -50,6 +50,7 @@ public:
         StartAtStartup,         // bool
         ShowTrayIcon,           // bool
         MinimizeToTray,         // bool
+        NetworkPort,            // int
         MapPortNatpmp,          // bool
         MinimizeOnClose,        // bool
         ProxyUse,               // bool
@@ -59,9 +60,12 @@ public:
         ProxyIPTor,             // QString
         ProxyPortTor,           // int
         DisplayUnit,            // BitcoinUnit
+        DisplayAddresses,       // bool
         ThirdPartyTxUrls,       // QString
         Language,               // QString
         FontForMoney,           // FontChoice
+        FontForQRCodes,         // FontChoice
+        PeersTabAlternatingRowColors, // bool
         CoinControlFeatures,    // bool
         SubFeeFromAmount,       // bool
         ThreadsScriptVerif,     // int
@@ -102,8 +106,11 @@ public:
     bool getMinimizeToTray() const { return fMinimizeToTray; }
     bool getMinimizeOnClose() const { return fMinimizeOnClose; }
     BitcoinUnit getDisplayUnit() const { return m_display_bitcoin_unit; }
+    bool getDisplayAddresses() const { return bDisplayAddresses; }
     QString getThirdPartyTxUrls() const { return strThirdPartyTxUrls; }
-    QFont getFontForMoney() const;
+    QFont getFontForMoney(BitcoinUnit) const;
+    FontChoice getFontChoiceForQRCodes() const { return m_font_qrcodes; }
+    bool getPeersTabAlternatingRowColors() const { return m_peers_tab_alternating_row_colors; }
     bool getCoinControlFeatures() const { return fCoinControlFeatures; }
     bool getSubFeeFromAmount() const { return m_sub_fee_from_amount; }
     bool getEnablePSBTControls() const { return m_enable_psbt_controls; }
@@ -129,8 +136,12 @@ private:
     bool fMinimizeOnClose;
     QString language;
     BitcoinUnit m_display_bitcoin_unit;
+    bool bDisplayAddresses;
     QString strThirdPartyTxUrls;
     FontChoice m_font_money{FontChoiceAbstract::EmbeddedFont};
+    bool m_font_money_supports_tonal;
+    FontChoice m_font_qrcodes{FontChoiceAbstract::EmbeddedFont};
+    bool m_peers_tab_alternating_row_colors;
     bool fCoinControlFeatures;
     bool m_sub_fee_from_amount;
     bool m_enable_psbt_controls;
@@ -153,6 +164,8 @@ Q_SIGNALS:
     void coinControlFeaturesChanged(bool);
     void showTrayIconChanged(bool);
     void fontForMoneyChanged(const QFont&);
+    void fontForQRCodesChanged(const FontChoice&);
+    void peersTabAlternatingRowColorsChanged(bool);
 };
 
 Q_DECLARE_METATYPE(OptionsModel::FontChoice)

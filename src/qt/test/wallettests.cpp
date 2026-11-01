@@ -15,6 +15,7 @@
 #include <qt/optionsmodel.h>
 #include <qt/overviewpage.h>
 #include <qt/platformstyle.h>
+#include <qt/psbtoperationsdialog.h>
 #include <qt/qvalidatedlineedit.h>
 #include <qt/receivecoinsdialog.h>
 #include <qt/receiverequestdialog.h>
@@ -163,10 +164,16 @@ void BumpFee(TransactionView& view, const Txid& txid, bool expectDisabled, std::
     QVERIFY(text.indexOf(QString::fromStdString(expectError)) != -1);
 }
 
-void CompareBalance(WalletModel& walletModel, CAmount expected_balance, QLabel* balance_label_to_check)
+void CompareBalance(WalletModel& walletModel, CAmount expected_balance, QLabel* balance_label_to_check, bool privacy = false)
 {
     BitcoinUnit unit = walletModel.getOptionsModel()->getDisplayUnit();
-    QString balanceComparison = BitcoinUnits::formatWithUnit(unit, expected_balance, false, BitcoinUnits::SeparatorStyle::ALWAYS);
+    QString balanceComparison;
+    if (privacy) {
+        balanceComparison = BitcoinUnits::formatWithPrivacy(unit, expected_balance, BitcoinUnits::SeparatorStyle::ALWAYS, false);
+    } else {
+        const QFont font_for_money = walletModel.getOptionsModel()->getFontForMoney(unit);
+        balanceComparison = BitcoinUnits::formatHtmlWithUnit(font_for_money, unit, expected_balance, false, BitcoinUnits::SeparatorStyle::ALWAYS);
+    }
     QCOMPARE(balance_label_to_check->text().trimmed(), balanceComparison);
 }
 
@@ -261,7 +268,7 @@ public:
     MiniGUI(interfaces::Node& node, const PlatformStyle* platformStyle) : sendCoinsDialog(platformStyle), transactionView(platformStyle), optionsModel(node) {
         bilingual_str error;
         QVERIFY(optionsModel.Init(error));
-        clientModel = std::make_unique<ClientModel>(node, &optionsModel);
+        clientModel = std::make_unique<ClientModel>(node, &optionsModel, *platformStyle);
     }
 
     void initModelForWallet(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet, const PlatformStyle* platformStyle)
@@ -270,6 +277,7 @@ public:
         AddWallet(context, wallet);
         walletModel = std::make_unique<WalletModel>(interfaces::MakeWallet(context, wallet), *clientModel, platformStyle);
         RemoveWallet(context, wallet, /* load_on_start= */ std::nullopt);
+        sendCoinsDialog.setClientModel(clientModel.get());
         sendCoinsDialog.setModel(walletModel.get());
         transactionView.setModel(walletModel.get());
     }
@@ -328,7 +336,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
     OverviewPage overviewPage(platformStyle.get());
     overviewPage.setWalletModel(&walletModel);
     walletModel.pollBalanceChanged(); // Manual balance polling update
-    CompareBalance(walletModel, walletModel.wallet().getBalance(), overviewPage.findChild<QLabel*>("labelBalance"));
+    CompareBalance(walletModel, walletModel.wallet().getBalance(), overviewPage.findChild<QLabel*>("labelBalance"), /*privacy=*/true);
 
     // Check Request Payment button
     ReceiveCoinsDialog receiveCoinsDialog(platformStyle.get());
@@ -364,7 +372,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
 
             QCOMPARE(uri.count("amount=0.00000001"), 2);
             QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("amount_tag")->text(), QString("Amount:"));
-            QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("amount_content")->text(), QString::fromStdString("0.00000001 " + CURRENCY_UNIT));
+            CompareBalance(walletModel, 1, receiveRequestDialog->QObject::findChild<QLabel*>("amount_content"));
 
             QCOMPARE(uri.count("label=TEST_LABEL_1"), 2);
             QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("label_tag")->text(), QString("Label:"));
@@ -452,6 +460,17 @@ void TestGUIWatchOnly(interfaces::Node& node, TestChain100Setup& test)
 
     // Send tx and verify PSBT copied to the clipboard.
     SendCoins(*wallet.get(), sendCoinsDialog, PKHash(), 5 * COIN, /*rbf=*/false, QMessageBox::Save);
+    auto psbt_dlg = []() -> PSBTOperationsDialog * {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (widget->inherits("PSBTOperationsDialog")) {
+                return qobject_cast<PSBTOperationsDialog*>(widget);
+            }
+        }
+        return nullptr;
+    }();
+    QVERIFY(psbt_dlg);
+    psbt_dlg->copyToClipboard();
+    psbt_dlg->close();
     const std::string& psbt_string = QApplication::clipboard()->text().toStdString();
     QVERIFY(!psbt_string.empty());
 

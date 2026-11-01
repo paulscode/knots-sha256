@@ -121,7 +121,9 @@ public:
     virtual std::optional<BlockRef> waitTipChanged(uint256 current_tip, MillisecondsDouble timeout = MillisecondsDouble::max()) = 0;
 
    /**
-     * Construct a new block template.
+     * Construct a new block template. For the createNewBlock variant, the block assembler fields of the options
+     * (nBlockMaxWeight, nBlockMaxSize, blockMinFeeRate, ...) are overridden by the config args; for createNewBlock2,
+     * the options are assumed to be complete and used as given.
      *
      * @param[in] options options for creating the block
      * @param[in] cooldown wait for tip to be connected and IBD to complete.
@@ -133,6 +135,7 @@ public:
      * @retval std::nullptr if the node is shut down or interrupt() is called.
      */
     virtual std::unique_ptr<BlockTemplate> createNewBlock(const node::BlockCreateOptions& options = {}, bool cooldown = true) = 0;
+    virtual std::unique_ptr<BlockTemplate> createNewBlock2(const node::BlockCreateOptions& assemble_options, bool cooldown = true) = 0;
 
     /**
      * Interrupts createNewBlock and waitTipChanged.

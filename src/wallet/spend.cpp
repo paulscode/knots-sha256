@@ -334,6 +334,7 @@ CoinsResult AvailableCoins(const CWallet& wallet,
     const int min_depth = {coinControl ? coinControl->m_min_depth : DEFAULT_MIN_DEPTH};
     const int max_depth = {coinControl ? coinControl->m_max_depth : DEFAULT_MAX_DEPTH};
     const bool only_safe = {coinControl ? !coinControl->m_include_unsafe_inputs : true};
+    const bool segwit_inputs_only = {coinControl ? coinControl->m_segwit_inputs_only : false};
     const bool can_grind_r = wallet.CanGrindR();
     std::vector<COutPoint> outpoints;
 
@@ -448,6 +449,16 @@ CoinsResult AvailableCoins(const CWallet& wallet,
         bool tx_from_me = CachedTxIsFromMe(wallet, wtx);
 
         std::unique_ptr<SigningProvider> provider = wallet.GetSolvingProvider(output.scriptPubKey);
+
+        if (segwit_inputs_only) {
+            if (provider) {
+                if (!IsSegWitOutput(*provider, output.scriptPubKey)) continue;
+            } else {
+                int witness_ver;
+                std::vector<unsigned char> witness_prog;
+                if (!output.scriptPubKey.IsWitnessProgram(witness_ver, witness_prog)) continue;
+            }
+        }
 
         int input_bytes = CalculateMaximumSignedInputSize(output, COutPoint(), provider.get(), can_grind_r, coinControl);
         // Because CalculateMaximumSignedInputSize infers a solvable descriptor to get the satisfaction size,
@@ -994,7 +1005,11 @@ static bool IsCurrentForAntiFeeSniping(interfaces::Chain& chain, const uint256& 
     return true;
 }
 
-void DiscourageFeeSniping(CMutableTransaction& tx, FastRandomContext& rng_fast,
+/**
+ * Set a height-based locktime for new transactions (uses the height of the
+ * current chain tip unless we are not synced with the current chain
+ */
+static void DiscourageFeeSniping(CMutableTransaction& tx, FastRandomContext& rng_fast,
                                  interfaces::Chain& chain, const uint256& block_hash, int block_height)
 {
     // All inputs must be added by now
@@ -1048,6 +1063,22 @@ void DiscourageFeeSniping(CMutableTransaction& tx, FastRandomContext& rng_fast,
         // The wallet does not support any other sequence-use right now.
         assert(false);
     }
+}
+
+void MaybeDiscourageFeeSniping2(const CWallet &wallet,
+                               CMutableTransaction& tx)
+{
+    for (const CTxIn& tx_in : tx.vin) {
+        // Checks sequence values consistent with DiscourageFeeSniping
+        if (tx_in.nSequence != CTxIn::MAX_SEQUENCE_NONFINAL && tx_in.nSequence != MAX_BIP125_RBF_SEQUENCE) {
+            // If an input has an incompatible sequence, we can't do anti-fee-sniping
+            return;
+        }
+    }
+
+    FastRandomContext rng_fast;
+    LOCK(wallet.cs_wallet);
+    DiscourageFeeSniping(tx, rng_fast, wallet.chain(), wallet.GetLastBlockHash(), wallet.GetLastBlockHeight());
 }
 
 uint64_t GetSerializeSizeForRecipient(const CRecipient& recipient)

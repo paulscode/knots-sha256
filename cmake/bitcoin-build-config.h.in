@@ -29,6 +29,8 @@
 /* Copyright year */
 #define COPYRIGHT_YEAR @COPYRIGHT_YEAR@
 
+#cmakedefine ENABLE_POWER8 1
+
 /* Define if external signer support is enabled */
 #cmakedefine ENABLE_EXTERNAL_SIGNER 1
 
@@ -37,6 +39,9 @@
 /* Define to 1 to enable tracepoints for Userspace, Statically Defined Tracing
    */
 #cmakedefine ENABLE_TRACING 1
+
+/* Define this symbol if the consensus lib has been built */
+#cmakedefine HAVE_CONSENSUS_LIB 1
 
 /* Define to 1 to enable wallet functions. */
 #cmakedefine ENABLE_WALLET 1
@@ -127,5 +132,8 @@
 
 /* Define if QR support should be compiled in */
 #cmakedefine USE_QRCODE 1
+
+/* Define if building embedded LevelDB */
+#cmakedefine EMBEDDED_LEVELDB 1
 
 #endif //BITCOIN_CONFIG_H

@@ -208,21 +208,19 @@ namespace node {
 bool CBlockIndexWorkComparator::operator()(const CBlockIndex* pa, const CBlockIndex* pb) const
 {
     // First sort by most total work, ...
-    if (pa->nChainWork > pb->nChainWork) return false;
-    if (pa->nChainWork < pb->nChainWork) return true;
+    if (pa->nChainWork != pb->nChainWork) {
+        return pa->nChainWork < pb->nChainWork;
+    }
 
     // ... then by earliest activatable time, ...
-    if (pa->nSequenceId < pb->nSequenceId) return false;
-    if (pa->nSequenceId > pb->nSequenceId) return true;
+    if (pa->nSequenceId != pb->nSequenceId) {
+        return pa->nSequenceId > pb->nSequenceId;
+    }
 
     // Use pointer address as tie breaker (should only happen with blocks
     // loaded from disk, as those share the same id: 0 for blocks on the
     // best chain, 1 for all others).
-    if (pa < pb) return false;
-    if (pa > pb) return true;
-
-    // Identical blocks.
-    return false;
+    return pa > pb;
 }
 
 bool CBlockIndexHeightOnlyComparator::operator()(const CBlockIndex* pa, const CBlockIndex* pb) const
@@ -792,6 +790,7 @@ CBlockFileInfo* BlockManager::GetBlockFileInfo(size_t n)
 {
     LOCK(cs_LastBlockFile);
 
+    if (n >= m_blockfile_info.size()) return nullptr;
     return &m_blockfile_info.at(n);
 }
 
@@ -1302,7 +1301,7 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
     } else {
         // Create initial or missing xor key file
         AutoFile xor_key_file{fsbridge::fopen(xor_key_path,
-#ifdef __MINGW64__
+#if 0
             "wb" // Temporary workaround for https://github.com/bitcoin/bitcoin/issues/30210
 #else
             "wbx"

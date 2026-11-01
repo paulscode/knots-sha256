@@ -358,7 +358,9 @@ protected:
 
     // Forces an arg setting. Called by SoftSetArg() if the arg hasn't already
     // been set. Also called directly in testing.
-    void ForceSetArg(const std::string& strArg, const std::string& strValue);
+    void ForceSetArg(const std::string& arg, const std::string& value);
+    void ForceSetArg(const std::string& arg, int64_t value);
+    void ForceSetArgV(const std::string& arg, const common::SettingsValue& value);
 
     /**
      * Returns the appropriate chain type from the program arguments.
@@ -387,7 +389,7 @@ protected:
     /**
      * Add many hidden arguments
      */
-    void AddHiddenArgs(const std::vector<std::string>& args);
+    void AddHiddenArgs(const std::vector<std::string>& args, unsigned int flags = ArgsManager::ALLOW_ANY);
 
     /**
      * Clear available arguments

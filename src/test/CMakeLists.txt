@@ -30,6 +30,7 @@ add_executable(test_bitcoin
   chainstate_write_tests.cpp
   checkqueue_tests.cpp
   cluster_linearize_tests.cpp
+  codex32_tests.cpp
   coins_tests.cpp
   coinscachepair_tests.cpp
   coinstatsindex_tests.cpp
@@ -61,7 +62,6 @@ add_executable(test_bitcoin
   miner_tests.cpp
   miniminer_tests.cpp
   miniscript_tests.cpp
-  minisketch_tests.cpp
   mock_process.cpp
   multisig_tests.cpp
   bip328_tests.cpp
@@ -74,6 +74,7 @@ add_executable(test_bitcoin
   orphanage_tests.cpp
   pcp_tests.cpp
   peerman_tests.cpp
+  psbt_tests.cpp
   pmt_tests.cpp
   policyestimator_tests.cpp
   pool_tests.cpp
@@ -161,10 +162,10 @@ add_windows_application_manifest(test_bitcoin)
 target_link_libraries(test_bitcoin
   core_interface
   test_util
+  $<TARGET_NAME_IF_EXISTS:bitcoinconsensus>
   bitcoin_cli
   bitcoin_node
   bitcoin_consensus
-  minisketch
   secp256k1
   Boost::headers
   libevent::extra
@@ -220,4 +221,5 @@ endfunction()
 
 add_all_test_targets()
 
+make_libbitcoinconsensus_dll_available(test_bitcoin)
 install_binary_component(test_bitcoin INTERNAL)

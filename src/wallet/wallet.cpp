@@ -2250,13 +2250,13 @@ bool CWallet::SignTransaction(CMutableTransaction& tx) const
     return SignTransaction(tx, coins, SIGHASH_DEFAULT, input_errors);
 }
 
-bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
+bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, std::optional<CAmount>* inputs_amount_sum) const
 {
     // Try to sign with all ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         // spk_man->SignTransaction will return true if the transaction is complete,
         // so we can exit early and return true if that happens
-        if (spk_man->SignTransaction(tx, coins, sighash, input_errors)) {
+        if (spk_man->SignTransaction(tx, coins, sighash, input_errors, inputs_amount_sum)) {
             return true;
         }
     }
@@ -2319,14 +2319,14 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, bo
     return {};
 }
 
-SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const
+SigningResult CWallet::SignMessage(const MessageSignatureFormat format, const std::string& message, const CTxDestination& address, std::string& str_sig) const
 {
     SignatureData sigdata;
-    CScript script_pub_key = GetScriptForDestination(pkhash);
+    CScript script_pub_key = GetScriptForDestination(address);
     for (const auto& spk_man_pair : m_spk_managers) {
         if (spk_man_pair.second->CanProvide(script_pub_key, sigdata)) {
             LOCK(cs_wallet);  // DescriptorScriptPubKeyMan calls IsLocked which can lock cs_wallet in a deadlocking order
-            return spk_man_pair.second->SignMessage(message, pkhash, str_sig);
+            return spk_man_pair.second->SignMessage(format, message, address, str_sig);
         }
     }
     return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
@@ -2340,7 +2340,7 @@ OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& chang
     }
 
     // if m_default_address_type is legacy, use legacy address as change.
-    if (m_default_address_type == OutputType::LEGACY) {
+    if (m_default_address_type == OutputType::LEGACY && GetScriptPubKeyMan(OutputType::LEGACY, /*internal=*/true)) {
         return OutputType::LEGACY;
     }
 
@@ -2731,6 +2731,13 @@ void CWallet::ForEachAddrBookEntry(const ListAddrBookFunc& func) const
     }
 }
 
+bool CWallet::IsDestinationActive(const CTxDestination& dest) const
+{
+    const CScript& script{GetScriptForDestination(dest)};
+    const std::set<ScriptPubKeyMan*>& spkms{GetActiveScriptPubKeyMans()};
+    return std::any_of(spkms.cbegin(), spkms.cend(), [&script](const auto& spkm) { return spkm->IsKeyActive(script); });
+}
+
 std::vector<CTxDestination> CWallet::ListAddrBookAddresses(const std::optional<AddrBookFilter>& _filter) const
 {
     AssertLockHeld(cs_wallet);
@@ -2804,9 +2811,8 @@ util::Result<void> CWallet::DisplayAddress(const CTxDestination& dest)
         if (signer_spk_man == nullptr) {
             continue;
         }
-        auto signer{ExternalSignerScriptPubKeyMan::GetExternalSigner()};
-        if (!signer) throw std::runtime_error(util::ErrorString(signer).original);
-        return signer_spk_man->DisplayAddress(dest, *signer);
+        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
+        return signer_spk_man->DisplayAddress(dest, signer);
     }
     return util::Error{_("There is no ScriptPubKeyManager for this address")};
 }
@@ -3721,12 +3727,11 @@ void CWallet::SetupDescriptorScriptPubKeyMans()
             return true;
         })) throw std::runtime_error("Error: cannot process db transaction for descriptors setup");
     } else {
-        auto signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
-        if (!signer) throw std::runtime_error(util::ErrorString(signer).original);
+        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
 
         // TODO: add account parameter
         int account = 0;
-        UniValue signer_res = signer->GetDescriptors(account);
+        UniValue signer_res = signer.GetDescriptors(account);
 
         if (!signer_res.isObject()) throw std::runtime_error(std::string(__func__) + ": Unexpected result");
 
