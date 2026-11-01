@@ -123,7 +123,8 @@ public:
     {
         return GetVirtualTransactionSize(SaturatingAdd(nTxWeight, m_extra_weight), sigOpCost, ::nBytesPerSigOp);
     }
-    int32_t GetAdjustedWeight() const { return GetSigOpsAdjustedWeight(nTxWeight, sigOpCost, ::nBytesPerSigOp); }
+    //! Weight the cluster graph orders and evicts by (mining, eviction, RBF): includes the -datacarriercost weight
+    int32_t GetAdjustedWeight() const { return GetSigOpsAdjustedWeight(SaturatingAdd(nTxWeight, m_extra_weight), sigOpCost, ::nBytesPerSigOp); }
     int32_t GetTxWeight() const { return nTxWeight; }
     std::chrono::seconds GetTime() const { return std::chrono::seconds{nTime}; }
     unsigned int GetHeight() const { return entryHeight; }

@@ -1122,8 +1122,10 @@ CTxMemPool::ChangeSet::TxHandle CTxMemPool::ChangeSet::StageAddition(const CTran
     CAmount delta{0};
     m_pool->ApplyDelta(tx->GetHash(), delta);
 
-    FeePerWeight feerate(fee, GetSigOpsAdjustedWeight(GetTransactionWeight(*tx), sigops_cost, ::nBytesPerSigOp));
     auto newit = m_to_add.emplace(tx, fee, time, entry_height, entry_sequence, spends_coinbase, /*extra_weight=*/ extra_weight, /*sigops_cost=*/ sigops_cost, lp).first;
+    // The graph size includes the -datacarriercost weight, so the cost applies to mining order, eviction and RBF
+    // as well as admission (as Knots' ancestor-feerate mining did through GetTxSize()).
+    FeePerWeight feerate(fee, newit->GetAdjustedWeight());
     m_pool->m_txgraph->AddTransaction(const_cast<CTxMemPoolEntry&>(*newit), feerate);
     if (delta) {
         newit->UpdateModifiedFee(delta);
