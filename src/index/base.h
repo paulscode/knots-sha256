@@ -13,6 +13,7 @@
 #include <uint256.h>
 #include <util/fs.h>
 #include <util/threadinterrupt.h>
+#include <util/translation.h>
 #include <validationinterface.h>
 
 #include <atomic>
@@ -150,6 +151,9 @@ public:
 
     /// Return custom notification options for index.
     [[nodiscard]] virtual interfaces::Chain::NotifyOptions CustomOptions() { return {}; }
+    /// Get the action the user should take to disable this index, including the verb
+    /// (e.g., "set -txindex=0" or "remove 'basic' from -blockfilterindex").
+    virtual bilingual_str GetDisableAction() const { return strprintf(_("set -%s=0"), GetName()); }
 
     /// Blocks the current thread until the index is caught up to the current
     /// state of the block chain. This only blocks if the index has gotten in
