@@ -53,6 +53,7 @@
 #include <util/fs_helpers.h>
 #include <util/hasher.h>
 #include <util/log.h>
+#include <util/mempressure.h>
 #include <util/moneystr.h>
 #include <util/rbf.h>
 #include <util/result.h>
@@ -827,6 +828,10 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     if (tx.IsCoinBase())
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "coinbase");
 
+    if (tx.version == TRUC_VERSION && m_pool.m_opts.truc_policy == TRUCPolicy::Reject) {
+        return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "version");
+    }
+
     // Rather not work on nonstandard transactions (unless -testnet/-regtest)
     std::string reason;
     if (m_pool.m_opts.require_standard && !IsStandardTx(tx, m_pool.m_opts, reason, ignore_rejects)) {
@@ -859,10 +864,37 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         const CTransaction* ptxConflicting = m_pool.GetConflictTx(txin.prevout);
         if (ptxConflicting) {
             if (!args.m_allow_replacement) {
-                // Transaction conflicts with a mempool tx, but we're not allowing replacements in this context.
+                // Transaction conflicts with a mempool tx, but we're not allowing replacements.
                 return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bip125-replacement-disallowed");
             }
-            ws.m_conflicts.insert(ptxConflicting->GetHash());
+            if (!ws.m_conflicts.count(ptxConflicting->GetHash()))
+            {
+                // Transactions that don't explicitly signal replaceability are
+                // *not* replaceable with the current logic, even if one of their
+                // unconfirmed ancestors signals replaceability. This diverges
+                // from BIP125's inherited signaling description (see CVE-2021-31876).
+                // Applications relying on first-seen mempool behavior should
+                // check all unconfirmed ancestors; otherwise an opt-in ancestor
+                // might be replaced, causing removal of this descendant.
+                //
+                // All TRUC transactions are considered replaceable.
+                //
+                // Replaceability signaling of the original transactions may be
+                // ignored due to node setting.
+                bool allow_rbf;
+                if (m_pool.m_opts.rbf_policy == RBFPolicy::Always || ignore_rejects.count("txn-mempool-conflict")) {
+                    allow_rbf = true;
+                } else if (m_pool.m_opts.rbf_policy == RBFPolicy::Never) {
+                    allow_rbf = false;
+                } else {
+                    allow_rbf = SignalsOptInRBF(*ptxConflicting) || ptxConflicting->version == TRUC_VERSION;
+                }
+                if (!allow_rbf) {
+                    return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "txn-mempool-conflict");
+                }
+
+                ws.m_conflicts.insert(ptxConflicting->GetHash());
+            }
         }
     }
 
@@ -975,7 +1007,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     // Core skips the TRUC checks for disconnected-block re-adds (bypass_limits); that caller now passes the legacy
     // ignore set, whose zero-entry-sequence reason is unique to it.
-    if (!args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) && !args.m_ignore_rejects.count("truc")) {
+    if (m_pool.m_opts.truc_policy == TRUCPolicy::Enforce && !args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) && !args.m_ignore_rejects.count("truc")) {
         // Perform the TRUC checks, using the in-mempool parents.
         if (const auto err{SingleTRUCChecks(m_pool, ws.m_ptx, "truc-", reason, args.m_ignore_rejects, ws.m_parents, ws.m_conflicts, ws.m_vsize)}) {
             // Single transaction contexts only.
@@ -1576,13 +1608,14 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
 
     // At this point we have all in-mempool parents, and we know every transaction's vsize.
     // Run the TRUC checks on the package.
+    if (m_pool.m_opts.truc_policy == TRUCPolicy::Enforce) {
     std::string reason;
     for (Workspace& ws : workspaces) {
         if (auto err{PackageTRUCChecks(m_pool, ws.m_ptx, ws.m_vsize, "truc-", reason, args.m_ignore_rejects, txns, ws.m_parents)}) {
             package_state.Invalid(PackageValidationResult::PCKG_POLICY, reason, err.value());
             return PackageMempoolAcceptResult(package_state, {});
         }
-    }
+    }}
 
     // Transactions must meet two minimum feerates: the mempool minimum fee and min relay fee.
     // For transactions consisting of exactly one child and its parents, it suffices to use the
@@ -2861,8 +2894,15 @@ bool Chainstate::FlushStateToDisk(
         const auto nNow{NodeClock::now()};
         // The cache is large and we're within 10% and 10 MiB of the limit, but we have time now (not in the middle of a block processing).
         bool fCacheLarge = mode == FlushStateMode::PERIODIC && cache_state >= CoinsCacheSizeState::LARGE;
-        // The cache is over the limit, we have to write now.
-        bool fCacheCritical = mode == FlushStateMode::IF_NEEDED && cache_state >= CoinsCacheSizeState::CRITICAL;
+        bool fCacheCritical = false;
+        if (mode == FlushStateMode::IF_NEEDED) {
+            if (cache_state >= CoinsCacheSizeState::CRITICAL) {
+                // The cache is over the limit, we have to write now.
+                fCacheCritical = true;
+            } else if (SystemNeedsMemoryReleased()) {
+                fCacheCritical = true;
+            }
+        }
         // It's been a while since we wrote the block index and chain state to disk. Do this frequently, so we don't need to redownload or reindex after a crash.
         bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow >= m_next_write;
         const auto empty_cache{(mode == FlushStateMode::FORCE_FLUSH) || fCacheLarge || fCacheCritical};

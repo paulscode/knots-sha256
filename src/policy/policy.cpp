@@ -155,11 +155,11 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     TxoutType whichType;
     for (const CTxOut& txout : tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
-            if (whichType == TxoutType::WITNESS_UNKNOWN) {
-                MaybeReject("scriptpubkey-unknown-witnessversion");
-            } else {
-                MaybeReject("scriptpubkey");
-            }
+            MaybeReject("scriptpubkey");
+        }
+
+        if (whichType == TxoutType::WITNESS_UNKNOWN && !opts.acceptunknownwitness) {
+            MaybeReject("scriptpubkey-unknown-witnessversion");
         }
 
         if (whichType == TxoutType::NULL_DATA) {
@@ -170,6 +170,8 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
             } else {
                 datacarrier_bytes_left -= size;
             }
+        } else if ((whichType == TxoutType::PUBKEY) && (!opts.permit_bare_pubkey)) {
+            MaybeReject("bare-pubkey");
         } else if ((whichType == TxoutType::MULTISIG) && (!opts.permit_bare_multisig)) {
             MaybeReject("bare-multisig");
         }
