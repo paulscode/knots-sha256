@@ -99,7 +99,7 @@ void Finish(FuzzedDataProvider& fuzzed_data_provider, MockedTxPool& tx_pool, Cha
         options.nBlockMaxWeight = fuzzed_data_provider.ConsumeIntegralInRange(0U, MAX_BLOCK_WEIGHT);
         options.blockMinFeeRate = CFeeRate{ConsumeMoney(fuzzed_data_provider, /*max=*/COIN)};
         options.include_dummy_extranonce = true;
-        auto assembler = BlockAssembler{chainstate, &tx_pool, options};
+        auto assembler = BlockAssembler{chainstate, &tx_pool, options, g_setup->m_node};
         auto block_template = assembler.CreateNewBlock();
         Assert(block_template->block.vtx.size() >= 1);
 
