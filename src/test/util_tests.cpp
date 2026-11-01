@@ -1935,4 +1935,210 @@ BOOST_AUTO_TEST_CASE(ceil_div_zero_divisor_test)
     BOOST_CHECK_THROW((void)CeilDiv(size_t{1}, size_t{0}), NonFatalCheckError);
 }
 
+BOOST_AUTO_TEST_CASE(is_space_byte_range_test)
+{
+    std::vector expected(256, false);
+    for (auto c : std::string_view(" \f\n\r\t\v")) expected[c] = true;
+
+    for (auto i{0U}; i < expected.size(); ++i) {
+        auto c = static_cast<char>(i);
+        BOOST_CHECK_MESSAGE(IsSpace(c) == expected[i], "IsSpace test failed for char value: " << i);
+    }
+}
+
+static std::string CheckModifyRWConfigFile(std::map<std::string, std::string>& settings_to_change, const std::string& current_config_file)
+{
+    std::istringstream stream_in(current_config_file);
+    std::ostringstream stream_out;
+    try {
+        ModifyRWConfigStream(stream_in, stream_out, settings_to_change);
+    } catch (...) {
+        settings_to_change.clear();
+        throw;
+    }
+    settings_to_change.clear();
+    return stream_out.str();
+}
+
+BOOST_AUTO_TEST_CASE(test_ModifyRWConfigFile)
+{
+    std::map<std::string, std::string> cs;
+
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b"), "a=b");
+
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b"), "a=c");
+    BOOST_CHECK(cs.empty());
+
+    // Multi-char name/value
+    cs["ab"] = "cd";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "ab=bc"), "ab=cd");
+
+    // Preserved final newline
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n"), "a=b\n");
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n"), "a=c\n");
+
+    // Preserved final tab
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\t"), "a=b\t");
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\t"), "a=c\t");
+
+    // Preserved final space
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b "), "a=b ");
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b "), "a=c ");
+
+    // Preserved final crnl
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\r\n"), "a=b\r\n");
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\r\n"), "a=c\r\n");
+
+    // Empty file
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, ""), "a=c\n");
+
+    // Ignore k=v in comment
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "#a=b"), "#a=b\na=c\n");
+
+    // Preserved comment
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\t# c"), "a=b\t# c");
+
+    // Commented out commented value
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\t# c"), "a=c\n#a=b\t# c");
+
+    // Preserved whitespace before name
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, " \t \ta=b"), " \t \ta=b");
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, " \t \ta=b"), " \t \ta=c");
+
+    // Preserved whitespace after name
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a \t \t=b"), "a \t \t=b");
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a \t \t=b"), "a \t \t=c");
+
+    // Preserved whitespace before value
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a= \t \tb"), "a= \t \tb");
+    cs["a"] = "c";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a= \t \tb"), "a= \t \tc");
+
+    // Modifying value between others
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nd=e"), "a=b\nab=bc\nd=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nd=e"), "a=b\nab=x\nd=e");
+
+    // Blank key/value
+    cs["ab"] = "";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nd=e"), "a=b\nab=\nd=e");
+    cs[""] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nd=e"), "a=b\nab=bc\nd=e\n=x\n");
+
+    // Blank line in source
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n\nab=bc\n\nd=e"), "a=b\n\nab=bc\n\nd=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n\nab=bc\n\nd=e"), "a=b\n\nab=x\n\nd=e");
+
+    // Duplicate keys in the source
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nf=x\nab=zx\nd=e"), "a=b\nab=bc\nf=x\nab=zx\nd=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nf=x\nab=zx\nd=e"), "a=b\nab=x\nf=x\nab=zx\nd=e");
+
+    // Comment out entire file if invalid input line
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nGARBAGE\nd=e"), "[INVALID]\n# Error parsing line 3: GARBAGE\n#a=b\n#ab=bc\n#GARBAGE\n#d=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nGARBAGE\nd=e"), "ab=x\n[INVALID]\n# Error parsing line 3: GARBAGE\n#a=b\n#ab=bc\n#GARBAGE\n#d=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=bc\nGARBAGE\nd=e\n"), "ab=x\n[INVALID]\n# Error parsing line 3: GARBAGE\n#a=b\n#ab=bc\n#GARBAGE\n#d=e\n");
+
+    // Whitespace inside values
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=b\t \t c\nd=e"), "a=b\nab=b\t \t c\nd=e");
+    cs["ab"] = "x \t \tx";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\nab=b\t \t c\nd=e"), "a=b\nab=x \t \tx\nd=e");
+
+    // Newline inside name/value
+    cs["a"] = "x\nx";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a"] = "x\rx";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a\nb"] = "x";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a\rb"] = "x";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+
+    // Whitespace leading/trailing name/value
+    cs["a"] = " x";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a"] = "\tx";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs[" a"] = "x";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["\ta"] = "x";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a"] = "x ";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a"] = "x\t";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a "] = "x";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+    cs["a\t"] = "x";
+    BOOST_REQUIRE_THROW(CheckModifyRWConfigFile(cs, ""), std::invalid_argument);
+
+    // Ignore groups
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n[group]\nab=bc\nd=e"), "a=b\n[group]\nab=bc\nd=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n[group]\nab=bc\nd=e"), "a=b\nab=x\n[group]\nab=bc\nd=e");
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n\t [group] \t#c\nab=bc\nd=e"), "a=b\n\t [group] \t#c\nab=bc\nd=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n\t [group] \t#c\nab=bc\nd=e"), "a=b\nab=x\n\t [group] \t#c\nab=bc\nd=e");
+
+    // Comment out entire file if invalid input line, even after a group
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n[group]\nab=bc\nGARBAGE\nd=e"), "[INVALID]\n# Error parsing line 4: GARBAGE\n#a=b\n#[group]\n#ab=bc\n#GARBAGE\n#d=e");
+    cs["ab"] = "x";
+    BOOST_CHECK_EQUAL(CheckModifyRWConfigFile(cs, "a=b\n[group]\nab=bc\nGARBAGE\nd=e"), "ab=x\n[INVALID]\n# Error parsing line 4: GARBAGE\n#a=b\n#[group]\n#ab=bc\n#GARBAGE\n#d=e");
+}
+
+BOOST_AUTO_TEST_CASE(rwconf_failure_keeps_existing_file)
+{
+    const fs::path dir{m_path_root / "rwconf_keep"};
+    fs::create_directories(dir);
+    const fs::path rwconf{dir / "bitcoin_rw.conf"};
+    const auto read_file = [](const fs::path& path) {
+        std::ifstream f{path.std_path(), std::ios_base::binary};
+        return std::string{std::istreambuf_iterator<char>{f}, {}};
+    };
+    std::ofstream{rwconf.std_path(), std::ios_base::binary} << "prune=1000\n";
+    ArgsManager args;
+    args.ForceSetArg("-confrw", fs::PathToString(rwconf));
+    args.SoftSetBoolArg("-settings", false);
+
+    // Modify: a normal update keeps the existing lines and adds the new one
+    args.ModifyRWConfigFile("dbcache", "1000");
+    BOOST_CHECK_EQUAL(read_file(rwconf), "prune=1000\ndbcache=1000\n");
+    BOOST_CHECK(!fs::exists(dir / "bitcoin_rw.conf.new"));
+    const std::string original{read_file(rwconf)};
+
+    // Reset: when the backup cannot be made, the file must be kept, not deleted, and the failure reported
+    fs::create_directories(dir / "bitcoin_rw.conf.reset" / "occupied");
+    BOOST_CHECK(!args.EraseRWConfigFile());
+    BOOST_CHECK_EQUAL(read_file(rwconf), original);
+
+    // Reset: with the way clear, the file is moved to the backup name
+    fs::remove_all(dir / "bitcoin_rw.conf.reset");
+    BOOST_CHECK(args.EraseRWConfigFile());
+    BOOST_CHECK(!fs::exists(rwconf));
+    BOOST_CHECK_EQUAL(read_file(dir / "bitcoin_rw.conf.reset"), original);
+
+    // Modify: a file that cannot be read (here a directory, which fails on every platform) is never replaced
+    const fs::path unreadable{m_path_root / "rwconf_unreadable" / "bitcoin_rw.conf"};
+    fs::create_directories(unreadable / "keep");
+    ArgsManager args2;
+    args2.ForceSetArg("-confrw", fs::PathToString(unreadable));
+    args2.SoftSetBoolArg("-settings", false);
+    BOOST_CHECK_THROW(args2.ModifyRWConfigFile("dbcache", "1000"), std::ios_base::failure);
+    BOOST_CHECK(fs::exists(unreadable / "keep"));
+    BOOST_CHECK(!fs::exists(m_path_root / "rwconf_unreadable" / "bitcoin_rw.conf.new"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

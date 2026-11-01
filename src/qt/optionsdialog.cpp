@@ -13,6 +13,7 @@
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
 
+#include <common/args.h>
 #include <common/system.h>
 #include <interfaces/node.h>
 #include <netbase.h>
@@ -347,7 +348,9 @@ void OptionsDialog::on_resetButton_clicked()
             return;
 
         /* reset all options and close GUI */
-        model->Reset();
+        if (!model->Reset()) {
+            QMessageBox::warning(this, tr("Options reset"), tr("The settings file %1 could not be backed up, so it was kept and its settings still apply. See debug.log for details.").arg(GUIUtil::PathToQString(gArgs.GetRWConfigFilePath())));
+        }
         close();
         Q_EMIT quitOnReset();
     }
