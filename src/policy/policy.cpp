@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
+#include <utility>
 #include <vector>
 
 CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
@@ -499,18 +501,49 @@ std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript
     return std::make_pair(CScript(), 0);
 }
 
-size_t DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view)
+std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view)
 {
-    size_t ret{0};
+    std::pair<size_t, size_t> ret{0, 0};
 
     for (const CTxIn& txin : tx.vin) {
         const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
         auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
-        ret += script.DatacarrierBytes();
+        const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness);
+        ret.first += dcb.first;
+        ret.second += dcb.second;
     }
-    for (const CTxOut& txout : tx.vout) {
-        ret += txout.scriptPubKey.DatacarrierBytes();
+    for (size_t i{tx.vout.size()}; i; ) {
+        const CTxOut& txout = tx.vout[--i];
+        const auto dcb = txout.scriptPubKey.DatacarrierBytes(tx.vout.size() - i);
+        ret.first += dcb.first;
+        ret.second += dcb.second;
     }
 
     return ret;
+}
+
+int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& view, const unsigned int weight_per_data_byte)
+{
+    int64_t mod_weight{0};
+
+    // Add in any extra weight for data bytes
+    if (weight_per_data_byte > 1) {
+        for (const CTxIn& txin : tx.vin) {
+            const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
+            auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
+            if (weight_per_data_byte > consensus_weight_per_byte) {
+                const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness);
+                mod_weight += int64_t(dcb.first + dcb.second) * (weight_per_data_byte - consensus_weight_per_byte);
+            }
+        }
+        if (weight_per_data_byte > WITNESS_SCALE_FACTOR) {
+            for (size_t i{tx.vout.size()}; i; ) {
+                const CTxOut& txout = tx.vout[--i];
+                const auto dcb = txout.scriptPubKey.DatacarrierBytes(tx.vout.size() - i);
+                mod_weight += (dcb.first + dcb.second) * (weight_per_data_byte - WITNESS_SCALE_FACTOR);
+            }
+        }
+    }
+
+    return int32_t(std::min(mod_weight, int64_t{std::numeric_limits<int32_t>::max()}));
 }

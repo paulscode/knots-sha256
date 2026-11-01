@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <optional>
 
+class CBlockPolicyEstimator;
+class CScheduler;
 class ValidationSignals;
 
 enum class RBFPolicy { Never, OptIn, Always };
@@ -30,6 +32,8 @@ static constexpr RBFPolicy DEFAULT_MEMPOOL_RBF_POLICY{RBFPolicy::Always};
 static constexpr TRUCPolicy DEFAULT_MEMPOOL_TRUC_POLICY{TRUCPolicy::Enforce};
 /** Whether to fall back to legacy V1 serialization when writing mempool.dat */
 static constexpr bool DEFAULT_PERSIST_V1_DAT{false};
+/** Default for -acceptnonstddatacarrier */
+static constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{true};
 /** Default for -acceptnonstdtxn */
 static constexpr bool DEFAULT_ACCEPT_NON_STD_TXN{false};
 /** Default for -acceptunknownwitness */
@@ -44,6 +48,9 @@ namespace kernel {
  * Most of the time, this struct should be referenced as CTxMemPool::Options.
  */
 struct MemPoolOptions {
+    /* Used to estimate appropriate transaction fees. */
+    CBlockPolicyEstimator* estimator{nullptr};
+    CScheduler* scheduler{nullptr};
     /* The ratio used to determine how often sanity checks will run.  */
     int check_ratio{0};
     int64_t max_size_bytes{DEFAULT_MAX_MEMPOOL_SIZE_MB * 1'000'000};
@@ -51,7 +58,13 @@ struct MemPoolOptions {
     CFeeRate incremental_relay_feerate{DEFAULT_INCREMENTAL_RELAY_FEE};
     /** A fee rate smaller than this is considered zero fee (for relaying, mining and transaction creation) */
     CFeeRate min_relay_feerate{DEFAULT_MIN_RELAY_TX_FEE};
-    CFeeRate dust_relay_feerate{DUST_RELAY_TX_FEE};
+    /** Updated at runtime by -dustdynamic (CTxMemPool::UpdateDynamicDustFeerate), hence mutable in the otherwise const options. */
+    mutable CFeeRate dust_relay_feerate{DUST_RELAY_TX_FEE};
+    mutable CFeeRate dust_relay_feerate_floor{DUST_RELAY_TX_FEE};
+    /** Negative for a target number of blocks, positive for target kB into current mempool. */
+    int32_t dust_relay_target{0};
+    /** Multiplier for dustdynamic assignments, in thousandths. */
+    int dust_relay_multiplier{DEFAULT_DUST_RELAY_MULTIPLIER};
     /**
      * A data carrying output is an unspendable output containing data. The script
      * type is designated as TxoutType::NULL_DATA.
@@ -63,6 +76,7 @@ struct MemPoolOptions {
     bool datacarrier_fullcount{DEFAULT_DATACARRIER_FULLCOUNT};
     bool permit_bare_pubkey{DEFAULT_PERMIT_BAREPUBKEY};
     bool permit_bare_multisig{DEFAULT_PERMIT_BAREMULTISIG};
+    bool accept_non_std_datacarrier{DEFAULT_ACCEPT_NON_STD_DATACARRIER};
     bool require_standard{true};
     bool acceptunknownwitness{DEFAULT_ACCEPTUNKNOWNWITNESS};
     RBFPolicy rbf_policy{DEFAULT_MEMPOOL_RBF_POLICY};
