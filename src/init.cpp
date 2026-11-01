@@ -57,6 +57,7 @@
 #include <node/context.h>
 #include <node/interface_ui.h>
 #include <node/kernel_notifications.h>
+#include <node/known_splits.h>
 #include <node/mempool_args.h>
 #include <node/mempool_persist.h>
 #include <node/mempool_persist_args.h>
@@ -2160,6 +2161,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     if (ShutdownRequested(node)) {
         LogInfo("Shutdown requested. Exiting.");
         return true;
+    }
+
+    // A data directory from software that followed a known split away from Bitcoin keeps Bitcoin's block there
+    // marked invalid, which would silently keep this node off the Bitcoin chain (node/known_splits.h).
+    if (const auto error{WITH_LOCK(cs_main, return node::CheckKnownSplits(Assert(node.chainman)->m_blockman, node::KnownSplits(chainparams.GetChainType())))}) {
+        return InitError(*error);
     }
 
     ChainstateManager& chainman = *Assert(node.chainman);
