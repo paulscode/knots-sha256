@@ -26,15 +26,15 @@ get_directory_property(precious_variables CACHE_VARIABLES)
 #=============================
 # Project / Package metadata
 #=============================
-set(CLIENT_NAME "Bitcoin Knots")
+set(CLIENT_NAME "Bitcoin Knots SHA256")
 set(CLIENT_VERSION_MAJOR 31)
 set(CLIENT_VERSION_MINOR 2)
 set(CLIENT_VERSION_BUILD 0)
-set(CLIENT_VERSION_RC 0)
+set(CLIENT_VERSION_RC 1)
 set(CLIENT_VERSION_IS_RELEASE "true")
 set(COPYRIGHT_YEAR "2026")
 
-set(CLIENT_VERSION_SUFFIX ".knotsYYYYMMDD")
+set(CLIENT_VERSION_SUFFIX ".knots-sha256.20261031")
 
 # During the enabling of the CXX and CXXOBJ languages, we modify
 # CMake's compiler/linker invocation strings by appending the content
@@ -55,7 +55,7 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
 project(BitcoinCore
   VERSION ${CLIENT_VERSION_MAJOR}.${CLIENT_VERSION_MINOR}.${CLIENT_VERSION_BUILD}
   DESCRIPTION "Bitcoin client software"
-  HOMEPAGE_URL "https://bitcoinknots.org/"
+  HOMEPAGE_URL "https://github.com/paulscode/knots-sha256"
   LANGUAGES NONE
 )
 
@@ -66,7 +66,7 @@ endif()
 
 set(COPYRIGHT_HOLDERS "The %s developers")
 set(COPYRIGHT_HOLDERS_FINAL "The ${CLIENT_NAME} developers")
-set(CLIENT_BUGREPORT "https://github.com/bitcoinknots/bitcoin/issues")
+set(CLIENT_BUGREPORT "https://github.com/paulscode/knots-sha256/issues")
 
 #=============================
 # Language setup
