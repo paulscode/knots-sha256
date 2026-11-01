@@ -9,6 +9,9 @@
              (gnu packages cross-base)
              (gnu packages gawk)
              (gnu packages gcc)
+             (gnu packages gnome)
+             (gnu packages image)
+             (gnu packages imagemagick)
              ((gnu packages installers) #:select (nsis-x86_64))
              ((gnu packages linux) #:select (linux-libre-headers-6.1))
              (gnu packages llvm)
@@ -23,6 +26,7 @@
              ((gnu packages tls) #:select (openssl))
              ((gnu packages version-control) #:select (git-minimal))
              (guix build-system cmake)
+             (guix build-system gnu)
              (guix build-system python)
              (guix build-system pyproject)
              (guix build-system trivial)
@@ -543,6 +547,9 @@ inspecting signatures in Mach-O binaries.")
         cmake-minimal
         gnu-make
         ninja
+        imagemagick
+        libicns
+        librsvg-2.40
         ;; Scripting
         python-minimal ;; (3.10)
         ;; Git
