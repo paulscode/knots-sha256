@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 
 class CCoinsViewCache;
 class CFeeRate;
@@ -140,6 +141,9 @@ inline constexpr script_verify_flags STANDARD_NOT_MANDATORY_VERIFY_FLAGS{STANDAR
 /** Used as the flags parameter to sequence and nLocktime checks in non-consensus code. */
 inline constexpr unsigned int STANDARD_LOCKTIME_VERIFY_FLAGS{LOCKTIME_VERIFY_SEQUENCE};
 
+typedef std::unordered_set<std::string> ignore_rejects_type;
+static const ignore_rejects_type empty_ignore_rejects{};
+
 CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFee);
 
 bool IsDust(const CTxOut& txout, const CFeeRate& dustRelayFee);
@@ -159,14 +163,14 @@ inline constexpr decltype(CTransaction::version) TX_MAX_STANDARD_VERSION{3};
 * Check for standard transaction types
 * @return True if all outputs (scriptPubKeys) use only standard transaction forms
 */
-bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason);
+bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& out_reason, const ignore_rejects_type& ignore_rejects=empty_ignore_rejects);
 /**
  * Check for standard transaction types
  * @param[in] mapInputs       Map of previous transactions that have outputs we're spending
  * @returns valid TxValidationState if all inputs (scriptSigs) use only standard transaction forms else returns
  * invalid TxValidationState which states why the first invalid input is not standard
  */
-TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs);
+TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs, const ignore_rejects_type& ignore_rejects=empty_ignore_rejects);
 /**
 * Check if the transaction is over standard P2WSH resources limit:
 * 3600bytes witnessScript size, 80bytes per witness stack element, 100 witness stack elements
@@ -174,7 +178,7 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
 *
 * Also enforce a maximum stack item size limit and no annexes for tapscript spends.
 */
-bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs);
+bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs, const std::string& reason_prefix, std::string& out_reason, const ignore_rejects_type& ignore_rejects=empty_ignore_rejects);
 /**
  * Check whether this transaction spends any witness program but P2A, including not-yet-defined ones.
  * May return `false` early for consensus-invalid transactions.
