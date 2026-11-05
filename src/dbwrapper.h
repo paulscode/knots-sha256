@@ -14,6 +14,7 @@
 #include <util/expected.h>
 #include <util/fs.h>
 #include <util/obfuscation.h>
+#include <util/result.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,8 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+
+util::Result<void> dbwrapper_SanityCheck();
 
 namespace leveldb {
 class Env;
