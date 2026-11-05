@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 enum class JSONRPCVersion {
@@ -40,7 +41,7 @@ enum class AuthCookieResult : uint8_t {
  * @retval AuthCookieResult::Error Error occurred, auth data could not be saved to disk.
  * @retval AuthCookieResult::Ok Auth data was generated, saved to disk and in `user` and `pass`.
  */
-AuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cookie_perms,
+AuthCookieResult GenerateAuthCookie(const std::pair<std::optional<fs::perms>, bool>& cookie_perms,
                                             std::string& user,
                                             std::string& pass);
 

@@ -18,12 +18,14 @@
 #include <walletinitinterface.h>
 
 #include <algorithm>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using util::SplitString;
@@ -263,7 +265,7 @@ static bool InitRPCAuthentication()
             cookie_perms = *perm_opt;
         }
 
-        switch (GenerateAuthCookie(cookie_perms, user, pass)) {
+        switch (GenerateAuthCookie(std::make_pair(cookie_perms, bool(cookie_perms_arg)), user, pass)) {
         case AuthCookieResult::Error:
             return false;
         case AuthCookieResult::Disabled:
@@ -295,9 +297,10 @@ static bool InitRPCAuthentication()
         g_rpcauth.push_back({user, salt, hash});
     }
 
-    if (!gArgs.GetArgs("-rpcauth").empty()) {
+    if (!(gArgs.IsArgNegated("-rpcauth") || (gArgs.GetArgs("-rpcauth").empty() && gArgs.GetArgs("-rpcauthfile").empty()))) {
         LogInfo("Using rpcauth authentication.\n");
         for (const std::string& rpcauth : gArgs.GetArgs("-rpcauth")) {
+            if (rpcauth.empty()) continue;
             std::vector<std::string> fields{SplitString(rpcauth, ':')};
             const std::vector<std::string> salt_hmac{SplitString(fields.back(), '$')};
             if (fields.size() == 2 && salt_hmac.size() == 2) {
@@ -307,6 +310,21 @@ static bool InitRPCAuthentication()
             } else {
                 LogWarning("Invalid -rpcauth argument.");
                 return false;
+            }
+        }
+        for (const std::string& path : gArgs.GetArgs("-rpcauthfile")) {
+            std::ifstream file;
+            file.open(path);
+            if (!file.is_open()) continue;
+            std::string rpcauth;
+            while (std::getline(file, rpcauth)) {
+                std::vector<std::string> fields{SplitString(rpcauth, ':')};
+                const std::vector<std::string> salt_hmac{SplitString(fields.back(), '$')};
+                if (fields.size() == 2 && salt_hmac.size() == 2) {
+                    fields.pop_back();
+                    fields.insert(fields.end(), salt_hmac.begin(), salt_hmac.end());
+                    g_rpcauth.push_back(fields);
+                }
             }
         }
     }
