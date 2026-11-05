@@ -99,6 +99,13 @@ enum class SynchronizationState {
     POST_INIT
 };
 
+enum SpkReuseModes {
+    SRM_ALLOW,
+    SRM_REJECT,
+};
+
+extern SpkReuseModes SpkReuseMode;
+
 /** Documentation for argument 'checklevel'. */
 extern const std::vector<std::string> CHECKLEVEL_DOC;
 
@@ -337,6 +344,8 @@ std::optional<LockPoints> CalculateLockPointsAtTip(
  */
 bool CheckSequenceLocksAtTip(CBlockIndex* tip,
                              const LockPoints& lock_points);
+
+void LimitMempoolSize(CTxMemPool&, CCoinsViewCache&);
 
 /**
  * Closure representing one script verification
