@@ -66,6 +66,7 @@
 #include <util/fs.h>
 #include <util/log.h>
 #include <util/result.h>
+#include <util/strencodings.h>
 #include <util/string.h>
 #include <util/syserror.h>
 #include <util/time.h>
@@ -113,6 +114,10 @@ PrepareUTXOSnapshot(
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 UniValue WriteUTXOSnapshot(
+    const bool is_human_readable,
+    const bool show_header,
+    const std::span<const std::byte>& separator,
+    const std::vector<std::pair<std::string, coinascii_cb_t>>& requested,
     Chainstate& chainstate,
     CCoinsViewCursor* pcursor,
     CCoinsStats* maybe_stats,
@@ -123,6 +128,10 @@ UniValue WriteUTXOSnapshot(
     const std::function<void()>& interruption_point = {});
 
 UniValue CreateRolledBackUTXOSnapshot(
+    const bool is_human_readable,
+    const bool show_header,
+    const std::span<const std::byte>& separator,
+    const std::vector<std::pair<std::string, coinascii_cb_t>>& requested,
     NodeContext& node,
     Chainstate& chainstate,
     const CBlockIndex* target,
@@ -3101,9 +3110,23 @@ public:
  */
 static RPCMethod dumptxoutset()
 {
+    static const std::vector<std::pair<std::string, coinascii_cb_t>> ascii_types{
+        {"txid",         [](const COutPoint& k, const Coin& c) { return k.hash.GetHex(); }},
+        {"vout",         [](const COutPoint& k, const Coin& c) { return util::ToString(static_cast<int32_t>(k.n)); }},
+        {"value",        [](const COutPoint& k, const Coin& c) { return util::ToString(c.out.nValue); }},
+        {"coinbase",     [](const COutPoint& k, const Coin& c) { return util::ToString(c.fCoinBase); }},
+        {"height",       [](const COutPoint& k, const Coin& c) { return util::ToString(static_cast<uint32_t>(c.nHeight)); }},
+        {"scriptPubKey", [](const COutPoint& k, const Coin& c) { return HexStr(c.out.scriptPubKey); }},
+        // add any other desired items here
+    };
+
+    std::vector<RPCArg> ascii_args;
+    std::transform(std::begin(ascii_types), std::end(ascii_types), std::back_inserter(ascii_args),
+            [](const std::pair<std::string, coinascii_cb_t>& t) { return RPCArg{t.first, RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Info to write for a given UTXO"}; });
+
     return RPCMethod{
         "dumptxoutset",
-        "Write the serialized UTXO set to a file. This can be used in loadtxoutset afterwards if this snapshot height is supported in the chainparams as well.\n"
+        "Write the UTXO set to a file. This can be used in loadtxoutset afterwards if this snapshot height is supported in the chainparams as well.\n"
         "This creates a temporary UTXO database when rolling back, keeping the main chain intact. Should the node experience an unclean shutdown the temporary database may need to be removed from the datadir manually.\n"
         "For deep rollbacks, make sure to use no RPC timeout (bitcoin-cli -rpcclienttimeout=0) as it may take several minutes.",
         {
@@ -3111,10 +3134,17 @@ static RPCMethod dumptxoutset()
             {"type", RPCArg::Type::STR, RPCArg::Default(""), "The type of snapshot to create. Can be \"latest\" to create a snapshot of the current UTXO set or \"rollback\" to temporarily roll back the state of the node to a historical block before creating the snapshot of a historical UTXO set. This parameter can be omitted if a separate \"rollback\" named parameter is specified indicating the height or hash of a specific historical block. If \"rollback\" is specified and separate \"rollback\" named parameter is not specified, this will roll back to the latest valid snapshot block that can currently be loaded with loadtxoutset."},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
                 {
+                    {"format", RPCArg::Type::ARR, RPCArg::DefaultHint{"compact serialized format"},
+                                                "If no argument is provided, a compact binary serialized format is used; otherwise only requested items "
+                                                "available below are written in ASCII format (if an empty array is provided, all items are written in ASCII).",
+                                                ascii_args,
+                                                RPCArgOptions{.oneline_description="format"}},
                     {"rollback", RPCArg::Type::NUM, RPCArg::Optional::OMITTED,
                         "Height or hash of the block to roll back to before creating the snapshot. Note: The further this number is from the tip, the longer this process will take. Consider setting a higher -rpcclienttimeout value in this case.",
                     RPCArgOptions{.skip_type_check = true, .type_str = {"", "string or numeric"}}},
                     {"in_memory", RPCArg::Type::BOOL, RPCArg::Default{false}, "If true, the temporary UTXO-set database used during rollback is kept entirely in memory. This can significantly speed up the process but requires sufficient free RAM (over 10 GB on mainnet)."},
+                    {"show_header", RPCArg::Type::BOOL, RPCArg::Default{true}, "Whether to include the header line in non-serialized (ASCII) mode"},
+                    {"separator", RPCArg::Type::STR, RPCArg::Default{","}, "Field separator to use in non-serialized (ASCII) mode"},
                 },
             },
         },
@@ -3133,7 +3163,9 @@ static RPCMethod dumptxoutset()
             HelpExampleCli("-rpcclienttimeout=0 dumptxoutset", "utxo.dat latest") +
             HelpExampleCli("-rpcclienttimeout=0 dumptxoutset", "utxo.dat rollback") +
             HelpExampleCli("-rpcclienttimeout=0 -named dumptxoutset", R"(utxo.dat rollback=853456)") +
-            HelpExampleCli("-rpcclienttimeout=0 -named dumptxoutset", R"(utxo.dat rollback=853456 in_memory=true)")
+            HelpExampleCli("-rpcclienttimeout=0 -named dumptxoutset", R"(utxo.dat rollback=853456 in_memory=true)") +
+            HelpExampleCli("-rpcclienttimeout=0 -named dumptxoutset", "utxo.dat type=latest format='[]'") +
+            HelpExampleCli("-rpcclienttimeout=0 -named dumptxoutset", "utxo.dat type=latest format='[\"txid\", \"vout\"]' show_header=false separator=':'")
         },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -3158,6 +3190,27 @@ static RPCMethod dumptxoutset()
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Invalid snapshot type \"%s\" specified. Please specify \"rollback\" or \"latest\"", snapshot_type));
     }
 
+    // handle optional ASCII parameters
+    const bool is_human_readable = !options["format"].isNull();
+    const bool show_header = options["show_header"].isNull() || options["show_header"].get_bool();
+    const auto separator = options["separator"].isNull() ? MakeByteSpan(",").first(1) : MakeByteSpan(options["separator"].get_str());
+    std::vector<std::pair<std::string, coinascii_cb_t>> requested;
+    if (is_human_readable) {
+        const auto& arr = options["format"].get_array();
+        const std::unordered_map<std::string, coinascii_cb_t> ascii_map(std::begin(ascii_types), std::end(ascii_types));
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const auto it = ascii_map.find(arr[i].get_str());
+            if (it == std::end(ascii_map))
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "unable to find item '"+arr[i].get_str()+"'");
+
+            requested.emplace_back(*it);
+        }
+
+        // if nothing was found, shows everything by default
+        if (requested.size() == 0)
+            requested = ascii_types;
+    }
+
     const ArgsManager& args{EnsureAnyArgsman(request.context)};
     const fs::path path = fsbridge::AbsPathJoin(args.GetDataDirNet(), fs::u8path(self.Arg<std::string_view>("path")));
     const auto path_info{fs::status(path)};
@@ -3172,7 +3225,7 @@ static RPCMethod dumptxoutset()
             "move it out of the way first");
     }
 
-    FILE* file{fsbridge::fopen(temppath, "wb")};
+    FILE* file{fsbridge::fopen(temppath, !is_human_readable ? "wb" : "w")};
     AutoFile afile{file};
     if (afile.IsNull()) {
         throw JSONRPCError(
@@ -3184,7 +3237,16 @@ static RPCMethod dumptxoutset()
     Chainstate& chainstate{node.chainman->ActiveChainstate()};
     if (target_index == tip) {
         // Dump the txoutset of the current tip
-        result = CreateUTXOSnapshot(node, chainstate, std::move(afile), path, temppath);
+        auto [cursor, stats, tip_index]{WITH_LOCK(::cs_main, return PrepareUTXOSnapshot(chainstate, node.rpc_interruption_point))};
+        result = WriteUTXOSnapshot(is_human_readable, show_header, separator, requested,
+                                   chainstate,
+                                   cursor.get(),
+                                   &stats,
+                                   tip_index,
+                                   std::move(afile),
+                                   path,
+                                   temppath,
+                                   node.rpc_interruption_point);
     } else {
         // Check pruning constraints before attempting rollback and prevent
         // pruning of the necessary blocks with a temporary prune lock
@@ -3200,7 +3262,8 @@ static RPCMethod dumptxoutset()
         }
 
         const bool in_memory{options.exists("in_memory") ? options["in_memory"].get_bool() : false};
-        result = CreateRolledBackUTXOSnapshot(node,
+        result = CreateRolledBackUTXOSnapshot(is_human_readable, show_header, separator, requested,
+                                              node,
                                               chainstate,
                                               target_index,
                                               std::move(afile),
@@ -3238,6 +3301,10 @@ public:
 };
 
 UniValue CreateRolledBackUTXOSnapshot(
+    const bool is_human_readable,
+    const bool show_header,
+    const std::span<const std::byte>& separator,
+    const std::vector<std::pair<std::string, coinascii_cb_t>>& requested,
     NodeContext& node,
     Chainstate& chainstate,
     const CBlockIndex* target,
@@ -3365,7 +3432,8 @@ UniValue CreateRolledBackUTXOSnapshot(
     std::unique_ptr<CCoinsViewCursor> pcursor{temp_db->Cursor()};
 
     LogInfo("Writing snapshot to disk.");
-    return WriteUTXOSnapshot(chainstate,
+    return WriteUTXOSnapshot(is_human_readable, show_header, separator, requested,
+                             chainstate,
                              pcursor.get(),
                              &(*maybe_stats),
                              target,
@@ -3414,6 +3482,10 @@ PrepareUTXOSnapshot(
 }
 
 UniValue WriteUTXOSnapshot(
+    const bool is_human_readable,
+    const bool show_header,
+    const std::span<const std::byte>& separator,
+    const std::vector<std::pair<std::string, coinascii_cb_t>>& requested,
     Chainstate& chainstate,
     CCoinsViewCursor* pcursor,
     CCoinsStats* maybe_stats,
@@ -3427,9 +3499,23 @@ UniValue WriteUTXOSnapshot(
         tip->nHeight, tip->GetBlockHash().ToString(),
         fs::PathToString(path), fs::PathToString(temppath)));
 
+    // used when human readable format is requested
+    const auto line_separator = MakeByteSpan("\n").first(1);
+
+    if (!is_human_readable) {
     SnapshotMetadata metadata{chainstate.m_chainman.GetParams().MessageStart(), tip->GetBlockHash(), maybe_stats->coins_count};
 
     afile << metadata;
+    } else if (show_header) {
+        afile.write(MakeByteSpan("#(blockhash " + tip->GetBlockHash().ToString() + " ) "));
+        for (auto it = std::begin(requested); it != std::end(requested); ++it) {
+            if (it != std::begin(requested)) {
+                afile.write(separator);
+            }
+            afile.write(MakeByteSpan(it->first));
+        }
+        afile.write(line_separator);
+    }
 
     COutPoint key;
     Txid last_hash;
@@ -3461,12 +3547,22 @@ UniValue WriteUTXOSnapshot(
         if (iter % 5000 == 0) interruption_point();
         ++iter;
         if (pcursor->GetKey(key) && pcursor->GetValue(coin)) {
+            if (!is_human_readable) {
             if (key.hash != last_hash) {
                 write_coins_to_file(afile, last_hash, coins, written_coins_count);
                 last_hash = key.hash;
                 coins.clear();
             }
             coins.emplace_back(key.n, coin);
+            } else {
+                for (auto it = std::begin(requested); it != std::end(requested); ++it) {
+                    if (it != std::begin(requested))
+                        afile.write(separator);
+                    afile.write(MakeByteSpan(it->second(key, coin)));
+                }
+                afile.write(line_separator);
+                ++written_coins_count;
+            }
         }
         pcursor->Next();
     }
@@ -3500,7 +3596,9 @@ UniValue CreateUTXOSnapshot(
     const fs::path& tmppath)
 {
     auto [cursor, stats, tip]{WITH_LOCK(::cs_main, return PrepareUTXOSnapshot(chainstate, node.rpc_interruption_point))};
-    return WriteUTXOSnapshot(chainstate,
+    return WriteUTXOSnapshot(
+                             false, false, std::span<const std::byte>(), {},
+                             chainstate,
                              cursor.get(),
                              &stats,
                              tip,
