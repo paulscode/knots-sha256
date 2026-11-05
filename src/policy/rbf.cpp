@@ -7,6 +7,7 @@
 #include <consensus/amount.h>
 #include <kernel/mempool_entry.h>
 #include <policy/feerate.h>
+#include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <sync.h>
 #include <tinyformat.h>
@@ -58,7 +59,8 @@ RBFTransactionState IsRBFOptInEmptyMempool(const CTransaction& tx)
 std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx,
                                                   CTxMemPool& pool,
                                                   const CTxMemPool::setEntries& iters_conflicting,
-                                                  CTxMemPool::setEntries& all_conflicts)
+                                                  CTxMemPool::setEntries& all_conflicts,
+                                                  const ignore_rejects_type& ignore_rejects)
 {
     AssertLockHeld(pool.cs);
     // Rule #5: don't consider replacements that conflict directly with more
@@ -67,7 +69,7 @@ std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx,
     // process the replacement (though the actual number of clusters we
     // relinearize may be greater than this number, due to cluster splitting).
     auto num_clusters = pool.GetUniqueClusterCount(iters_conflicting);
-    if (num_clusters > MAX_REPLACEMENT_CANDIDATES) {
+    if (num_clusters > MAX_REPLACEMENT_CANDIDATES && !ignore_rejects.count("too-many-replacements") && !ignore_rejects.count("too many potential replacements")) {
         return strprintf("rejecting replacement %s; too many conflicting clusters (%u > %d)",
                 tx.GetHash().ToString(),
                 num_clusters,
