@@ -253,9 +253,10 @@ public:
     /**
      * Bind to a new address:port, start listening and add the listen socket to `m_listen`.
      * @param[in] to Where to bind.
+     * @param[out] bind_error If non-null, set to the socket error when creating the socket or bind() fails.
      * @returns {} or the reason for failure.
      */
-    util::Expected<void, std::string> BindAndStartListening(const CService& to);
+    util::Expected<void, std::string> BindAndStartListening(const CService& to, int* bind_error = nullptr);
 
     /**
      * Stop listening by closing all listening sockets.
