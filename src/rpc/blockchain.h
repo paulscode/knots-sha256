@@ -5,13 +5,17 @@
 #ifndef BITCOIN_RPC_BLOCKCHAIN_H
 #define BITCOIN_RPC_BLOCKCHAIN_H
 
+#include <coins.h>
 #include <consensus/amount.h>
+#include <span.h>
 #include <sync.h>
 #include <util/fs.h>
 #include <validation.h>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -29,6 +33,7 @@ struct NodeContext;
 } // namespace node
 
 inline constexpr int NUM_GETBLOCKSTATS_PERCENTILES = 5;
+using coinascii_cb_t = std::function<std::string(const COutPoint&, const Coin&)>;
 
 /**
  * Get the difficulty of the net wrt to the given block index.
