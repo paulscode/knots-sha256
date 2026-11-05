@@ -451,7 +451,11 @@ if(BUILD_FUZZ_BINARY)
   target_link_libraries(fuzzer_interface INTERFACE ${FUZZ_LIBS})
 endif()
 
+include(cmake/iopriority.cmake)
+
 include(cmake/introspection.cmake)
+
+include(cmake/mempressure.cmake)
 
 include(cmake/ccache.cmake)
 
