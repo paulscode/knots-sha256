@@ -965,7 +965,9 @@ std::vector<size_t> DataOutputBytes(const CTransaction& tx, const CCoinsViewCach
     for (size_t i{0}; i < n; ++i) {
         if (!program_size[i] || spent[i]) continue;
         const bool sibling{data_groups.count({types[i], tx.vout[i].nValue}) > 0};
-        const bool dust_run{in_run[i] && run_programs[tx.vout[i].nValue].size() >= DATA_OUTPUT_DUST_RUN};
+        // Off by default (-datacarrierdustruns): a commitment with DATA_OUTPUT_DUST_RUN or more in-flight HTLCs of one
+        // amount up to DATA_OUTPUT_RUN_MAX_VALUE has the same layout, and refusing it can block a Lightning force close.
+        const bool dust_run{::g_datacarrier_dust_runs && in_run[i] && run_programs[tx.vout[i].nValue].size() >= DATA_OUTPUT_DUST_RUN};
         if (data[i] || sibling || dust_run) {
             ret[i] = program_size[i] + /* script length */ 1 + /* amount */ 8;
         }
@@ -1025,6 +1027,7 @@ int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& vi
 
 bool g_reject_bpub{DEFAULT_REJECT_BPUB};
 bool g_reject_fake_outputs{DEFAULT_REJECT_FAKE_OUTPUTS};
+bool g_datacarrier_dust_runs{DEFAULT_DATACARRIER_DUST_RUNS};
 
 static bool IsBPUBHeader(const std::vector<unsigned char>& head)
 {
