@@ -515,6 +515,8 @@ void CTxMemPool::UpdateDynamicDustFeerate()
         est_feerate = m_opts.dust_relay_feerate_floor;
     }
 
+    // Mempool acceptance reads the dust feerate under cs; write it under cs too (this runs on the scheduler thread)
+    LOCK(cs);
     if (m_opts.dust_relay_feerate != est_feerate) {
         LogDebug(BCLog::MEMPOOL, "Updating dust feerate to %s\n", est_feerate.ToString(FeeRateFormat::SAT_VB));
         m_opts.dust_relay_feerate = est_feerate;

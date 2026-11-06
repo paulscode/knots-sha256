@@ -1633,7 +1633,9 @@ MempoolAcceptResult MemPoolAccept::AcceptSingleTransactionInternal(const CTransa
             ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-spends-conflicting-tx", *err_string);
             return MempoolAcceptResult::Failure(ws.m_state);
         }
-        if (has_policy_conflict && !args.m_ignore_rejects.count("txn-spk-reused-chained")) {
+        // Not ignorable: the conflicting ancestor would be removed while this transaction stays, leaving it spending
+        // a coin that exists nowhere (an inconsistent mempool that breaks block templates)
+        if (has_policy_conflict) {
             ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "txn-spk-reused-chained");
             return MempoolAcceptResult::Failure(ws.m_state);
         }
@@ -3308,7 +3310,10 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
         // Prune locks that began around the tip should be moved backward so they get a chance to reorg
         const uint64_t max_height_first{static_cast<uint64_t>(pindexDelete->nHeight - 1)};
         for (auto& prune_lock : m_blockman.m_prune_locks) {
+            // An unset lock (UINT64_MAX) stays unset, and one at height 0 cannot move further back (it would wrap and
+            // release everything)
             if (prune_lock.second.height_first < max_height_first) continue;
+            if (prune_lock.second.height_first == std::numeric_limits<uint64_t>::max() || prune_lock.second.height_first == 0) continue;
 
             --prune_lock.second.height_first;
             LogDebug(BCLog::PRUNE, "%s prune lock moved back to %d\n", prune_lock.first, prune_lock.second.height_first);

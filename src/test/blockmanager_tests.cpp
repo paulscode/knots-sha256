@@ -324,4 +324,41 @@ BOOST_FIXTURE_TEST_CASE(prune_lock_update_and_delete, TestingSetup)
     BOOST_CHECK(!blockman.DeletePruneLock("nonexistent"));
 }
 
+BOOST_FIXTURE_TEST_CASE(prune_lock_disconnect_moves_back, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    const int tip_height{WITH_LOCK(::cs_main, return chainman.ActiveHeight())};
+    {
+        LOCK(::cs_main);
+        auto& blockman{chainman.m_blockman};
+        blockman.UpdatePruneLock("at_tip", node::PruneLockInfo{.height_first = uint64_t(tip_height)});
+        blockman.UpdatePruneLock("low", node::PruneLockInfo{.height_first = 5});
+        blockman.UpdatePruneLock("unset", node::PruneLockInfo{});
+        blockman.UpdatePruneLock("zero", node::PruneLockInfo{.height_first = 0});
+    }
+    // Disconnecting the tip moves a lock that began at or above the new tip back by one; an unset lock stays unset
+    // and a lock at height 0 does not wrap around (which would release it)
+    BlockValidationState state;
+    CBlockIndex* tip{WITH_LOCK(::cs_main, return chainman.ActiveTip())};
+    BOOST_REQUIRE(chainman.ActiveChainstate().InvalidateBlock(state, tip));
+    {
+        LOCK(::cs_main);
+        const auto& locks{chainman.m_blockman.m_prune_locks};
+        BOOST_CHECK_EQUAL(locks.at("at_tip").height_first, uint64_t(tip_height - 1));
+        BOOST_CHECK_EQUAL(locks.at("low").height_first, 5U);
+        BOOST_CHECK_EQUAL(locks.at("unset").height_first, std::numeric_limits<uint64_t>::max());
+    }
+    // Down to genesis: every lock that began above follows the tip to 0 and stays there, through the disconnect of
+    // block 1 (where the old code decremented 0 to UINT64_MAX)
+    CBlockIndex* first{WITH_LOCK(::cs_main, return chainman.ActiveChain()[1])};
+    BOOST_REQUIRE(chainman.ActiveChainstate().InvalidateBlock(state, first));
+    LOCK(::cs_main);
+    const auto& locks{chainman.m_blockman.m_prune_locks};
+    BOOST_CHECK_EQUAL(chainman.ActiveHeight(), 0);
+    BOOST_CHECK_EQUAL(locks.at("at_tip").height_first, 0U);
+    BOOST_CHECK_EQUAL(locks.at("low").height_first, 0U);
+    BOOST_CHECK_EQUAL(locks.at("zero").height_first, 0U);
+    BOOST_CHECK_EQUAL(locks.at("unset").height_first, std::numeric_limits<uint64_t>::max());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
