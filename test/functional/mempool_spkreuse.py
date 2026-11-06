@@ -5,7 +5,7 @@
 """-spkreuse=conflict: an unconfirmed pubkey script is exclusive to one transaction.
 
 Covers the four rejections (twin outputs, change to the spent script, reuse that conflicts, and the chained case
-where the conflict is the transaction's own ancestor), RBF over a reuse conflict, ignore_rejects, and that
+where the conflict is the transaction's own ancestor), RBF over a reuse conflict, reuse between members of a package, ignore_rejects, and that
 txn-spk-reused-chained cannot be ignored (it would leave a transaction spending a coin removed with its parent)."""
 from decimal import Decimal
 
@@ -95,6 +95,20 @@ class SpkReuseTest(BitcoinTestFramework):
         # With the whole rule ignored the child is no reuse conflict at all
         self.send(conflict, child, ["txn-spk-reused"])
         assert {parent.txid_hex, child.txid_hex} <= set(conflict.getrawmempool())
+
+        self.log.info("Reuse inside a package (a zero-fee parent and its child, submitted together) is refused")
+        parent = self.tx([coins[6]], [(50_000, spk(500)), (50_000, spk(501))])
+        parent.version = 3  # TRUC: the zero-fee parent enters only with its child, so the package path decides
+        child = self.tx([{"outpoint": COutPoint(parent.txid_int, 0), "n": 500}], [(40_000, spk(501))])
+        child.version = 3
+        pkg = [parent.serialize().hex(), child.serialize().hex()]
+        assert_equal(conflict.submitpackage(pkg)["package_msg"], "txn-spk-reused-package")
+        assert parent.txid_hex not in conflict.getrawmempool() and child.txid_hex not in conflict.getrawmempool()
+        assert_equal(allow.submitpackage(pkg)["package_msg"], "success")
+        self.log.info("The same package without the reuse is accepted (creating and spending one script is a chain)")
+        child = self.tx([{"outpoint": COutPoint(parent.txid_int, 0), "n": 500}], [(40_000, spk(502))])
+        child.version = 3
+        assert_equal(conflict.submitpackage([parent.serialize().hex(), child.serialize().hex()])["package_msg"], "success")
 
         self.log.info("-spkreuse=allow (the default) relays all of it")
         tx = self.tx([coins[5]], [(40_000, spk(400)), (40_000, spk(400))])
