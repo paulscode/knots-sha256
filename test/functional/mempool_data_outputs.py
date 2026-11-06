@@ -23,8 +23,10 @@ class DataOutputsTest(BitcoinTestFramework):
             ["-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-rejectfakeoutputs=1", "-datacarrierdustruns=1", "-datacarriersize=83"],  # the framework -corepolicy leaves Core 32 uncapped
             ["-datacarrier=1", "-datacarriersize=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-rejectfakeoutputs=1", "-datacarrierdustruns=1"],
             ["-corepolicy=0", "-datacarrierdustruns=1"],  # Knots defaults (with the dust-run rule): non-OP_RETURN data carriers are rejected outright
-            ["-corepolicy=0", "-rejectfakeoutputs=0"],
-            ["-datacarrierfullcount"],  # -corepolicy alone turns -rejectfakeoutputs off
+            # Both with the dust-run rule on, so that accepting a run proves -rejectfakeoutputs is off (the rule only
+            # runs under it), not merely that the run rule is off by default
+            ["-corepolicy=0", "-rejectfakeoutputs=0", "-datacarrierdustruns=1"],
+            ["-datacarrierfullcount", "-datacarrierdustruns=1"],  # -corepolicy alone turns -rejectfakeoutputs off
             # Weighing data at -datacarriercost=2 without refusing it, to compare analyzepsbt with the mempool
             ["-corepolicy=0", "-datacarriercost=2", "-rejectfakeoutputs=0", "-datacarrierdustruns=1"],
             ["-corepolicy=0", "-datacarriercost=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount=0", "-datacarrierdustruns=1"],  # the analyzepsbt check weighs a dust run
@@ -47,6 +49,7 @@ class DataOutputsTest(BitcoinTestFramework):
 
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[0])
+        self.generate(self.wallet, 120)  # enough mature coins for every case below
         counted, tight, default, disabled, corepolicy, weighed_off, weighed_on, ours = self.nodes
 
         def p2wsh(program):
@@ -60,6 +63,13 @@ class DataOutputsTest(BitcoinTestFramework):
         # Not counted at all with -rejectfakeoutputs=0, or under -corepolicy
         self.test_data_output_transaction(node=disabled, outputs=dust_run, reject_reason=None)
         self.test_data_output_transaction(node=corepolicy, outputs=dust_run, reject_reason=None)
+        # Shapes that do not depend on the run rule: a padded P2WSH program and an off-curve taproot key
+        padded = (10_000, p2wsh(b"\x00" * 8 + randbytes(24)))
+        off_curve = (10_000, program_to_witness_script(1, bytes.fromhex("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")))
+        for shape in (padded, off_curve):
+            self.test_data_output_transaction(node=ours, outputs=[shape], reject_reason="txn-datacarrier-nonstandard")
+            self.test_data_output_transaction(node=disabled, outputs=[shape], reject_reason=None)
+            self.test_data_output_transaction(node=corepolicy, outputs=[shape], reject_reason=None)
 
         self.log.info("Testing a run at 546 sat, what the fake-key encoder pays per chunk.")
         self.test_data_output_transaction(node=default, outputs=[(546, p2wsh(randbytes(32))) for _ in range(3)], reject_reason="txn-datacarrier-nonstandard")

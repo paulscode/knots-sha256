@@ -9,4 +9,6 @@ Policy
   penalty spend of a revoked commitment relays under the default settings;
   it was rejected with `txn-datacarrier-nonstandard`. Only that exact leaf is
   affected, and a transaction with more such inputs than the budget holds is
-  still refused.
+  still refused: at the default `-datacarriersize=42` one such input per
+  transaction relays, so a justice transaction sweeping two revoked
+  commitments at once is refused (`-datacarriersize=83` relays two).
