@@ -251,7 +251,7 @@ static RPCMethod getprivatebroadcastinfo()
             const NodeContext& node{EnsureAnyNodeContext(request.context)};
             const PeerManager& peerman{EnsurePeerman(node)};
             if (!peerman.GetInfo().private_broadcast) {
-                throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Private broadcast is not enabled. Ensure you're running Bitcoin Core with -privatebroadcast=1.");
+                throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Private broadcast is not enabled. Ensure the node is running with -privatebroadcast=1.");
             }
 
             const auto txs{peerman.GetPrivateBroadcastInfo()};
@@ -320,7 +320,7 @@ static RPCMethod abortprivatebroadcast()
             const NodeContext& node{EnsureAnyNodeContext(request.context)};
             PeerManager& peerman{EnsurePeerman(node)};
             if (!peerman.GetInfo().private_broadcast) {
-                throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Private broadcast is not enabled. Ensure you're running Bitcoin Core with -privatebroadcast=1.");
+                throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Private broadcast is not enabled. Ensure the node is running with -privatebroadcast=1.");
             }
 
             const uint256 id{ParseHashV(self.Arg<UniValue>("id"), "id")};
@@ -383,7 +383,7 @@ static RPCMethod testmempoolaccept()
                     {RPCResult::Type::BOOL, "allowed", /*optional=*/true, "Whether this tx would be accepted to the mempool and pass client-specified maxfeerate. "
                                                        "If not present, the tx was not fully validated due to a failure in another tx in the list."},
                     {RPCResult::Type::NUM, "vsize_adjusted", /*optional=*/true, "Policy size: the maximum of sigop-adjusted size (-bytespersigop) and virtual transaction size as defined in BIP 141, plus the -datacarriercost weight of data bytes (only present when 'allowed' is true)."},
-                    {RPCResult::Type::NUM, "vsize", /*optional=*/true, "(DEPRECATED) Was previously erroneously described as the BIP 141 vsize, but is actually sigops-adjusted vsize.\n"
+                    {RPCResult::Type::NUM, "vsize", /*optional=*/true, "(DEPRECATED) Was previously erroneously described as the BIP 141 vsize, but is actually the policy size: sigops-adjusted vsize plus the -datacarriercost weight of data bytes.\n"
                                                                 "Use vsize_bip141 to actually get that behavior or switch to the explicit vsize_adjusted for retained behavior."},
                     {RPCResult::Type::NUM, "vsize_bip141", /*optional=*/true, "Virtual transaction size as defined in BIP 141.\n"
                                                                        "This is different from actual serialized size for witness transactions as witness data is discounted (only present when 'allowed' is true)."},
@@ -539,7 +539,7 @@ static std::vector<RPCResult> ClusterDescription()
 static std::vector<RPCResult> MempoolEntryDescription()
 {
     std::vector<RPCResult> list = {
-        {RPCResult::Type::NUM, "vsize", "(DEPRECATED) Was previously erroneously described as the BIP 141 vsize, but is actually sigops-adjusted vsize.\n"
+        {RPCResult::Type::NUM, "vsize", "(DEPRECATED) Was previously erroneously described as the BIP 141 vsize, but is actually the policy size: sigops-adjusted vsize plus the -datacarriercost weight of data bytes.\n"
         "Use vsize_bip141 to actually get that behavior or switch to the explicit vsize_adjusted for retained behavior."},
         {RPCResult::Type::NUM, "vsize_bip141", "Virtual transaction size as defined in BIP 141.\n"
         "This is different from actual serialized size for witness transactions as witness data is discounted."},
@@ -1724,7 +1724,7 @@ static RPCMethod submitpackage()
                         {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
                         {RPCResult::Type::STR_HEX, "other-wtxid", /*optional=*/true, "The wtxid of a different transaction with the same txid but different witness found in the mempool. This means the submitted transaction was ignored."},
                         {RPCResult::Type::NUM, "vsize_adjusted", /*optional=*/true, "Policy size: the maximum of sigop-adjusted size (-bytespersigop) and virtual transaction size as defined in BIP 141, plus the -datacarriercost weight of data bytes."},
-                        {RPCResult::Type::NUM, "vsize", /*optional=*/true, "(DEPRECATED) Was previously erroneously described as the BIP 141 vsize, but is actually sigops-adjusted vsize.\n"
+                        {RPCResult::Type::NUM, "vsize", /*optional=*/true, "(DEPRECATED) Was previously erroneously described as the BIP 141 vsize, but is actually the policy size: sigops-adjusted vsize plus the -datacarriercost weight of data bytes.\n"
                                                                     "Use vsize_bip141 to actually get that behavior or switch to the explicit vsize_adjusted for retained behavior."},
                         {RPCResult::Type::NUM, "vsize_bip141", /*optional=*/true, "Virtual transaction size as defined in BIP 141."},
                         {RPCResult::Type::OBJ, "fees", /*optional=*/true, "Transaction fees", {
