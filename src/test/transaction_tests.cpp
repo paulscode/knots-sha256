@@ -41,6 +41,8 @@
 #include <map>
 #include <string>
 
+#include <crypto/sha256.h>
+
 #include <boost/test/unit_test.hpp>
 
 #include <univalue.h>
@@ -2036,6 +2038,210 @@ BOOST_AUTO_TEST_CASE(tx_DataOutputBytes)
     BOOST_CHECK_EQUAL_COLLECTIONS(bare_view.begin(), bare_view.end(), bare_no_view.begin(), bare_no_view.end());
     BOOST_CHECK(DatacarrierBytes(CTransaction{t}, bare_coins, bare_view) == DatacarrierBytes(CTransaction{t}, bare_coins, bare_no_view));
     g_datacarrier_dust_runs = prev_dust_runs;
+}
+
+BOOST_AUTO_TEST_CASE(dropped_stack_items)
+{
+    const std::vector<unsigned char> item(80, 'a'), sig(64, 1), key(32, 2);
+    const auto items = [&](size_t n) { return std::vector<std::vector<unsigned char>>(n, item); };
+    const auto dropped = [](const CScript& s, const std::vector<std::vector<unsigned char>>& st, bool tap = false) { return DroppedStackItemBytes(s, st, tap); };
+
+    // Removed without being read: counted, however they leave
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_2DROP << OP_2DROP << OP_TRUE, items(4)), 320U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_DUP << OP_2DROP << OP_DROP << OP_TRUE, items(2)), 160U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_TOALTSTACK << OP_FROMALTSTACK << OP_DROP << OP_TRUE, items(1)), 80U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_NIP, {item, {1}}), 80U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_SIZE << OP_DROP << OP_DROP << OP_TRUE, items(1)), 80U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_1 << OP_PICK << OP_DROP << OP_2DROP << OP_TRUE, items(2)), 160U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_1 << OP_ROLL << OP_2DROP << OP_TRUE, items(2)), 160U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_IF << OP_2DROP << OP_ENDIF << OP_TRUE, {item, item, {1}}), 160U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_NOTIF << OP_TRUE << OP_ELSE << OP_DROP << OP_TRUE << OP_ENDIF, {item, {1}}), 80U);
+    // The mainnet shape (tapscript): the signature is read, the rest is dropped
+    BOOST_CHECK_EQUAL(dropped(CScript() << key << OP_CHECKSIGVERIFY << OP_DROP << OP_DROP << OP_TRUE, {item, item, sig}, true), 160U);
+    // A signature check's result is "signature non-empty" (NULLFAIL), so a branch on it is followed
+    BOOST_CHECK_EQUAL(dropped(CScript() << key << OP_CHECKSIG << OP_IF << OP_DROP << OP_ENDIF << OP_TRUE, {item, sig}, true), 80U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << key << OP_CHECKSIG << OP_IF << OP_DROP << OP_ENDIF << OP_TRUE, {item, {}}, true), 0U);
+
+    // Read: not counted
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_SHA256 << std::vector<unsigned char>(32, 0) << OP_EQUAL, items(1)), 0U);
+    // Hashing an item, or checking a signature with it, and dropping the result uses nothing
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_DUP << OP_SHA256 << OP_DROP << OP_DROP << OP_TRUE, items(1)), 80U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_SHA256 << OP_DROP << OP_TRUE, items(1)), 80U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_1ADD << OP_DROP << OP_TRUE, {{5}}), 1U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << key << OP_CHECKSIG << OP_DROP << OP_TRUE, {sig}, true), 64U);
+    // ... while a hash that is checked uses its item, however it gets there
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_SHA256 << OP_SHA256 << std::vector<unsigned char>(32, 0) << OP_EQUALVERIFY << OP_TRUE, items(1)), 0U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_SIZE << 80 << OP_EQUALVERIFY << OP_SHA256 << std::vector<unsigned char>(32, 0) << OP_EQUAL, items(1)), 0U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_2 << key << key << key << OP_3 << OP_CHECKMULTISIG, {{}, sig, sig}), 0U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << key << OP_CHECKSIG, {sig}, true), 0U);
+    // The script's own pushes are its own (OP_CSV style)
+    BOOST_CHECK_EQUAL(dropped(CScript() << 144 << OP_CHECKSEQUENCEVERIFY << OP_DROP << key << OP_CHECKSIG, {sig}, true), 0U);
+    // LND's revocation leaf drops a key the script pushes, not a spent item
+    BOOST_CHECK_EQUAL(dropped(CScript() << key << OP_DROP << key << OP_CHECKSIG, {sig}, true), 0U);
+    // Left on the stack at the end is not dropped
+    BOOST_CHECK_EQUAL(dropped(CScript(), items(1)), 0U);
+
+    // Computed conditions are followed: hashes, arithmetic, comparisons, multisig under NULLFAIL
+    const std::vector<unsigned char> secret{'o', 'p', 'e', 'n'};
+    uint256 secret_hash;
+    CSHA256().Write(secret.data(), secret.size()).Finalize(secret_hash.begin());
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_SHA256 << std::vector<unsigned char>(secret_hash.begin(), secret_hash.end()) << OP_EQUAL << OP_IF << OP_2DROP << OP_ENDIF << OP_TRUE, {item, item, secret}), 160U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_1ADD << OP_IF << OP_2DROP << OP_ENDIF << OP_TRUE, {item, item, {}}), 160U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_3 << OP_5 << OP_WITHIN << OP_IF << OP_DROP << OP_ENDIF << OP_TRUE, {item, {4}}), 80U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_1 << key << OP_1 << OP_CHECKMULTISIG << OP_IF << OP_DROP << OP_ENDIF << OP_TRUE, {item, {}, sig}), 80U);
+    // A script built to be expensive to follow: every spent item counts
+    {
+        // 299 OP_EQUALs fold all 300 items into one value carrying 300 origins; copying it 400 times is 120k work
+        CScript costly;
+        for (int k{0}; k < 299; ++k) costly << OP_EQUAL;
+        for (int k{0}; k < 400; ++k) costly << OP_DUP << OP_DROP;
+        const std::vector<std::vector<unsigned char>> many(300, std::vector<unsigned char>{'z'});
+        BOOST_CHECK_EQUAL(dropped(costly, many, true), 300U);
+    }
+    // Cannot be followed: nothing counted
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_1 << key << key << OP_2 << OP_CHECKMULTISIG << OP_IF << OP_DROP << OP_ENDIF << OP_TRUE, {item, {}, {}}), 0U);  // all empty: false, item left
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_CAT << OP_DROP << OP_TRUE, items(2)), 0U);
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_DROP << OP_DROP << OP_TRUE, items(1)), 0U);  // fails: stack too short
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_IF << OP_TRUE, {{1}}), 0U);                   // unbalanced conditional
+    BOOST_CHECK_EQUAL(dropped(CScript() << opcodetype(0x50) << OP_2DROP << OP_TRUE, items(2), true), 0U); // OP_SUCCESS80
+    BOOST_CHECK_EQUAL(dropped(CScript() << OP_DROP << OP_CHECKSIGADD, items(3), false), 0U); // CHECKSIGADD outside tapscript
+
+    // Through the transaction: only with -datacarrierdroppeditems, as non-standard data
+    CScript redeem{CScript() << OP_2DROP << OP_TRUE};
+    CMutableTransaction prev;
+    prev.vout.emplace_back(10000, GetScriptForDestination(WitnessV0ScriptHash(redeem)));
+    CMutableTransaction spend;
+    spend.vin.emplace_back(COutPoint(prev.GetHash(), 0));
+    spend.vin[0].scriptWitness.stack = {item, item, std::vector<unsigned char>(redeem.begin(), redeem.end())};
+    spend.vout.emplace_back(9000, CScript() << OP_TRUE);
+    CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+    AddCoins(coins, CTransaction(prev), 0);
+    const CTransaction tx{spend};
+    const std::vector<size_t> no_outputs(tx.vout.size(), 0);
+    const bool saved{g_datacarrier_dropped_items};
+    g_datacarrier_dropped_items = false;
+    BOOST_CHECK_EQUAL(DatacarrierBytes(tx, coins, no_outputs).second, 0U);
+    BOOST_CHECK_EQUAL(CalculateExtraTxWeight(tx, coins, 8, no_outputs), 0);
+    g_datacarrier_dropped_items = true;
+    BOOST_CHECK_EQUAL(DatacarrierBytes(tx, coins, no_outputs).second, 160U);
+    BOOST_CHECK_EQUAL(CalculateExtraTxWeight(tx, coins, 8, no_outputs), 160 * 7);
+    g_datacarrier_dropped_items = saved;
+}
+
+BOOST_AUTO_TEST_CASE(fake_output_text)
+{
+    const auto output_bytes = [](const std::vector<unsigned char>& program) {
+        CMutableTransaction mtx;
+        mtx.vout.emplace_back(1000, CScript() << OP_0 << program);
+        return DataOutputBytes(CTransaction{mtx}, nullptr).at(0);
+    };
+    const std::string text{"abcdefghijklmnopqrstuvwxyz012345"};
+    const std::vector<unsigned char> text_program(text.begin(), text.end());
+    const bool saved{g_fake_output_text};
+    g_fake_output_text = false;
+    BOOST_CHECK_EQUAL(output_bytes(text_program), 0U);
+    g_fake_output_text = true;
+    BOOST_CHECK_EQUAL(output_bytes(text_program), 32U + 1 + 8);
+    // One byte outside printable text and it is a hash again (as far as this rule goes)
+    auto almost{text_program};
+    almost[7] = 0x80;
+    BOOST_CHECK_EQUAL(output_bytes(almost), 0U);
+    // A real hash is not text
+    const uint256 h{Hash(text_program)};
+    BOOST_CHECK_EQUAL(output_bytes(std::vector<unsigned char>(h.begin(), h.end())), 0U);
+    // The all-zero taproot key (burn) is off the curve but carries nothing: not data
+    {
+        CMutableTransaction mtx;
+        mtx.vout.emplace_back(1000, CScript() << OP_1 << std::vector<unsigned char>(32, 0));
+        BOOST_CHECK_EQUAL(DataOutputBytes(CTransaction{mtx}, nullptr).at(0), 0U);
+    }
+    g_fake_output_text = saved;
+}
+
+BOOST_AUTO_TEST_CASE(datacarrier_analysis_needs_committed_script)
+{
+    // An envelope the dead-branch and drop rules count, under P2WSH
+    const CScript envelope{CScript() << OP_FALSE << OP_IF << std::vector<unsigned char>(60, 'x') << OP_ENDIF << OP_TRUE};
+    const CScript other{CScript() << OP_TRUE};
+    const auto count = [](const CScript& committed, const CScript& presented) {
+        CMutableTransaction prev;
+        prev.vout.emplace_back(10000, GetScriptForDestination(WitnessV0ScriptHash(committed)));
+        CMutableTransaction spend;
+        spend.vin.emplace_back(COutPoint(prev.GetHash(), 0));
+        spend.vin[0].scriptWitness.stack = {std::vector<unsigned char>(presented.begin(), presented.end())};
+        spend.vout.emplace_back(9000, CScript() << OP_TRUE);
+        CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+        AddCoins(coins, CTransaction(prev), 0);
+        const CTransaction tx{spend};
+        const std::vector<size_t> no_outputs(tx.vout.size(), 0);
+        const auto dcb{DatacarrierBytes(tx, coins, no_outputs)};
+        return std::make_pair(dcb.first + dcb.second, CalculateExtraTxWeight(tx, coins, 8, no_outputs));
+    };
+    const auto committed{count(envelope, envelope)};
+    BOOST_CHECK_GT(committed.first, 60U);
+    BOOST_CHECK_GT(committed.second, 0);
+    // A script the coin does not commit to fails validation anyway; it is not analysed
+    const auto uncommitted{count(other, envelope)};
+    BOOST_CHECK_EQUAL(uncommitted.first, 0U);
+    BOOST_CHECK_EQUAL(uncommitted.second, 0);
+
+    // Every script spend type, committed and not: legacy P2SH, P2SH-wrapped P2WSH, tapscript
+    const auto count_tx = [](const CScript& prev_spk, const CScript& script_sig, const std::vector<std::vector<unsigned char>>& witness) {
+        CMutableTransaction prev;
+        prev.vout.emplace_back(10000, prev_spk);
+        CMutableTransaction spend;
+        spend.vin.emplace_back(COutPoint(prev.GetHash(), 0));
+        spend.vin[0].scriptSig = script_sig;
+        spend.vin[0].scriptWitness.stack = witness;
+        spend.vout.emplace_back(9000, CScript() << OP_TRUE);
+        CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+        AddCoins(coins, CTransaction(prev), 0);
+        const CTransaction tx{spend};
+        const auto dcb{DatacarrierBytes(tx, coins, std::vector<size_t>(tx.vout.size(), 0))};
+        return dcb.first + dcb.second;
+    };
+    const std::vector<unsigned char> envelope_bytes(envelope.begin(), envelope.end());
+    // Legacy P2SH: the redeem script is the last scriptSig push
+    BOOST_CHECK_GT(count_tx(GetScriptForDestination(ScriptHash(envelope)), CScript() << envelope_bytes, {}), 60U);
+    BOOST_CHECK_EQUAL(count_tx(GetScriptForDestination(ScriptHash(other)), CScript() << envelope_bytes, {}), 0U);
+    // P2SH-P2WSH: the scriptSig pushes the witness program, the witness carries the script
+    const CScript wsh{GetScriptForDestination(WitnessV0ScriptHash(envelope))};
+    const CScript wsh_other{GetScriptForDestination(WitnessV0ScriptHash(other))};
+    BOOST_CHECK_GT(count_tx(GetScriptForDestination(ScriptHash(wsh)), CScript() << std::vector<unsigned char>(wsh.begin(), wsh.end()), {envelope_bytes}), 60U);
+    BOOST_CHECK_EQUAL(count_tx(GetScriptForDestination(ScriptHash(wsh_other)), CScript() << std::vector<unsigned char>(wsh_other.begin(), wsh_other.end()), {envelope_bytes}), 0U);
+    // ... and a wrapper the P2SH hash does not commit to
+    BOOST_CHECK_EQUAL(count_tx(GetScriptForDestination(ScriptHash(wsh_other)), CScript() << std::vector<unsigned char>(wsh.begin(), wsh.end()), {envelope_bytes}), 0U);
+    // Tapscript: committed through the control block; flipping the parity bit breaks the commitment
+    TaprootBuilder builder;
+    builder.Add(/*depth=*/0, envelope, TAPROOT_LEAF_TAPSCRIPT);
+    CKey internal_key;
+    internal_key.MakeNewKey(true);
+    builder.Finalize(XOnlyPubKey{internal_key.GetPubKey()});
+    const WitnessV1Taproot output{builder.GetOutput()};
+    const TaprootSpendData spend_data{builder.GetSpendData()};
+    std::vector<unsigned char> control{*spend_data.scripts.at({envelope_bytes, TAPROOT_LEAF_TAPSCRIPT}).begin()};
+    const CScript tr_spk{GetScriptForDestination(output)};
+    BOOST_CHECK_GT(count_tx(tr_spk, CScript(), {envelope_bytes, control}), 60U);
+    control[0] ^= 1;
+    BOOST_CHECK_EQUAL(count_tx(tr_spk, CScript(), {envelope_bytes, control}), 0U);
+
+    // One uncommitted input makes the transaction invalid: none of its inputs is analysed
+    {
+        CMutableTransaction prev;
+        prev.vout.emplace_back(10000, GetScriptForDestination(WitnessV0ScriptHash(envelope)));
+        prev.vout.emplace_back(10000, GetScriptForDestination(WitnessV0ScriptHash(other)));
+        CMutableTransaction spend;
+        spend.vin.emplace_back(COutPoint(prev.GetHash(), 0));
+        spend.vin.emplace_back(COutPoint(prev.GetHash(), 1));
+        spend.vin[0].scriptWitness.stack = {envelope_bytes};
+        spend.vin[1].scriptWitness.stack = {envelope_bytes};  // not what output 1 commits to
+        spend.vout.emplace_back(9000, CScript() << OP_TRUE);
+        CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+        AddCoins(coins, CTransaction(prev), 0);
+        const CTransaction tx{spend};
+        const auto dcb{DatacarrierBytes(tx, coins, std::vector<size_t>(tx.vout.size(), 0))};
+        BOOST_CHECK_EQUAL(dcb.first + dcb.second, 0U);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

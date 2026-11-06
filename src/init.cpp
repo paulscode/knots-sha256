@@ -772,6 +772,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-rejectdeadbranches", strprintf("Count data in a conditional branch that a pushed constant makes unreachable as data carrier bytes; the OP_FALSE OP_IF envelope is counted either way (default: %u)", DEFAULT_REJECT_DEAD_BRANCHES), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrierfullcount", strprintf("Apply datacarriersize limit to all known datacarrier methods (default: %u)", DEFAULT_DATACARRIER_FULLCOUNT), ArgsManager::ALLOW_ANY | (DEFAULT_DATACARRIER_FULLCOUNT ? uint32_t{ArgsManager::DEBUG_ONLY} : 0), OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrierdustruns", strprintf("With -rejectfakeoutputs, also count three or more P2WSH outputs sharing one value of at most %d sat as data. Off by default: a Lightning commitment with several equal in-flight HTLCs has the same layout (default: %u)", DATA_OUTPUT_RUN_MAX_VALUE, DEFAULT_DATACARRIER_DUST_RUNS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-datacarrierdroppeditems", strprintf("Count items of a spent stack that the script removes without reading them (OP_DROP, OP_2DROP, OP_NIP) as data carrier bytes (default: %u)", DEFAULT_DATACARRIER_DROPPED_ITEMS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-fakeoutputtext", strprintf("With -rejectfakeoutputs, also count an output whose hash or key is all printable text as data (default: %u)", DEFAULT_FAKE_OUTPUT_TEXT), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-rejectfakeoutputs", strprintf("Count outputs whose hash or key is data as data carrier bytes (default: %u)", DEFAULT_REJECT_FAKE_OUTPUTS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarriersize",
                    strprintf("Maximum size of data in data carrier transactions we relay and mine, in bytes (default: %u)",
@@ -942,6 +944,8 @@ void InitParameterInteraction(ArgsManager& args)
         args.SoftSetArg("-rejectdeadbranches", "0");  // Knots #400 resets it in its own -corepolicy block (P1)
         args.SoftSetArg("-rejectfakeoutputs", "0");
         args.SoftSetArg("-acceptunknownwitness", "1");  // our default is 0 (decisions/0025); Core relays them (P1)
+        args.SoftSetArg("-datacarrierdroppeditems", "0");
+        args.SoftSetArg("-fakeoutputtext", "0");
         args.SoftSetArg("-subdustfeepenalty", "0");
         args.SoftSetArg("-datacarriercost", "0.25");
         args.SoftSetArg("-datacarrierfullcount", "0");
@@ -1320,11 +1324,17 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     }
 
     if (auto parsed = args.GetFixedPointArg("-datacarriercost", 2)) {
+        // A negative value would wrap the unsigned weight and price every data byte out of the mempool
+        if (*parsed < 0 || *parsed > 100'000) {
+            return InitError(Untranslated("-datacarriercost must be between 0 and 1000"));
+        }
         g_weight_per_data_byte = ((*parsed * WITNESS_SCALE_FACTOR) + 99) / 100;
     }
     g_reject_bpub = args.GetBoolArg("-rejectbpub", DEFAULT_REJECT_BPUB);
     g_reject_fake_outputs = args.GetBoolArg("-rejectfakeoutputs", DEFAULT_REJECT_FAKE_OUTPUTS);
     g_datacarrier_dust_runs = args.GetBoolArg("-datacarrierdustruns", DEFAULT_DATACARRIER_DUST_RUNS);
+    g_datacarrier_dropped_items = args.GetBoolArg("-datacarrierdroppeditems", DEFAULT_DATACARRIER_DROPPED_ITEMS);
+    g_fake_output_text = args.GetBoolArg("-fakeoutputtext", DEFAULT_FAKE_OUTPUT_TEXT);
 
     g_script_size_policy_limit = args.GetIntArg("-maxscriptsize", g_script_size_policy_limit);
 

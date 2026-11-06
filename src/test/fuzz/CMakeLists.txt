@@ -43,6 +43,7 @@ add_executable(fuzz
   crypto_poly1305.cpp
   cuckoocache.cpp
   datacarrier_dead_branch.cpp
+  datacarrier_dropped_items.cpp
   dbwrapper.cpp
   decode_tx.cpp
   descriptor_parse.cpp

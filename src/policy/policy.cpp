@@ -13,6 +13,10 @@
 #include <consensus/validation.h>
 #include <crypto/common.h>
 #include <crypto/hex_base.h>
+#include <hash.h>
+#include <crypto/sha256.h>
+#include <crypto/sha1.h>
+#include <crypto/ripemd160.h>
 #include <kernel/mempool_options.h>
 #include <policy/feerate.h>
 #include <policy/settings.h>
@@ -28,6 +32,7 @@
 #include <primitives/transaction_identifier.h>
 
 #include <algorithm>
+#include <stdexcept>
 #include <array>
 #include <cstddef>
 #include <limits>
@@ -827,6 +832,47 @@ std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript
 }
 
 /**
+ * Whether the script an input would execute is the one its spent output commits to. The data analyses below read
+ * that script before any hash or signature check runs, so a peer could otherwise send scripts that do not match the
+ * coin, cost a lot to analyse (dead branches above all) and fail validation afterwards anyway: work bought for free.
+ * Skipping an uncommitted script changes nothing for a spend that can be valid. One hash, or one taproot tweak check.
+ */
+static bool ScriptCommitted(const CScript& prev_spk, const CTxIn& txin)
+{
+    CScript spk{prev_spk};
+    if (spk.IsPayToScriptHash()) {
+        std::vector<std::vector<unsigned char>> stack;
+        if (!EvalScript(stack, txin.scriptSig, SCRIPT_VERIFY_NONE, BaseSignatureChecker(), SigVersion::BASE) || stack.empty()) return false;
+        const auto& redeem{stack.back()};
+        if (Hash160(redeem) != uint160{std::span{prev_spk}.subspan(2, 20)}) return false;
+        spk = CScript(redeem.begin(), redeem.end());
+    }
+    int version;
+    std::vector<unsigned char> program;
+    if (!spk.IsWitnessProgram(version, program)) return true;  // bare script or P2SH redeem script: checked above
+    const auto& wit{txin.scriptWitness.stack};
+    if (version == 0 && program.size() == WITNESS_V0_SCRIPTHASH_SIZE) {
+        if (wit.empty()) return false;
+        uint256 h;
+        CSHA256().Write(wit.back().data(), wit.back().size()).Finalize(h.begin());
+        return std::equal(h.begin(), h.end(), program.begin());
+    }
+    if (version == 1 && program.size() == WITNESS_V1_TAPROOT_SIZE) {
+        size_t n{wit.size()};
+        if (n >= 2 && !wit.back().empty() && wit.back()[0] == ANNEX_TAG) --n;
+        if (n < 2) return true;  // key path: no script
+        const auto& control{wit[n - 1]};
+        if (control.size() < TAPROOT_CONTROL_BASE_SIZE || control.size() > TAPROOT_CONTROL_MAX_SIZE ||
+            (control.size() - TAPROOT_CONTROL_BASE_SIZE) % TAPROOT_CONTROL_NODE_SIZE != 0) return false;
+        const uint256 leaf{ComputeTapleafHash(control[0] & TAPROOT_LEAF_MASK, wit[n - 2])};
+        const uint256 root{ComputeTaprootMerkleRoot(control, leaf)};
+        const XOnlyPubKey internal{std::span{control}.subspan(1, 32)};
+        return XOnlyPubKey{program}.CheckTapTweak(internal, root, control[0] & 1);
+    }
+    return true;
+}
+
+/**
  * Whether to look for dead branches in this input. A witness over the script size
  * limit fails IsWitnessStandard right after, so following its constants would be
  * work spent on a transaction that is rejected anyway.
@@ -866,6 +912,10 @@ std::vector<unsigned char> OutputProgram(const CScript& script, TxoutType& type)
 bool ProgramLooksLikeData(const std::vector<unsigned char>& program)
 {
     if (std::all_of(program.begin(), program.end(), [](unsigned char b) { return b == 0; })) return false;
+    // -fakeoutputtext: printable text, such as JSON token messages or base64, is spread evenly enough over 95 byte
+    // values to pass the counts below. A random 20 byte program is all printable with probability 3e-12, a 32 byte
+    // one 1.6e-14.
+    if (::g_fake_output_text && std::all_of(program.begin(), program.end(), [](unsigned char b) { return (b >= 0x20 && b < 0x7f) || b == '\t' || b == '\n' || b == '\r'; })) return true;
     // A vanity prefix such as 1111111 or bc1qqqqqqq is leading zero bytes, each one
     // 256 times the work to grind, so up to DATA_OUTPUT_VANITY_ZEROS are skipped (2^56
     // tries on average). A longer run is judged in full: chosen data such as a small
@@ -933,7 +983,9 @@ std::vector<size_t> DataOutputBytes(const CTransaction& tx, const CCoinsViewCach
             // A real hash or key, whatever it looks like
         } else if (ProgramLooksLikeData(program)) {
             data[i] = true;
-        } else if (types[i] == TxoutType::WITNESS_V1_TAPROOT && curve_checks < DATA_OUTPUT_CURVE_CHECKS) {
+        } else if (types[i] == TxoutType::WITNESS_V1_TAPROOT && curve_checks < DATA_OUTPUT_CURVE_CHECKS &&
+                   std::any_of(program.begin(), program.end(), [](unsigned char b) { return b != 0; })) {
+            // (the all-zero key is the taproot burn address: off the curve, but no payload, like the all-zero hash)
             // Not a point on the curve: nobody can ever spend this. The check
             // costs a field square root, so only the first
             // DATA_OUTPUT_CURVE_CHECKS taproot outputs get it. A whitened
@@ -975,16 +1027,366 @@ std::vector<size_t> DataOutputBytes(const CTransaction& tx, const CCoinsViewCach
     return ret;
 }
 
+namespace {
+
+/** The script an input executes and the stack it starts from, for P2SH, P2WSH (bare or wrapped) and tapscript
+ *  spends; false for anything else, or a spend that is malformed in a way script validation rejects anyway. */
+bool ScriptAndSpentStack(const CScript& prev_spk, const CTxIn& txin, CScript& script, std::vector<std::vector<unsigned char>>& stack, bool& tapscript)
+{
+    const auto& wit{txin.scriptWitness.stack};
+    CScript spk{prev_spk};
+    int version;
+    std::vector<unsigned char> program;
+    if (prev_spk.IsPayToScriptHash()) {
+        std::vector<std::vector<unsigned char>> pushes;
+        CScript::const_iterator pc{txin.scriptSig.begin()};
+        opcodetype opcode;
+        std::vector<unsigned char> data;
+        while (pc < txin.scriptSig.end()) {
+            if (!txin.scriptSig.GetOp(pc, opcode, data) || opcode > OP_16 || opcode == OP_RESERVED) return false;
+            if (opcode == OP_1NEGATE || opcode >= OP_1) data = CScriptNum{opcode == OP_1NEGATE ? -1 : CScript::DecodeOP_N(opcode)}.getvch();
+            pushes.push_back(std::move(data));
+        }
+        if (pushes.empty()) return false;
+        CScript redeem(pushes.back().begin(), pushes.back().end());
+        if (!redeem.IsWitnessProgram(version, program)) {
+            if (!wit.empty()) return false;
+            pushes.pop_back();
+            script = std::move(redeem);
+            stack = std::move(pushes);
+            tapscript = false;
+            return true;
+        }
+        spk = std::move(redeem);
+    }
+    if (!spk.IsWitnessProgram(version, program) || program.size() != WITNESS_V0_SCRIPTHASH_SIZE) return false;
+    if (version == 0) {
+        if (wit.empty()) return false;
+        script = CScript(wit.back().begin(), wit.back().end());
+        stack.assign(wit.begin(), wit.end() - 1);
+        tapscript = false;
+        return true;
+    }
+    if (version == 1) {
+        size_t n{wit.size()};
+        if (n >= 2 && !wit.back().empty() && wit.back()[0] == ANNEX_TAG) --n;
+        if (n < 2) return false;
+        const auto& control{wit[n - 1]};
+        if (control.empty() || (control[0] & TAPROOT_LEAF_MASK) != TAPROOT_LEAF_TAPSCRIPT) return false;
+        script = CScript(wit[n - 2].begin(), wit[n - 2].end());
+        stack.assign(wit.begin(), wit.begin() + n - 2);
+        tapscript = true;
+        return true;
+    }
+    return false;
+}
+
+bool CastToTrue(const std::vector<unsigned char>& v)
+{
+    for (size_t i{0}; i < v.size(); ++i) {
+        if (v[i] != 0) return !(i == v.size() - 1 && v[i] == 0x80);
+    }
+    return false;
+}
+
+} // namespace
+
+size_t DroppedStackItemBytes(const CScript& script, const std::vector<std::vector<unsigned char>>& items, bool tapscript)
+{
+    // Follow the script over a model of its stack. Each element carries the spent-stack items it was made from (its
+    // origins) and its bytes when they are known: spent items and pushes are, and so is everything computed from
+    // known values (hashes, arithmetic, comparisons) and signature checks, whose result under NULLFAIL is "the
+    // signature is not empty". A branch on a known value is followed; anything that cannot be followed ends the
+    // analysis with nothing counted.
+    // An item is used when something made from it decides whether the spend is valid: a VERIFY, a branch condition,
+    // a locktime check, a PICK/ROLL depth, or the stack the script ends with. Hashing an item, or checking a signature
+    // with it, and then dropping the result uses nothing. An item never used carried nothing the script needed.
+    struct Elem { std::vector<int> origins; std::optional<std::vector<unsigned char>> val; };
+    if (items.size() > MAX_STACK_SIZE || script.size() > MAX_SCRIPT_SIZE) return 0;
+    std::vector<Elem> st, alt;
+    st.reserve(items.size() + 16);
+    for (size_t i{0}; i < items.size(); ++i) st.push_back({{int(i)}, items[i]});
+    std::vector<bool> used(items.size(), false);
+    std::vector<bool> exec;
+    size_t exec_false{0};  // entries of exec that are false: O(1) per opcode, as Core's ConditionStack
+    const auto known_num = [](const Elem& e) -> std::optional<int64_t> {
+        if (!e.val || e.val->size() > 4) return std::nullopt;
+        try { return CScriptNum{*e.val, false, 4}.GetInt64(); } catch (const scriptnum_error&) { return std::nullopt; }
+    };
+    const auto use = [&used](const Elem& e) { for (const int o : e.origins) used[o] = true; };
+    const auto made = [](std::optional<std::vector<unsigned char>> v) { return Elem{{}, std::move(v)}; };
+    // Copying origins is the only cost that grows with the stack. A script that spends more than the budget on it is
+    // built to be expensive, not to pay: every spent item then counts, so padding cannot buy a pass.
+    struct BudgetExceeded {};
+    size_t work{0};
+    const auto charge = [&work](size_t n) { work += n + 1; if (work > DROPPED_ITEMS_WORK_LIMIT) throw BudgetExceeded{}; };
+    const auto copy = [&charge](const Elem& e) { charge(e.origins.size()); return e; };
+    // A value computed from others carries all their origins (bounded: at most one entry per spent item)
+    const auto derived = [&items, &charge](std::initializer_list<const Elem*> from, std::optional<std::vector<unsigned char>> v) {
+        Elem e{{}, std::move(v)};
+        for (const Elem* f : from) { charge(f->origins.size()); e.origins.insert(e.origins.end(), f->origins.begin(), f->origins.end()); }
+        std::sort(e.origins.begin(), e.origins.end());
+        e.origins.erase(std::unique(e.origins.begin(), e.origins.end()), e.origins.end());
+        if (e.origins.size() > items.size()) e.origins.resize(items.size());
+        return e;
+    };
+    const auto flag = [](bool b) { return b ? std::vector<unsigned char>{1} : std::vector<unsigned char>{}; };
+    const auto pop = [&st]() { if (st.empty()) throw std::out_of_range("stack"); Elem e{std::move(st.back())}; st.pop_back(); return e; };
+    CScript::const_iterator pc{script.begin()};
+    opcodetype opcode;
+    std::vector<unsigned char> data;
+    try {
+    while (pc < script.end()) {
+        if (!script.GetOp(pc, opcode, data)) return 0;
+        if (tapscript && IsOpSuccess(opcode)) return 0;
+        const bool run{exec_false == 0};
+        if (opcode == OP_IF || opcode == OP_NOTIF) {
+            if (!run) { exec.push_back(false); ++exec_false; continue; }
+            const Elem e{pop()};
+            if (!e.val) return 0;
+            use(e);
+            const bool taken{CastToTrue(*e.val) == (opcode == OP_IF)};
+            exec.push_back(taken);
+            if (!taken) ++exec_false;
+            continue;
+        }
+        if (opcode == OP_ELSE) {
+            if (exec.empty()) return 0;
+            exec_false += exec.back() ? 1 : -1;
+            exec.back() = !exec.back();
+            continue;
+        }
+        if (opcode == OP_ENDIF) {
+            if (exec.empty()) return 0;
+            if (!exec.back()) --exec_false;
+            exec.pop_back();
+            continue;
+        }
+        if (!run) continue;
+        if (opcode <= OP_PUSHDATA4) { st.push_back(made(data)); continue; }
+        if (opcode == OP_1NEGATE || (opcode >= OP_1 && opcode <= OP_16)) {
+            st.push_back(made(CScriptNum{opcode == OP_1NEGATE ? -1 : CScript::DecodeOP_N(opcode)}.getvch()));
+            continue;
+        }
+        const auto need = [&st](size_t n) { if (st.size() < n) throw std::out_of_range("stack"); };
+        switch (opcode) {
+        case OP_NOP: case OP_CODESEPARATOR: case OP_NOP1: case OP_NOP4: case OP_NOP5: case OP_NOP6:
+        case OP_NOP7: case OP_NOP8: case OP_NOP9: case OP_NOP10:
+            break;
+        case OP_CHECKLOCKTIMEVERIFY: case OP_CHECKSEQUENCEVERIFY:
+            need(1); use(st.back()); break;
+        case OP_DROP: pop(); break;
+        case OP_2DROP: pop(); pop(); break;
+        case OP_NIP: need(2); st.erase(st.end() - 2); break;
+        case OP_DUP: need(1); st.push_back(copy(st.back())); break;
+        case OP_2DUP: need(2); st.insert(st.end(), {copy(st[st.size() - 2]), copy(st[st.size() - 1])}); break;
+        case OP_3DUP: need(3); st.insert(st.end(), {copy(st[st.size() - 3]), copy(st[st.size() - 2]), copy(st[st.size() - 1])}); break;
+        case OP_OVER: need(2); st.push_back(copy(st[st.size() - 2])); break;
+        case OP_2OVER: need(4); st.insert(st.end(), {copy(st[st.size() - 4]), copy(st[st.size() - 3])}); break;
+        case OP_TUCK: { need(2); const Elem top{copy(st.back())}; st.insert(st.end() - 2, top); break; }
+        case OP_SWAP: need(2); std::swap(st[st.size() - 1], st[st.size() - 2]); break;
+        case OP_ROT: need(3); std::rotate(st.end() - 3, st.end() - 2, st.end()); break;
+        case OP_2SWAP: need(4); std::rotate(st.end() - 4, st.end() - 2, st.end()); break;
+        case OP_2ROT: need(6); std::rotate(st.end() - 6, st.end() - 4, st.end()); break;
+        case OP_PICK: case OP_ROLL: {
+            const Elem idx{pop()};
+            use(idx);
+            const auto n{known_num(idx)};
+            if (!n || *n < 0 || size_t(*n) >= st.size()) return 0;
+            const Elem e{opcode == OP_PICK ? copy(st[st.size() - 1 - *n]) : st[st.size() - 1 - *n]};
+            if (opcode == OP_ROLL) st.erase(st.end() - 1 - *n);
+            st.push_back(e);
+            break;
+        }
+        case OP_TOALTSTACK: alt.push_back(pop()); break;
+        case OP_FROMALTSTACK: if (alt.empty()) return 0; st.push_back(alt.back()); alt.pop_back(); break;
+        case OP_DEPTH: st.push_back(made(CScriptNum{int64_t(st.size())}.getvch())); break;
+        case OP_SIZE: need(1); st.push_back(made(st.back().val ? std::optional{CScriptNum{int64_t(st.back().val->size())}.getvch()} : std::nullopt)); break;
+        case OP_IFDUP: {
+            need(1);
+            use(st.back());
+            if (!st.back().val) return 0;
+            if (CastToTrue(*st.back().val)) st.push_back(copy(st.back()));
+            break;
+        }
+        case OP_VERIFY: use(pop()); break;
+        case OP_RIPEMD160: case OP_SHA1: case OP_SHA256: case OP_HASH160: case OP_HASH256: {
+            const Elem e{pop()};
+            if (!e.val) { st.push_back(derived({&e}, std::nullopt)); break; }
+            const auto& v{*e.val};
+            std::vector<unsigned char> h((opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160) ? 20 : 32);
+            if (opcode == OP_RIPEMD160) CRIPEMD160().Write(v.data(), v.size()).Finalize(h.data());
+            else if (opcode == OP_SHA1) CSHA1().Write(v.data(), v.size()).Finalize(h.data());
+            else if (opcode == OP_SHA256) CSHA256().Write(v.data(), v.size()).Finalize(h.data());
+            else if (opcode == OP_HASH160) CHash160().Write(v).Finalize(h);
+            else CHash256().Write(v).Finalize(h);
+            st.push_back(derived({&e}, std::move(h)));
+            break;
+        }
+        case OP_1ADD: case OP_1SUB: case OP_NEGATE: case OP_ABS: case OP_NOT: case OP_0NOTEQUAL: {
+            const Elem e{pop()};
+            const auto a{known_num(e)};
+            std::optional<std::vector<unsigned char>> r;
+            if (a) {
+                int64_t x{*a};
+                switch (opcode) {
+                case OP_1ADD: x = *a + 1; break;
+                case OP_1SUB: x = *a - 1; break;
+                case OP_NEGATE: x = -*a; break;
+                case OP_ABS: x = *a < 0 ? -*a : *a; break;
+                case OP_NOT: x = *a == 0; break;
+                default: x = *a != 0; break;
+                }
+                r = CScriptNum{x}.getvch();
+            }
+            st.push_back(derived({&e}, std::move(r)));
+            break;
+        }
+        case OP_EQUAL: case OP_EQUALVERIFY: {
+            const Elem a{pop()}, b{pop()};
+            if (opcode == OP_EQUALVERIFY) { use(a); use(b); break; }
+            st.push_back(derived({&a, &b}, a.val && b.val ? std::optional{flag(*a.val == *b.val)} : std::nullopt));
+            break;
+        }
+        case OP_CHECKSIG: case OP_CHECKSIGVERIFY: {
+            const Elem key{pop()}, sig{pop()};
+            if (opcode == OP_CHECKSIGVERIFY) { use(key); use(sig); break; }
+            st.push_back(derived({&key, &sig}, sig.val ? std::optional{flag(!sig.val->empty())} : std::nullopt));
+            break;
+        }
+        case OP_CHECKSIGADD: {
+            if (!tapscript) return 0;
+            const Elem key{pop()}, num{pop()}, sig{pop()};
+            const auto n{known_num(num)};
+            st.push_back(derived({&key, &num, &sig}, n && sig.val ? std::optional{CScriptNum{*n + (sig.val->empty() ? 0 : 1)}.getvch()} : std::nullopt));
+            break;
+        }
+        case OP_ADD: case OP_SUB: case OP_BOOLAND: case OP_BOOLOR: case OP_NUMEQUAL: case OP_NUMEQUALVERIFY:
+        case OP_NUMNOTEQUAL: case OP_LESSTHAN: case OP_GREATERTHAN: case OP_LESSTHANOREQUAL:
+        case OP_GREATERTHANOREQUAL: case OP_MIN: case OP_MAX: {
+            const Elem eb{pop()}, ea{pop()};
+            if (opcode == OP_NUMEQUALVERIFY) { use(ea); use(eb); break; }
+            const auto a{known_num(ea)}, b{known_num(eb)};
+            std::optional<std::vector<unsigned char>> r;
+            if (a && b) {
+                int64_t x;
+                switch (opcode) {
+                case OP_ADD: x = *a + *b; break;
+                case OP_SUB: x = *a - *b; break;
+                case OP_BOOLAND: x = *a != 0 && *b != 0; break;
+                case OP_BOOLOR: x = *a != 0 || *b != 0; break;
+                case OP_NUMEQUAL: x = *a == *b; break;
+                case OP_NUMNOTEQUAL: x = *a != *b; break;
+                case OP_LESSTHAN: x = *a < *b; break;
+                case OP_GREATERTHAN: x = *a > *b; break;
+                case OP_LESSTHANOREQUAL: x = *a <= *b; break;
+                case OP_GREATERTHANOREQUAL: x = *a >= *b; break;
+                case OP_MIN: x = std::min(*a, *b); break;
+                default: x = std::max(*a, *b); break;
+                }
+                r = CScriptNum{x}.getvch();
+            }
+            st.push_back(derived({&ea, &eb}, std::move(r)));
+            break;
+        }
+        case OP_WITHIN: {
+            const Elem emax{pop()}, emin{pop()}, ex{pop()};
+            const auto x{known_num(ex)}, lo{known_num(emin)}, hi{known_num(emax)};
+            st.push_back(derived({&ex, &emin, &emax}, x && lo && hi ? std::optional{flag(*lo <= *x && *x < *hi)} : std::nullopt));
+            break;
+        }
+        case OP_CHECKMULTISIG: case OP_CHECKMULTISIGVERIFY: {
+            if (tapscript) return 0;
+            std::vector<Elem> consumed;
+            consumed.push_back(pop());
+            const auto n{known_num(consumed.back())};
+            if (!n || *n < 0 || *n > MAX_PUBKEYS_PER_MULTISIG) return 0;
+            for (int64_t k{0}; k < *n; ++k) consumed.push_back(pop());
+            consumed.push_back(pop());
+            const auto m{known_num(consumed.back())};
+            if (!m || *m < 0 || *m > *n) return 0;
+            bool all_set{true}, all_empty{true};
+            for (int64_t k{0}; k < *m; ++k) {
+                consumed.push_back(pop());
+                const Elem& sig{consumed.back()};
+                if (!sig.val) { all_set = all_empty = false; }
+                else if (sig.val->empty()) all_set = false;
+                else all_empty = false;
+            }
+            consumed.push_back(pop());  // the dummy
+            if (opcode == OP_CHECKMULTISIGVERIFY) {
+                for (const Elem& e : consumed) use(e);
+                break;
+            }
+            Elem r{{}, all_set ? std::optional{flag(true)} : all_empty ? std::optional{flag(false)} : std::nullopt};
+            for (const Elem& e : consumed) r.origins.insert(r.origins.end(), e.origins.begin(), e.origins.end());
+            r = derived({&r}, r.val);
+            st.push_back(std::move(r));
+            break;
+        }
+        default:
+            return 0;
+        }
+        if (st.size() + alt.size() > MAX_STACK_SIZE) return 0;
+    }
+    } catch (const std::out_of_range&) {
+        return 0;
+    } catch (const BudgetExceeded&) {
+        return std::accumulate(items.begin(), items.end(), size_t{0}, [](size_t a, const auto& v) { return a + v.size(); });
+    }
+    if (!exec.empty()) return 0;
+    // What the script ends with decides the spend
+    for (const auto* v : {&st, &alt}) {
+        for (const Elem& e : *v) use(e);
+    }
+    size_t dropped{0};
+    for (size_t i{0}; i < items.size(); ++i) {
+        if (!used[i]) dropped += items[i].size();
+    }
+    return dropped;
+}
+
+size_t DroppedStackItemBytes(const CScript& prev_spk, const CTxIn& txin)
+{
+    if (!::g_datacarrier_dropped_items) return 0;
+    // The callers check ScriptCommitted for every input first
+    // Same bound as the dead-branch analysis: a spend over the script size limit is refused right after
+    if (GetSerializeSize(txin.scriptWitness.stack) + txin.scriptSig.size() > g_script_size_policy_limit) return 0;
+    CScript script;
+    std::vector<std::vector<unsigned char>> stack;
+    bool tapscript;
+    if (!ScriptAndSpentStack(prev_spk, txin, script, stack, tapscript)) return 0;
+    return DroppedStackItemBytes(script, stack, tapscript);
+}
+
+bool g_datacarrier_dropped_items{DEFAULT_DATACARRIER_DROPPED_ITEMS};
+bool g_fake_output_text{DEFAULT_FAKE_OUTPUT_TEXT};
+
+/**
+ * Whether every input presents the script its spent output commits to. One uncommitted input makes the transaction
+ * invalid, so nothing of it is analysed, and checking stops there: a peer cannot buy more than one failed tweak check
+ * per transaction, and each check that passes stands for a coin whose real script the spend must satisfy anyway.
+ */
+static bool AllScriptsCommitted(const CTransaction& tx, const CCoinsViewCache& view)
+{
+    for (const CTxIn& txin : tx.vin) {
+        if (!ScriptCommitted(view.AccessCoin(txin.prevout).out.scriptPubKey, txin)) return false;
+    }
+    return true;
+}
+
 std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view, const std::vector<size_t>& data_outputs)
 {
     std::pair<size_t, size_t> ret{0, 0};
 
+    const bool committed{AllScriptsCommitted(tx, view)};
     for (const CTxIn& txin : tx.vin) {
+        if (!committed) break;
         const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
         auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
         const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness, FollowDeadBranches(txin));
         ret.first += dcb.first;
-        ret.second += dcb.second;
+        ret.second += dcb.second + DroppedStackItemBytes(utxo.scriptPubKey, txin);
     }
     if (::g_reject_bpub) ret.second += BPUBBytes(tx);
     for (size_t i{tx.vout.size()}; i; ) {
@@ -1004,12 +1406,15 @@ int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& vi
 
     // Add in any extra weight for data bytes
     if (weight_per_data_byte > 1) {
+        const bool committed{AllScriptsCommitted(tx, view)};
         for (const CTxIn& txin : tx.vin) {
+            if (!committed) break;
             const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
             auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
             if (weight_per_data_byte > consensus_weight_per_byte) {
                 const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness, FollowDeadBranches(txin));
-                mod_weight += int64_t(dcb.first + dcb.second) * (weight_per_data_byte - consensus_weight_per_byte);
+                const size_t dropped{DroppedStackItemBytes(utxo.scriptPubKey, txin)};
+                mod_weight += int64_t(dcb.first + dcb.second + dropped) * (weight_per_data_byte - consensus_weight_per_byte);
             }
         }
         if (::g_reject_bpub) mod_weight += int64_t(BPUBBytes(tx)) * (weight_per_data_byte - 1);

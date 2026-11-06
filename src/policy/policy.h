@@ -73,6 +73,12 @@ inline constexpr bool DEFAULT_REJECT_FAKE_OUTPUTS{true};
 /** Default for -datacarrierdustruns: count runs of small P2WSH outputs at one value as data (off: they match a
  *  Lightning force close with several equal in-flight HTLCs) */
 inline constexpr bool DEFAULT_DATACARRIER_DUST_RUNS{false};
+/** Default for -datacarrierdroppeditems: count spent-stack items a script removes without reading as data */
+inline constexpr bool DEFAULT_DATACARRIER_DROPPED_ITEMS{false};
+/** -datacarrierdroppeditems: work (origins copied) one input may cost before all its spent items count as data */
+inline constexpr size_t DROPPED_ITEMS_WORK_LIMIT{100'000};
+/** Default for -fakeoutputtext: with -rejectfakeoutputs, a program that is all printable text is data */
+inline constexpr bool DEFAULT_FAKE_OUTPUT_TEXT{false};
 /** Default for -subdustfeepenalty */
 inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{true};
 
@@ -290,6 +296,15 @@ std::vector<size_t> DataOutputBytes(const CTransaction& tx, const CCoinsViewCach
 extern bool g_reject_fake_outputs;
 /** -datacarrierdustruns, read by DataOutputBytes */
 extern bool g_datacarrier_dust_runs;
+/** -datacarrierdroppeditems and -fakeoutputtext */
+extern bool g_datacarrier_dropped_items;
+extern bool g_fake_output_text;
+
+/** Bytes of the spent-stack items (witness items, or scriptSig pushes under P2SH) that the executed script removes
+ *  with OP_DROP, OP_2DROP or OP_NIP, directly or after moving or copying them, without any opcode reading them. 0
+ *  when the option is off, the spend is not a script spend, or the script cannot be followed. */
+size_t DroppedStackItemBytes(const CScript& prev_spk, const CTxIn& txin);
+size_t DroppedStackItemBytes(const CScript& script, const std::vector<std::vector<unsigned char>>& items, bool tapscript);
 
 std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view, const std::vector<size_t>& data_outputs);
 
