@@ -40,7 +40,7 @@ CUSTOM_DATACARRIER_ARG = 83
 
 class DataCarrierTest(BitcoinTestFramework):
     def set_test_params(self):
-        self.num_nodes = 5
+        self.num_nodes = 6
         self.extra_args = [
             ["-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-datacarrierunprovenkeys=1"], # default size is uncapped
             ["-datacarrier=0"], # no relay of datacarrier
@@ -48,6 +48,7 @@ class DataCarrierTest(BitcoinTestFramework):
             ["-datacarrier=1", "-datacarriersize=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-datacarrierunprovenkeys=1"],
             # Knots #422 expectations assume an 83-byte limit (Core 29 default); Core 31 -corepolicy leaves node 0 uncapped
             ["-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-datacarrierunprovenkeys=1", f"-datacarriersize={CUSTOM_DATACARRIER_ARG}"],
+            ["-corepolicy=0"],  # our shipped defaults, where -datacarrierunprovenkeys is on (decisions/0024 item 5)
         ]
 
     def test_null_data_transaction(self, node: TestNode, data, success: bool) -> None:
@@ -300,7 +301,9 @@ class DataCarrierTest(BitcoinTestFramework):
         self.log.info("Testing a multisig padded out with keys no signature can prove.")
         self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=1, n=11, success=True)
         self.test_unproven_pubkeys_transaction(node=self.nodes[4], m=1, n=15, success=False)
-        self.log.info("Testing that the counting is off by default (-datacarrierunprovenkeys=0): the same spend is accepted.")
+        self.log.info("Testing that the counting is on at our defaults: the same spend is refused.")
+        self.test_unproven_pubkeys_transaction(node=self.nodes[5], m=1, n=15, success=False)
+        self.log.info("Testing that -corepolicy turns the counting off: the same spend is accepted.")
         self.test_unproven_pubkeys_transaction(node=self.nodes[2], m=1, n=15, success=True)
 
         self.log.info("Testing that -datacarriersize governs the spare keys, and that multisig "

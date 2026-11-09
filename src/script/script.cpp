@@ -752,8 +752,9 @@ std::pair<size_t, size_t> CScript::DatacarrierBytes(const size_t remaining_outpu
             counted += it - data_began;
         }
     }
-    // Knots #422 has no switch of its own; ours keeps it off by default (-datacarrierunprovenkeys, decisions/0023):
-    // with -datacarriersize=42 it rejects multisig spends Knots (83) accepts.
+    // Knots #422 has no switch of its own; ours is -datacarrierunprovenkeys, on by default since its mainnet survey
+    // found no false positive (decisions/0023, 0024 item 5); -corepolicy turns it off. With -datacarriersize=42 it
+    // rejects multisig spends Knots (83) accepts.
     return {g_datacarrier_unproven_pubkeys ? UnprovenPubkeyBytes(*this, witness) : 0, counted};
 }
 
