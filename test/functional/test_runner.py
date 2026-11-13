@@ -390,6 +390,7 @@ BASE_SCRIPTS = [
     'feature_anchors.py',
     'mempool_datacarrier.py',
     'mempool_datacarriercost_mining.py',
+    'mempool_datacarrier_ln_taproot_revoke.py',
     'feature_coinstatsindex.py',
     'feature_coinstatsindex_compatibility.py',
     'wallet_orphanedreward.py',
