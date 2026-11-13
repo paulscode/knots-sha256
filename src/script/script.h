@@ -224,6 +224,10 @@ public:
     explicit scriptnum_error(const std::string& str) : std::runtime_error(str) {}
 };
 
+/** Default for -datacarrierunprovenkeys: count multisig public keys no signature can prove as datacarrier bytes */
+static constexpr bool DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS{true}; // decisions/0024 item 5, after its mainnet survey
+extern bool g_datacarrier_unproven_pubkeys;
+
 class CScriptNum
 {
 /**
