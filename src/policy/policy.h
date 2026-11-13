@@ -70,6 +70,9 @@ inline constexpr bool DEFAULT_REJECT_DEAD_BRANCHES{true};
 inline constexpr bool DEFAULT_REJECT_TOKENS{false};
 /** Default for -rejectfakeoutputs */
 inline constexpr bool DEFAULT_REJECT_FAKE_OUTPUTS{true};
+/** Default for -datacarrierdustruns: count runs of small P2WSH outputs at one value as data (off: they match a
+ *  Lightning force close with several equal in-flight HTLCs) */
+inline constexpr bool DEFAULT_DATACARRIER_DUST_RUNS{false};
 /** Default for -subdustfeepenalty */
 inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{true};
 
@@ -285,6 +288,8 @@ std::vector<size_t> DataOutputBytes(const CTransaction& tx, const CCoinsViewCach
 
 /** -rejectfakeoutputs: a global like -rejectbpub, so the PSBT size estimate follows it too */
 extern bool g_reject_fake_outputs;
+/** -datacarrierdustruns, read by DataOutputBytes */
+extern bool g_datacarrier_dust_runs;
 
 std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view, const std::vector<size_t>& data_outputs);
 
