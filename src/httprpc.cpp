@@ -25,6 +25,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using util::SplitString;
@@ -265,7 +266,7 @@ static bool InitRPCAuthentication()
             cookie_perms = *perm_opt;
         }
 
-        switch (GenerateAuthCookie(cookie_perms, user, pass)) {
+        switch (GenerateAuthCookie(std::make_pair(cookie_perms, bool(cookie_perms_arg)), user, pass)) {
         case AuthCookieResult::Error:
             return false;
         case AuthCookieResult::Disabled:
@@ -387,4 +388,21 @@ void StopHTTPRPC()
     if (g_wallet_init_interface.HasWalletSupport()) {
         UnregisterHTTPHandler("/wallet/", false);
     }
+}
+
+std::set<std::string> GetWhitelistedRpcs(const std::string& user_name)
+{
+    if (auto it = g_rpc_whitelist.find(user_name); it != g_rpc_whitelist.end()) {
+        return it->second;
+    }
+    if (g_rpc_whitelist_default) {
+        return std::set<std::string>();
+    }
+
+    // Build a list of every method
+    std::set<std::string> allowed_methods;
+    for (const auto& method_name : tableRPC.listCommands()) {
+        allowed_methods.insert(method_name);
+    }
+    return allowed_methods;
 }
