@@ -128,7 +128,7 @@ inline constexpr bool DEFAULT_SPEND_ZEROCONF_CHANGE = true;
 //! Default for -walletrejectlongchains
 inline constexpr bool DEFAULT_WALLET_REJECT_LONG_CHAINS{true};
 //! -txconfirmtarget default
-inline constexpr unsigned int DEFAULT_TX_CONFIRM_TARGET = 6;
+inline constexpr unsigned int DEFAULT_TX_CONFIRM_TARGET = 144;
 //! -walletrbf default
 inline constexpr bool DEFAULT_WALLET_RBF = true;
 inline constexpr bool DEFAULT_WALLETBROADCAST = true;
