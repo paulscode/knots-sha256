@@ -751,6 +751,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                              DEFAULT_ACCEPT_NON_STD_DATACARRIER),
                    ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrierunprovenkeys", strprintf("Count multisig public keys beyond ten per script that no signature can prove, and odd pushes in multisig key slots, as datacarrier bytes (default: %u)", DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-rejectbpub", strprintf("Count the witness scripts of inputs that carry a BPUB file as non-standard data carrier bytes (default: %u)", DEFAULT_REJECT_BPUB), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-acceptnonstdtxn", strprintf("Relay and mine \"non-standard\" transactions (default: %u)", DEFAULT_ACCEPT_NON_STD_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-acceptunknownwitness",
                    strprintf("Relay transactions sending to unknown/future witness script versions (default: %u)", DEFAULT_ACCEPTUNKNOWNWITNESS),
@@ -1311,6 +1312,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     if (auto parsed = args.GetFixedPointArg("-datacarriercost", 2)) {
         g_weight_per_data_byte = ((*parsed * WITNESS_SCALE_FACTOR) + 99) / 100;
     }
+    g_reject_bpub = args.GetBoolArg("-rejectbpub", DEFAULT_REJECT_BPUB);
 
     g_script_size_policy_limit = args.GetIntArg("-maxscriptsize", g_script_size_policy_limit);
 
@@ -1972,7 +1974,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             // explicitly disabled, do nothing
         } else if (uaspoof_val == "1") {
             // enabled, but not specified: just use base name for now
-            // TODO
+            strSubVersion = FormatSubVersion(UA_NAME, CLIENT_VERSION, uacomments, /*base_name_only=*/ true);
         } else {
             if (uaspoof_val.at(0) != '/') {
                 InitWarning(strprintf(_("Specified %s option is not in BIP 14 format. User-agent strings should look like '%s'."), "uaspoof", BIP14_EXAMPLE_UA));
@@ -2775,9 +2777,9 @@ bool StartIndexBackgroundSync(NodeContext& node)
         // though currently block and undo data availability are synchronized on disk
         // under normal circumstances.
         std::optional<const CBlockIndex*> block_start;
-        std::string block_start_name;
+        BaseIndex* block_start_index{nullptr};
         std::optional<const CBlockIndex*> undo_start;
-        std::string undo_start_name;
+        BaseIndex* undo_start_index{nullptr};
 
         for (const auto& index : node.indexes) {
             const IndexSummary& summary = index->GetSummary();
@@ -2801,18 +2803,18 @@ bool StartIndexBackgroundSync(NodeContext& node)
 
             bool need_undo = index->CustomOptions().connect_undo_data;
             auto& op_start_index = need_undo ? undo_start : block_start;
-            auto& name_index = need_undo ? undo_start_name : block_start_name;
+            auto& start_index = need_undo ? undo_start_index : block_start_index;
 
             if (op_start_index && pindex->nHeight >= op_start_index.value()->nHeight) continue;
             op_start_index = pindex;
-            name_index = summary.name;
+            start_index = index;
         }
 
         // Verify all blocks needed to sync to current tip are present including undo data.
         if (undo_start) {
             LOCK(::cs_main);
             if (!chainman.m_blockman.CheckBlockDataAvailability(*index_chain.Tip(), *Assert(undo_start.value()), BlockStatus{BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO})) {
-                return InitError(Untranslated(strprintf("%s best block of the index goes beyond pruned data (including undo data). Please disable the index or reindex (which will download the whole blockchain again)", undo_start_name)));
+                return InitError(strprintf(_("Index \"%s\" needs block data that has been pruned.\nRestart with -reindex to rebuild (re-downloading the entire blockchain), or %s to disable."), undo_start_index->GetName(), undo_start_index->GetDisableAction()));
             }
         }
 
@@ -2820,7 +2822,7 @@ bool StartIndexBackgroundSync(NodeContext& node)
         if (block_start && !(undo_start && undo_start.value()->nHeight <= block_start.value()->nHeight)) {
             LOCK(::cs_main);
             if (!chainman.m_blockman.CheckBlockDataAvailability(*index_chain.Tip(), *Assert(block_start.value()), BlockStatus{BLOCK_HAVE_DATA})) {
-                return InitError(Untranslated(strprintf("%s best block of the index goes beyond pruned data. Please disable the index or reindex (which will download the whole blockchain again)", block_start_name)));
+                return InitError(strprintf(_("Index \"%s\" needs block data that has been pruned.\nRestart with -reindex to rebuild (re-downloading the entire blockchain), or %s to disable."), block_start_index->GetName(), block_start_index->GetDisableAction()));
             }
         }
     }
