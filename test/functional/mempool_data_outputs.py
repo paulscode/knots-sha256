@@ -17,17 +17,18 @@ from random import randbytes
 
 class DataOutputsTest(BitcoinTestFramework):
     def set_test_params(self):
-        self.num_nodes = 7
+        self.num_nodes = 8
         # The framework passes -corepolicy to every node, which turns -rejectfakeoutputs off
         self.extra_args = [
-            ["-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-rejectfakeoutputs=1"],
-            ["-datacarrier=1", "-datacarriersize=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-rejectfakeoutputs=1"],
-            ["-corepolicy=0"],  # Knots defaults: non-OP_RETURN data carriers are rejected outright
+            ["-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-rejectfakeoutputs=1", "-datacarrierdustruns=1", "-datacarriersize=83"],  # the framework -corepolicy leaves Core 32 uncapped
+            ["-datacarrier=1", "-datacarriersize=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount", "-rejectfakeoutputs=1", "-datacarrierdustruns=1"],
+            ["-corepolicy=0", "-datacarrierdustruns=1"],  # Knots defaults (with the dust-run rule): non-OP_RETURN data carriers are rejected outright
             ["-corepolicy=0", "-rejectfakeoutputs=0"],
             ["-datacarrierfullcount"],  # -corepolicy alone turns -rejectfakeoutputs off
             # Weighing data at -datacarriercost=2 without refusing it, to compare analyzepsbt with the mempool
-            ["-corepolicy=0", "-datacarriercost=2", "-rejectfakeoutputs=0"],
-            ["-corepolicy=0", "-datacarriercost=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount=0"],
+            ["-corepolicy=0", "-datacarriercost=2", "-rejectfakeoutputs=0", "-datacarrierdustruns=1"],
+            ["-corepolicy=0", "-datacarriercost=2", "-acceptnonstddatacarrier=1", "-datacarrierfullcount=0", "-datacarrierdustruns=1"],  # the analyzepsbt check weighs a dust run
+            ["-corepolicy=0"],  # Bitcoin Knots SHA256 defaults: -datacarrierdustruns=0
         ]
 
     def test_data_output_transaction(self, node: TestNode, outputs, reject_reason) -> None:
@@ -46,7 +47,7 @@ class DataOutputsTest(BitcoinTestFramework):
 
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[0])
-        counted, tight, default, disabled, corepolicy, weighed_off, weighed_on = self.nodes
+        counted, tight, default, disabled, corepolicy, weighed_off, weighed_on, ours = self.nodes
 
         def p2wsh(program):
             return program_to_witness_script(0, program)
@@ -75,6 +76,12 @@ class DataOutputsTest(BitcoinTestFramework):
         self.log.info("Testing that a pair of anchor-sized P2WSH outputs is still standard.")
         anchors = [(330, p2wsh(randbytes(32))) for _ in range(2)] + [(10000, p2wsh(randbytes(32)))]
         self.test_data_output_transaction(node=default, outputs=anchors, reject_reason=None)
+
+        self.log.info("Our default leaves out the dust-run rule: a run alone is not data, so a commitment with three equal HTLCs relays")
+        htlcs = [(330, p2wsh(randbytes(32))) for _ in range(2)] + [(500, p2wsh(randbytes(32))) for _ in range(3)] + [(10000, p2wsh(randbytes(32)))]
+        self.test_data_output_transaction(node=ours, outputs=htlcs, reject_reason=None)
+        self.test_data_output_transaction(node=ours, outputs=[(330, p2wsh(randbytes(32))) for _ in range(3)], reject_reason=None)
+        self.test_data_output_transaction(node=ours, outputs=[(330, p2wsh(randbytes(12) + b'\x42' * 8 + randbytes(12)))], reject_reason="txn-datacarrier-nonstandard")
 
         self.log.info("Testing a taproot output whose key is not on the curve.")
         off_curve = bytes.fromhex("4420f4cd273fe68ccc6df6aaf1bd40d6f879884882386754e2c2e55cfad0b0bb")
@@ -109,7 +116,7 @@ class DataOutputsTest(BitcoinTestFramework):
         # The other nodes refuse the funding run, so only the block can sync
         self.generate(disabled, 1, sync_fun=self.no_op)
         self.sync_blocks()
-        fund_txid = int(fund.rehash(), 16)
+        fund_txid = fund.txid_int
         fee_utxo = self.wallet.get_utxo(confirmed_only=True)
         spend = CTransaction()
         spend.vin = [CTxIn(COutPoint(int(fee_utxo["txid"], 16), fee_utxo["vout"]))] + [CTxIn(COutPoint(fund_txid, i + 1)) for i in range(len(scripts))]
@@ -122,7 +129,7 @@ class DataOutputsTest(BitcoinTestFramework):
         for i, script in enumerate(scripts):
             spend.wit.vtxinwit[i + 1].scriptWitness.stack = [script]
         self.wallet.sendrawtransaction(from_node=default, tx_hex=spend.serialize().hex())
-        assert spend.rehash() in default.getrawmempool()
+        assert spend.txid_hex in default.getrawmempool()
 
         self.log.info("Testing that analyzepsbt's size estimate follows -rejectfakeoutputs.")
         for node, data_counted in ((weighed_off, False), (weighed_on, True)):
