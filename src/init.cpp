@@ -173,6 +173,7 @@ using util::ReplaceAll;
 using util::ToString;
 using util::TrimStringView;
 
+static constexpr bool DEFAULT_COREPOLICY{false};
 static constexpr bool DEFAULT_PROXYRANDOMIZE{true};
 static constexpr bool DEFAULT_REST_ENABLE{false};
 static constexpr bool DEFAULT_I2P_ACCEPT_INCOMING{true};
@@ -535,10 +536,15 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-blocknotify=<cmd>", "Execute command when the best block changes (%s in cmd is replaced by block hash). Not run for blocks connected during initial block download or reindexing.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #endif
     argsman.AddArg("-blockreconstructionextratxn=<n>", strprintf("Extra transactions to keep in memory for compact block reconstructions (default: %u)", DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-blockreconstructionextratxnsize=<n>",
+                   strprintf("Upper limit of memory usage (in megabytes) for keeping extra transactions in memory for compact block reconstructions (default: %s)",
+                             DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN_SIZE / 1000000),
+                   ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksonly", strprintf("Whether to reject transactions from network peers. Disables automatic broadcast and rebroadcast of transactions, unless the source peer has the 'forcerelay' permission. RPC transactions are not affected. (default: %u)", DEFAULT_BLOCKSONLY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-coinstatsindex", strprintf("Maintain coinstats index used by the gettxoutsetinfo RPC (default: %u)", DEFAULT_COINSTATSINDEX), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-conf=<file>", strprintf("Specify path to read-only configuration file. Relative paths will be prefixed by datadir location (only useable from command line, not configuration file) (default: %s)", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-confrw=<file>", strprintf("Specify read/write configuration file. Relative paths will be prefixed by the network-specific datadir location (default: %s)", BITCOIN_RW_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-corepolicy", strprintf("Use Bitcoin Core policy defaults (default: %u)", DEFAULT_COREPOLICY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-datadir=<dir>", "Specify data directory", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbbatchsize", strprintf("Maximum database write batch size in bytes (default: %u)", DEFAULT_DB_CACHE_BATCH), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbcache=<n>", strprintf("Maximum database cache size <n> MiB (minimum %d, default: %d). Make sure you have enough RAM. In addition, unused memory allocated to the mempool is shared with this cache (see -maxmempool).", MIN_DBCACHE_BYTES / 1_MiB, node::GetDefaultDBCache() / 1_MiB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -625,7 +631,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-onlynet=<net>", "Make automatic outbound connections only to network <net> (" + Join(GetNetworkNames(), ", ") + "). Inbound and manual connections are not affected by this option. It can be specified multiple times to allow multiple networks.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-v2transport", strprintf("Support v2 transport (default: %u)", DEFAULT_V2_TRANSPORT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-v2onlyclearnet", strprintf("Require v2 transport (BIP324) for connections with IPv4/IPv6 peers (default: %u). Outbound connections to v1-only clearnet peers are not attempted and inbound v1 connections from clearnet peers are disconnected. Tor/I2P/CJDNS peers are unaffected, being encrypted already. Requires -v2transport=1. Enable this only if passive on-path observers such as your ISP are a concern. Note: this encrypts message contents; it does not hide that you are running a Bitcoin node, which the default port (8333) and traffic patterns still reveal.", DEFAULT_V2_ONLY_CLEARNET), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-peerbloomfilters", strprintf("Support filtering of blocks and transaction with bloom filters (default: %u)", DEFAULT_PEERBLOOMFILTERS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-peerbloomfilters", strprintf("Support filtering of blocks and transactions with bloom filters (default: %s)", DEFAULT_PEERBLOOMFILTERS ? "1" : "localhost only"), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-peerblockfilters", strprintf("Serve compact block filters to peers per BIP 157 (default: %u)", DEFAULT_PEERBLOCKFILTERS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-txreconciliation", strprintf("Enable transaction reconciliations per BIP 330 (default: %d)", DEFAULT_TXRECONCILIATION_ENABLE), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-port=<port>", strprintf("Listen for connections on <port> (default: %u, testnet3: %u, testnet4: %u, signet: %u, regtest: %u). Not relevant for I2P (see doc/i2p.md). If set to a value x, the default onion listening port will be set to x+1.", defaultChainParams->GetDefaultPort(), testnetChainParams->GetDefaultPort(), testnet4ChainParams->GetDefaultPort(), signetChainParams->GetDefaultPort(), regtestChainParams->GetDefaultPort()), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
@@ -745,6 +751,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                              DEFAULT_ACCEPT_NON_STD_DATACARRIER),
                    ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrierunprovenkeys", strprintf("Count multisig public keys beyond ten per script that no signature can prove, and odd pushes in multisig key slots, as datacarrier bytes (default: %u)", DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-rejectbpub", strprintf("Count the witness scripts of inputs that carry a BPUB file as non-standard data carrier bytes (default: %u)", DEFAULT_REJECT_BPUB), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-acceptnonstdtxn", strprintf("Relay and mine \"non-standard\" transactions (default: %u)", DEFAULT_ACCEPT_NON_STD_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-acceptunknownwitness",
                    strprintf("Relay transactions sending to unknown/future witness script versions (default: %u)", DEFAULT_ACCEPTUNKNOWNWITNESS),
@@ -761,14 +768,20 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-bytespersigopstrict", strprintf("Minimum bytes per sigop in transactions we relay and mine (default: %u)", DEFAULT_BYTES_PER_SIGOP_STRICT), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrier", strprintf("Relay and mine data carrier transactions (default: %u)", DEFAULT_ACCEPT_DATACARRIER), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarriercost", strprintf("Treat extra data in transactions as at least N vbytes per actual byte (default: %s)", DEFAULT_WEIGHT_PER_DATA_BYTE / 4.0), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-rejectdeadbranches", strprintf("Count data in a conditional branch that a pushed constant makes unreachable as data carrier bytes; the OP_FALSE OP_IF envelope is counted either way (default: %u)", DEFAULT_REJECT_DEAD_BRANCHES), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrierfullcount", strprintf("Apply datacarriersize limit to all known datacarrier methods (default: %u)", DEFAULT_DATACARRIER_FULLCOUNT), ArgsManager::ALLOW_ANY | (DEFAULT_DATACARRIER_FULLCOUNT ? uint32_t{ArgsManager::DEBUG_ONLY} : 0), OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarriersize",
                    strprintf("Maximum size of data in data carrier transactions we relay and mine, in bytes (default: %u)",
                              MAX_OP_RETURN_RELAY),
                    ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-maxscriptsize", strprintf("Maximum size of scripts (including the entire witness stack) we relay and mine, in bytes (default: %s)", DEFAULT_SCRIPT_SIZE_POLICY_LIMIT), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-maxtxlegacysigops",
+                   strprintf("Maximum number of legacy sigops allowed in transactions we relay and mine, as measured by BIP54 (default: %s)",
+                             MAX_TX_LEGACY_SIGOPS),
+                   ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-mempoolfullrbf", strprintf("Accept transaction replace-by-fee without requiring replaceability signaling (default: %u)", (DEFAULT_MEMPOOL_RBF_POLICY == RBFPolicy::Always)), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-mempoolreplacement", strprintf("Set to 0 to disable RBF entirely, \"fee,optin\" to honour RBF opt-out signal, or \"fee,-optin\" to always RBF aka full RBF (default: %s)", "fee,-optin"), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
-    argsman.AddArg("-mempooltruc", strprintf("Behaviour for transactions requesting TRUC limits: \"reject\" the transactions entirely, \"accept\" them just like any other, or \"enforce\" to impose their requested restrictions (default: %s)", "enforce"), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-mempooltruc", strprintf("Behaviour for transactions requesting TRUC limits: \"reject\" the transactions entirely, \"accept\" them just like any other, or \"enforce\" to impose their requested restrictions (default: %s)", "accept"), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-permitbareanchor",
                    strprintf("Relay transactions that only have ephemeral anchor outputs (default: %u)", DEFAULT_PERMITBAREANCHOR),
                    ArgsManager::ALLOW_ANY,
@@ -783,9 +796,18 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-permitbaremultisig", strprintf("Relay transactions creating non-P2SH multisig outputs (default: %u)", DEFAULT_PERMIT_BAREMULTISIG), ArgsManager::ALLOW_ANY,
                    OptionsCategory::NODE_RELAY);
     argsman.AddArg("-permitephemeral=<options>",
-                   strprintf("Relay transaction packages that include ephemeral outputs defined by comma-separated options (prefix each by '-' to force off): \"anchor\" to allow minimal anyone-can-spend anchors, \"send\" to allow ordinary output types to be considered ephemeral, and \"dust\" to allow for dust-amount outputs rather than strictly zero-value (default: %s)", "anchor,send,dust"),
+                   strprintf("Relay transaction packages that include ephemeral outputs defined by comma-separated options (prefix each by '-' to force off): \"anchor\" to allow minimal anyone-can-spend anchors, \"send\" to allow ordinary output types to be considered ephemeral, and \"dust\" to allow for dust-amount outputs rather than strictly zero-value (default: %s)", "anchor,-send,-dust"),
                    ArgsManager::ALLOW_ANY,
                    OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-minrelaycoinblocks=<n>",
+                   strprintf("Minimum \"coin blocks\" (measured in %s per block) that a transaction must be spending to be relayed (default: %s)",
+                             CURRENCY_ATOM,
+                             DEFAULT_MINRELAYCOINBLOCKS),
+                   ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-minrelaymaturity=<n>",
+                   strprintf("Minimum number of blocks that inputs must mature before being spent in transactions we relay (default: %s)",
+                             DEFAULT_MINRELAYMATURITY),
+                   ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-minrelaytxfee=<amt>", strprintf("Fees (in %s/kvB) smaller than this are considered zero fee for relaying, mining and transaction creation (default: %s)",
         CURRENCY_UNIT, FormatMoney(DEFAULT_MIN_RELAY_TX_FEE)), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-txsendrate=<n>",
@@ -895,6 +917,35 @@ void InitParameterInteraction(ArgsManager& args)
 {
     // Before any SoftSetArg so we get the actual user-set value
     g_pcp_warn_for_unauthorized = args.GetBoolArg("-natpmp", false);
+    if (args.GetBoolArg("-corepolicy", DEFAULT_COREPOLICY)) {
+        args.SoftSetArg("-incrementalrelayfee", FormatMoney(CORE_INCREMENTAL_RELAY_FEE));
+        if (!args.IsArgSet("-minrelaytxfee")) {
+            args.ForceSetArg("-minrelaytxfee", FormatMoney(std::max(ParseMoney(args.GetArg("-incrementalrelayfee", "")).value_or(0), CORE_INCREMENTAL_RELAY_FEE)));
+        }
+        args.SoftSetArg("-blockmintxfee", "0.00000001");
+        args.SoftSetArg("-acceptnonstddatacarrier", "1");
+        args.SoftSetArg("-blockreconstructionextratxn", "100");
+        args.SoftSetArg("-blockreconstructionextratxnsize", strprintf("%s", std::numeric_limits<size_t>::max() / 1000000 + 1));
+        args.SoftSetArg("-bytespersigopstrict", "0");
+        args.SoftSetArg("-permitbaredatacarrier", "1");
+        args.SoftSetArg("-permitbarepubkey", "1");
+        args.SoftSetArg("-permitbaremultisig", "1");
+        args.SoftSetArg("-datacarriersize", "100000");
+        args.SoftSetArg("-datacarriermultiple", "1");
+        args.SoftSetArg("-rejectparasites", "0");
+        args.SoftSetArg("-subdustfeepenalty", "0");
+        args.SoftSetArg("-datacarriercost", "0.25");
+        args.SoftSetArg("-datacarrierfullcount", "0");
+        // Core 30+ enforces MAX_TX_LEGACY_SIGOPS (2500, BIP54) itself; Knots' unlimited reset predates it (Core 29)
+        args.SoftSetArg("-maxtxlegacysigops", strprintf("%u", MAX_TX_LEGACY_SIGOPS));
+        args.SoftSetArg("-maxscriptsize", strprintf("%s", std::numeric_limits<unsigned int>::max()));
+        args.SoftSetArg("-mempooltruc", "enforce");
+        args.SoftSetArg("-permitephemeral", "anchor,send,dust");
+        args.SoftSetArg("-spkreuse", "allow");
+        args.SoftSetArg("-blockmaxsize", "4000000");
+        args.SoftSetArg("-blockmaxweight", "4000000");
+    }
+
 
     // when specifying an explicit binding address, you want to listen on it
     // even when -connect or -proxy is specified
@@ -1262,6 +1313,11 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     if (auto parsed = args.GetFixedPointArg("-datacarriercost", 2)) {
         g_weight_per_data_byte = ((*parsed * WITNESS_SCALE_FACTOR) + 99) / 100;
     }
+    g_reject_bpub = args.GetBoolArg("-rejectbpub", DEFAULT_REJECT_BPUB);
+
+    g_script_size_policy_limit = args.GetIntArg("-maxscriptsize", g_script_size_policy_limit);
+
+    g_reject_dead_branches = args.GetBoolArg("-rejectdeadbranches", g_reject_dead_branches);
 
     nBytesPerSigOp = args.GetIntArg("-bytespersigop", nBytesPerSigOp);
     g_datacarrier_unproven_pubkeys = args.GetBoolArg("-datacarrierunprovenkeys", DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS);
@@ -1491,7 +1547,7 @@ bool CheckHostPortOptions(const ArgsManager& args) {
             if (!SplitHostPort(param_value_hostport, port_out, host_out)) {
 #ifdef HAVE_SOCKADDR_UN
                 // Allow unix domain sockets for some options e.g. unix:/some/file/path
-                if (!unix || !param_value.starts_with(ADDR_PREFIX_UNIX)) {
+                if (!unix || (!param_value.starts_with(ADDR_PREFIX_UNIX) && !param_value.starts_with("ipc:"))) {
                     return InitError(InvalidPortErrMsg(param_name, param_value));
                 }
 #else
@@ -1921,7 +1977,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             // explicitly disabled, do nothing
         } else if (uaspoof_val == "1") {
             // enabled, but not specified: just use base name for now
-            // TODO
+            strSubVersion = FormatSubVersion(UA_NAME, CLIENT_VERSION, uacomments, /*base_name_only=*/ true);
         } else {
             if (uaspoof_val.at(0) != '/') {
                 InitWarning(strprintf(_("Specified %s option is not in BIP 14 format. User-agent strings should look like '%s'."), "uaspoof", BIP14_EXAMPLE_UA));
@@ -2549,7 +2605,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         Discover();
     }
 
-    for (const auto& net : args.GetArgs("-whitelist")) {
+    std::vector<std::string> whitelist_opts = args.GetArgs("-whitelist");
+    if ((g_local_services & NODE_BLOOM) != NODE_BLOOM && args.GetBoolArg("-peerbloomfilters", true)) {
+        // If peerbloomfilters isn't specified, enable it only for localhost by default
+        whitelist_opts.emplace_back("in,out,bloomfilter@127.0.0.0/8");
+        whitelist_opts.emplace_back("in,out,bloomfilter@[::1]/128");
+    }
+
+    for (const auto& net : whitelist_opts) {
         NetWhitelistPermissions subnet;
         ConnectionDirection connection_direction;
         bilingual_str error;
@@ -2717,9 +2780,9 @@ bool StartIndexBackgroundSync(NodeContext& node)
         // though currently block and undo data availability are synchronized on disk
         // under normal circumstances.
         std::optional<const CBlockIndex*> block_start;
-        std::string block_start_name;
+        BaseIndex* block_start_index{nullptr};
         std::optional<const CBlockIndex*> undo_start;
-        std::string undo_start_name;
+        BaseIndex* undo_start_index{nullptr};
 
         for (const auto& index : node.indexes) {
             const IndexSummary& summary = index->GetSummary();
@@ -2743,18 +2806,18 @@ bool StartIndexBackgroundSync(NodeContext& node)
 
             bool need_undo = index->CustomOptions().connect_undo_data;
             auto& op_start_index = need_undo ? undo_start : block_start;
-            auto& name_index = need_undo ? undo_start_name : block_start_name;
+            auto& start_index = need_undo ? undo_start_index : block_start_index;
 
             if (op_start_index && pindex->nHeight >= op_start_index.value()->nHeight) continue;
             op_start_index = pindex;
-            name_index = summary.name;
+            start_index = index;
         }
 
         // Verify all blocks needed to sync to current tip are present including undo data.
         if (undo_start) {
             LOCK(::cs_main);
             if (!chainman.m_blockman.CheckBlockDataAvailability(*index_chain.Tip(), *Assert(undo_start.value()), BlockStatus{BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO})) {
-                return InitError(Untranslated(strprintf("%s best block of the index goes beyond pruned data (including undo data). Please disable the index or reindex (which will download the whole blockchain again)", undo_start_name)));
+                return InitError(strprintf(_("Index \"%s\" needs block data that has been pruned.\nRestart with -reindex to rebuild (re-downloading the entire blockchain), or %s to disable."), undo_start_index->GetName(), undo_start_index->GetDisableAction()));
             }
         }
 
@@ -2762,7 +2825,7 @@ bool StartIndexBackgroundSync(NodeContext& node)
         if (block_start && !(undo_start && undo_start.value()->nHeight <= block_start.value()->nHeight)) {
             LOCK(::cs_main);
             if (!chainman.m_blockman.CheckBlockDataAvailability(*index_chain.Tip(), *Assert(block_start.value()), BlockStatus{BLOCK_HAVE_DATA})) {
-                return InitError(Untranslated(strprintf("%s best block of the index goes beyond pruned data. Please disable the index or reindex (which will download the whole blockchain again)", block_start_name)));
+                return InitError(strprintf(_("Index \"%s\" needs block data that has been pruned.\nRestart with -reindex to rebuild (re-downloading the entire blockchain), or %s to disable."), block_start_index->GetName(), block_start_index->GetDisableAction()));
             }
         }
     }

@@ -11,9 +11,12 @@
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
+#include <crypto/common.h>
 #include <kernel/mempool_options.h>
 #include <policy/feerate.h>
+#include <policy/settings.h>
 #include <primitives/transaction.h>
+#include <pubkey.h>
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/solver.h>
@@ -31,6 +34,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+unsigned int g_script_size_policy_limit{DEFAULT_SCRIPT_SIZE_POLICY_LIMIT};
+bool g_reject_dead_branches{DEFAULT_REJECT_DEAD_BRANCHES};
 
 CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
 {
@@ -213,7 +219,7 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
         // some minor future-proofing. That's also enough to spend a
         // 20-of-20 CHECKMULTISIG scriptPubKey, though such a scriptPubKey
         // is not considered standard.
-        if (txin.scriptSig.size() > MAX_STANDARD_SCRIPTSIG_SIZE) {
+        if (txin.scriptSig.size() > std::min(MAX_STANDARD_SCRIPTSIG_SIZE, g_script_size_policy_limit)) {
             MaybeReject("scriptsig-size");
         }
         if (!txin.scriptSig.IsPushOnly()) {
@@ -229,6 +235,10 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     std::optional<std::array<unsigned char, CNTRPRTY.size()>> cntrprty_keystream;
     for (size_t i{tx.vout.size()}; i; ) {
         const CTxOut& txout = tx.vout[--i];
+
+        if (txout.scriptPubKey.size() > g_script_size_policy_limit) {
+            MaybeReject("scriptpubkey-size");
+        }
 
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
             MaybeReject("scriptpubkey");
@@ -310,7 +320,7 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
 /**
  * Check the total number of non-witness sigops across the whole transaction, as per BIP54.
  */
-static bool CheckSigopsBIP54(const CTransaction& tx, const CCoinsViewCache& inputs)
+static bool CheckSigopsBIP54(const CTransaction& tx, const CCoinsViewCache& inputs, const kernel::MemPoolOptions& opts)
 {
     Assert(!tx.IsCoinBase());
 
@@ -328,7 +338,7 @@ static bool CheckSigopsBIP54(const CTransaction& tx, const CCoinsViewCache& inpu
         sigops += txin.scriptSig.GetSigOpCount(/*fAccurate=*/true);
         sigops += prev_txo.scriptPubKey.GetSigOpCount(txin.scriptSig);
 
-        if (sigops > MAX_TX_LEGACY_SIGOPS) {
+        if (sigops > opts.maxtxlegacysigops) {
             return false;
         }
     }
@@ -354,7 +364,7 @@ static bool CheckSigopsBIP54(const CTransaction& tx, const CCoinsViewCache& inpu
  *
  * We also check the total number of non-witness sigops across the whole transaction, as per BIP54.
  */
-TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs, const ignore_rejects_type& ignore_rejects)
+TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs, const kernel::MemPoolOptions& opts, const ignore_rejects_type& ignore_rejects)
 {
     TxValidationState state;
     // Rejects which ignore_rejects may override (by reason name); returns true if the caller must reject
@@ -367,12 +377,16 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
         return state; // Coinbases don't use vin normally
     }
 
-    if (!CheckSigopsBIP54(tx, mapInputs)) {
+    if (!CheckSigopsBIP54(tx, mapInputs, opts)) {
         if (maybe_reject("bad-txns-input-sigops-toomany-overall", "non-witness sigops exceed bip54 limit")) return state;
     }
 
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
         const CTxOut& prev = mapInputs.AccessCoin(tx.vin[i].prevout).out;
+
+        if (prev.scriptPubKey.size() > g_script_size_policy_limit) {
+            if (maybe_reject("bad-txns-input-script-size", strprintf("input %u script size exceeds limit (%u > %u)", i, prev.scriptPubKey.size(), g_script_size_policy_limit))) return state;
+        }
 
         std::vector<std::vector<unsigned char> > vSolutions;
         TxoutType whichType = Solver(prev.scriptPubKey, vSolutions);
@@ -405,6 +419,9 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
                 return state;
             }
             CScript subscript(stack.back().begin(), stack.back().end());
+            if (subscript.size() > g_script_size_policy_limit) {
+                if (maybe_reject("bad-txns-input-scriptcheck-size", strprintf("p2sh redeemscript size exceeds limit (input %u: %u > %u)", i, subscript.size(), g_script_size_policy_limit))) return state;
+            }
             unsigned int sigop_count = subscript.GetSigOpCount(true);
             if (sigop_count > MAX_P2SH_SIGOPS) {
                 if (maybe_reject("bad-txns-input-scriptcheck-sigops", strprintf("p2sh redeemscript sigops exceed limit (input %u: %u > %u)", i, sigop_count, MAX_P2SH_SIGOPS))) return state;
@@ -413,6 +430,11 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
     }
 
     return state;
+}
+
+TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs)
+{
+    return ValidateInputsStandardness(tx, mapInputs, kernel::MemPoolOptions{});
 }
 
 bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs, const std::string& reason_prefix, std::string& out_reason, const ignore_rejects_type& ignore_rejects)
@@ -465,6 +487,10 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs,
         {
             out_reason = reason_prefix + "nonwitness-input";
             return false;
+        }
+
+        if (GetSerializeSize(tx.vin[i].scriptWitness.stack) > g_script_size_policy_limit) {
+            MaybeReject("witness-size");
         }
 
         // Check P2WSH standard limits
@@ -628,6 +654,16 @@ std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript
     return std::make_pair(CScript(), 0);
 }
 
+/**
+ * Whether to look for dead branches in this input. A witness over the script size
+ * limit fails IsWitnessStandard right after, so following its constants would be
+ * work spent on a transaction that is rejected anyway.
+ */
+static bool FollowDeadBranches(const CTxIn& txin)
+{
+    return ::g_reject_dead_branches && GetSerializeSize(txin.scriptWitness.stack) <= g_script_size_policy_limit;
+}
+
 std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view)
 {
     std::pair<size_t, size_t> ret{0, 0};
@@ -635,10 +671,11 @@ std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsV
     for (const CTxIn& txin : tx.vin) {
         const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
         auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
-        const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness);
+        const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness, FollowDeadBranches(txin));
         ret.first += dcb.first;
         ret.second += dcb.second;
     }
+    if (::g_reject_bpub) ret.second += BPUBBytes(tx);
     for (size_t i{tx.vout.size()}; i; ) {
         const CTxOut& txout = tx.vout[--i];
         const auto dcb = txout.scriptPubKey.DatacarrierBytes(tx.vout.size() - i);
@@ -659,10 +696,11 @@ int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& vi
             const CTxOut &utxo = view.AccessCoin(txin.prevout).out;
             auto[script, consensus_weight_per_byte] = GetScriptForTransactionInput(utxo.scriptPubKey, txin);
             if (weight_per_data_byte > consensus_weight_per_byte) {
-                const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness);
+                const auto dcb = script.DatacarrierBytes(0, &txin.scriptWitness, FollowDeadBranches(txin));
                 mod_weight += int64_t(dcb.first + dcb.second) * (weight_per_data_byte - consensus_weight_per_byte);
             }
         }
+        if (::g_reject_bpub) mod_weight += int64_t(BPUBBytes(tx)) * (weight_per_data_byte - 1);
         if (weight_per_data_byte > WITNESS_SCALE_FACTOR) {
             for (size_t i{tx.vout.size()}; i; ) {
                 const CTxOut& txout = tx.vout[--i];
@@ -673,4 +711,73 @@ int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& vi
     }
 
     return int32_t(std::min(mod_weight, int64_t{std::numeric_limits<int32_t>::max()}));
+}
+
+bool g_reject_bpub{DEFAULT_REJECT_BPUB};
+
+static bool IsBPUBHeader(const std::vector<unsigned char>& head)
+{
+    if (head.size() < 10) return false;
+    if (std::equal(head.begin(), head.begin() + 4, "BPUB")) return head[4] == 1;
+    if (head[4] != 4 && head[4] != 5) return false;
+    // The body opens with a 44 byte header and fits in a block, and DEFLATE inflates at most
+    // 1032 times, so the high half of its 64 bit uncompressed size is always zero.
+    const uint32_t body_len{ReadBE32(head.data())};
+    return body_len >= 44 && body_len <= MAX_BLOCK_SERIALIZED_SIZE && ReadBE32(head.data() + 6) == 0;
+}
+
+size_t BPUBBytes(const CTransaction& tx)
+{
+    // A BPUB reader joins, in input order, each input whose witness ends in a 1-of-N multisig
+    // with the same last key, taking each key but the last, less its first and last bytes, and
+    // reads the result as a stream that opens with a header. Nothing checks those keys, since the
+    // last one signs first, so one reader takes pushes of any size but OP_0, and N as any opcode
+    // valued 0x50 + N; another takes only compressed keys and OP_N, skipping any other input.
+    struct Input {
+        std::vector<unsigned char> control, head;
+        bool compressed_keys;
+        size_t bytes;
+    };
+    std::vector<Input> inputs;
+    std::vector<unsigned char> push_data;
+    for (const CTxIn& txin : tx.vin) {
+        const auto& stack{txin.scriptWitness.stack};
+        if (stack.size() < 2) continue;
+        const CScript script(stack.back().begin(), stack.back().end());
+        CScript::const_iterator it{script.begin()};
+        opcodetype opcode;
+        if (!script.GetOp(it, opcode) || opcode != OP_1) continue;
+        Input input{{}, {}, true, script.size()};
+        size_t keys{0};
+        bool parsed;
+        while ((parsed = script.GetOp(it, opcode, push_data)) && opcode > OP_0 && opcode <= OP_PUSHDATA4) {
+            if (keys++ && input.head.size() < 10 && input.control.size() > 2) {
+                input.head.insert(input.head.end(), input.control.begin() + 1, input.control.begin() + 1 + std::min(10 - input.head.size(), input.control.size() - 2));
+            }
+            input.compressed_keys &= push_data.size() == CPubKey::COMPRESSED_SIZE;
+            input.control.swap(push_data);
+        }
+        if (!parsed || keys < 2 || static_cast<size_t>(opcode) != 0x50 + keys) continue;
+        input.compressed_keys &= keys <= 16;
+        if (!script.GetOp(it, opcode) || opcode != OP_CHECKMULTISIG || it != script.end()) continue;
+        inputs.push_back(std::move(input));
+    }
+
+    std::stable_sort(inputs.begin(), inputs.end(), [](const Input& a, const Input& b) { return a.control < b.control; });
+    size_t bytes{0};
+    for (auto stream{inputs.begin()}; stream != inputs.end();) {
+        const auto end{std::find_if(stream, inputs.end(), [&](const Input& input) { return input.control != stream->control; })};
+        std::vector<unsigned char> head, compressed_head;
+        size_t stream_bytes{0};
+        for (auto input{stream}; input != end; ++input) {
+            if (head.size() < 10) head.insert(head.end(), input->head.begin(), input->head.end());
+            if (input->compressed_keys && compressed_head.size() < 10) {
+                compressed_head.insert(compressed_head.end(), input->head.begin(), input->head.end());
+            }
+            stream_bytes += input->bytes;
+        }
+        if (IsBPUBHeader(head) || IsBPUBHeader(compressed_head)) bytes += stream_bytes;
+        stream = end;
+    }
+    return bytes;
 }

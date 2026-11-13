@@ -147,6 +147,9 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
 
     if (auto hours = argsman.GetIntArg("-mempoolexpiry")) mempool_opts.expiry = std::chrono::hours{*hours};
 
+    mempool_opts.minrelaycoinblocks = argsman.GetIntArg("-minrelaycoinblocks", mempool_opts.minrelaycoinblocks);
+    mempool_opts.minrelaymaturity = argsman.GetIntArg("-minrelaymaturity", mempool_opts.minrelaymaturity);
+
     // incremental relay fee sets the minimum feerate increase necessary for replacement in the mempool
     // and the amount the mempool min fee increases above the feerate of txs evicted due to mempool limiting.
     if (const auto arg{argsman.GetArg("-incrementalrelayfee")}) {
@@ -191,6 +194,8 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
         mempool_opts.dust_relay_target = parsed->first;
         mempool_opts.dust_relay_multiplier = parsed->second;
     }
+
+    mempool_opts.maxtxlegacysigops = argsman.GetIntArg("-maxtxlegacysigops", mempool_opts.maxtxlegacysigops);
 
     mempool_opts.permitbareanchor = argsman.GetBoolArg("-permitbareanchor", mempool_opts.permitbareanchor);
 

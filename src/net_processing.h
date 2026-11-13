@@ -39,9 +39,11 @@ class Warnings;
 
 /** Whether transaction reconciliation protocol should be enabled by default. */
 inline constexpr bool DEFAULT_TXRECONCILIATION_ENABLE{false};
+inline constexpr size_t BLOCK_RECONSTRUCTION_EXTRA_TXN_PER_TXN_SIZE_LIMIT{100000};
+inline constexpr size_t DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN_SIZE{10000000};
 /** Default number of non-mempool transactions to keep around for block reconstruction. Includes
     orphan, replaced, and rejected transactions. */
-inline constexpr uint32_t DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN{100};
+inline constexpr uint32_t DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN{32768};
 /** Default maximum per-second rate for sending transaction inventory to peers. */
 inline constexpr unsigned int DEFAULT_TX_SEND_RATE{14};
 inline constexpr bool DEFAULT_PEERBLOOMFILTERS = false;
@@ -70,6 +72,7 @@ struct CNodeStateStats {
     int64_t presync_height{-1};
     std::chrono::seconds time_offset{0};
     NodeSeconds m_last_block_announcement;
+    int m_misbehavior_score{0};
 };
 
 struct PeerManagerInfo {
@@ -98,6 +101,7 @@ public:
         //! Number of non-mempool transactions to keep around for block reconstruction. Includes
         //! orphan, replaced, and rejected transactions.
         uint32_t max_extra_txs{DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN};
+        size_t max_extra_txs_size{DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN_SIZE};
         //! Whether all P2P messages are captured to disk
         bool capture_messages{false};
         //! Whether or not the internal RNG behaves deterministically (this is

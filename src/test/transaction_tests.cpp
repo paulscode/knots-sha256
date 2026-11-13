@@ -764,6 +764,8 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     CKey key = GenerateRandomKey();
     t.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
 
+    g_mempool_opts.permit_bare_pubkey = true;
+
     constexpr auto CheckIsStandard = [](const auto& t, const unsigned int max_op_return_relay = MAX_OP_RETURN_RELAY) {
         std::string reason;
         kernel::MemPoolOptions opts{g_mempool_opts};
@@ -835,6 +837,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
 
     // Test rejectparasites
     t.vout[0].scriptPubKey = CScript() << OP_RETURN;
+    t.vout.emplace_back(674, GetScriptForDestination(PKHash(key.GetPubKey())));
     t.nLockTime = 21;
     g_mempool_opts.reject_parasites = false;
     CheckIsStandard(t);
@@ -930,9 +933,9 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout[1].nValue = 0;
     // Core 31 accepts several OP_RETURN outputs within -datacarriersize; Bitcoin Knots SHA256 requires
     // -datacarriermultiple for that (single-output rule by default, decisions/0013)
-    CheckIsNotStandard(t, "multi-op-return");
+    CheckIsNotStandard(t, "multi-op-return", /*max_op_return_relay=*/1000);
     g_mempool_opts.datacarrier_multiple = true;
-    CheckIsStandard(t);
+    CheckIsStandard(t, /*max_op_return_relay=*/1000);
 
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN;
@@ -945,7 +948,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout[0].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3804678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     t.vout[1].scriptPubKey = CScript() << OP_RETURN << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3804678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38"_hex;
     const auto datacarrier_size = t.vout[0].scriptPubKey.size() + t.vout[1].scriptPubKey.size();
-    CheckIsStandard(t); // Default max relay should never trigger
+    CheckIsNotStandard(t, "datacarrier"); // two full outputs exceed the 83-byte default
     CheckIsStandard(t, /*max_op_return_relay=*/datacarrier_size);
     CheckIsNotStandard(t, "datacarrier", /*max_op_return_relay=*/datacarrier_size-1);
     g_mempool_opts.datacarrier_multiple = DEFAULT_DATACARRIER_MULTIPLE;
@@ -1030,7 +1033,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
 
     g_mempool_opts.permit_bare_multisig = false;
     CheckIsNotStandard(t, "bare-multisig");
-    g_mempool_opts.permit_bare_multisig = DEFAULT_PERMIT_BAREMULTISIG;
+    g_mempool_opts.permit_bare_multisig = true;
 
     // Add dust outputs up to allowed maximum
     assert(t.vout.size() == 1);
@@ -1143,6 +1146,10 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     CKey key;
     key.MakeNewKey(true);
 
+    const kernel::MemPoolOptions mempool_opts{
+        .maxtxlegacysigops = 2'500,
+    };
+
     // Create a pathological P2SH script padded with as many sigops as is standard.
     CScript max_sigops_redeem_script{CScript() << std::vector<unsigned char>{} << key.GetPubKey()};
     for (unsigned i{0}; i < MAX_P2SH_SIGOPS - 1; ++i) max_sigops_redeem_script << OP_2DUP << OP_CHECKSIG << OP_DROP;
@@ -1152,7 +1159,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     // Create a transaction fanning out as many such P2SH outputs as is standard to spend in a
     // single transaction, and a transaction spending them.
     CMutableTransaction tx_create, tx_max_sigops;
-    const unsigned p2sh_inputs_count{MAX_TX_LEGACY_SIGOPS / MAX_P2SH_SIGOPS};
+    const unsigned p2sh_inputs_count{mempool_opts.maxtxlegacysigops / MAX_P2SH_SIGOPS};
     tx_create.vout.reserve(p2sh_inputs_count);
     for (unsigned i{0}; i < p2sh_inputs_count; ++i) {
         tx_create.vout.emplace_back(424242 + i, max_sigops_p2sh);
@@ -1164,12 +1171,12 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     }
 
     // p2sh_inputs_count is truncated to 166 (from 166.6666..)
-    BOOST_CHECK_LT(p2sh_inputs_count * MAX_P2SH_SIGOPS, MAX_TX_LEGACY_SIGOPS);
+    BOOST_CHECK_LE(p2sh_inputs_count * MAX_P2SH_SIGOPS, mempool_opts.maxtxlegacysigops);
     AddCoins(coins, CTransaction(tx_create), 0, false);
 
     // 2490 sigops is below the limit.
     BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(tx_max_sigops), coins), 2490);
-    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins).IsValid());
+    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts).IsValid());
 
     // Adding one more input will bump this to 2505, hitting the limit.
     tx_create.vout.emplace_back(424242, max_sigops_p2sh);
@@ -1185,10 +1192,16 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     std::string reject_reason("bad-txns-input-sigops-toomany-overall");
     std::string sigop_limit_reject_debug_message("non-witness sigops exceed bip54 limit");
     {
-        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins);
+        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts);
         BOOST_CHECK(validation_state.IsInvalid());
         BOOST_CHECK_EQUAL(validation_state.GetRejectReason(), reject_reason);
         BOOST_CHECK_EQUAL(validation_state.GetDebugMessage(), sigop_limit_reject_debug_message);
+    }
+    {
+        // -maxtxlegacysigops reaches the check: a raised limit admits the same transaction
+        kernel::MemPoolOptions raised{mempool_opts};
+        raised.maxtxlegacysigops = 3000;
+        BOOST_CHECK(ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, raised).IsValid());
     }
 
 
@@ -1209,7 +1222,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
 
     // The transaction now contains exactly 2500 sigops, the check should pass.
     BOOST_CHECK_EQUAL(p2sh_inputs_count * MAX_P2SH_SIGOPS + p2pk_inputs_count * 1, MAX_TX_LEGACY_SIGOPS);
-    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins).IsValid());
+    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts).IsValid());
 
     // Now, add some Segwit inputs. We add one for each defined Segwit output type. The limit
     // is exclusively on non-witness sigops and therefore those should not be counted.
@@ -1225,7 +1238,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
 
     // The transaction now still contains exactly 2500 sigops, the check should pass.
     AddCoins(coins, CTransaction(tx_create_segwit), 0, false);
-    BOOST_REQUIRE(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins).IsValid());
+    BOOST_REQUIRE(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts).IsValid());
 
     // Add one more P2PK input. We'll reach the limit.
     tx_create_p2pk.vout.emplace_back(212121, p2pk_script);
@@ -1239,7 +1252,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     auto legacy_sigop_count_p2pk = p2sh_inputs_count * MAX_P2SH_SIGOPS + p2pk_inputs_count * 1;
     BOOST_CHECK_GT(legacy_sigop_count_p2pk, MAX_TX_LEGACY_SIGOPS);
     {
-        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins);
+        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts);
         BOOST_CHECK(validation_state.IsInvalid());
         BOOST_CHECK_EQUAL(validation_state.GetRejectReason(), reject_reason);
         BOOST_CHECK_EQUAL(validation_state.GetDebugMessage(), sigop_limit_reject_debug_message);
@@ -1509,6 +1522,164 @@ BOOST_AUTO_TEST_CASE(spends_witness_prog)
         tx_spend.vin[0].scriptSig.clear();
         BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
     }
+}
+
+/** Spend 1-of-N inputs whose keys carry `stream` in `chunk` bytes each, as a BPUB encoder does. */
+static size_t AddBpubInputs(CMutableTransaction& tx, const std::vector<unsigned char>& stream, const size_t chunk, const size_t per_input, const std::vector<unsigned char>& control)
+{
+    std::vector<std::vector<unsigned char>> keys;
+    for (size_t i{0}; i < stream.size(); i += chunk) {
+        std::vector<unsigned char> key(chunk + 2);
+        key[0] = 0x02;
+        std::copy_n(stream.begin() + i, std::min(chunk, stream.size() - i), key.begin() + 1);
+        keys.push_back(key);
+    }
+    size_t bytes{0};
+    for (size_t i{0}; i < keys.size(); i += per_input) {
+        const size_t n{std::min(per_input, keys.size() - i)};
+        CScript script{CScript() << OP_1};
+        for (size_t j{i}; j < i + n; ++j) script << keys[j];
+        script << control << CScript::EncodeOP_N(n + 1) << OP_CHECKMULTISIG;
+        tx.vin.emplace_back().scriptWitness.stack = {{}, std::vector<unsigned char>(72, 1), {script.begin(), script.end()}};
+        bytes += script.size();
+    }
+    return bytes;
+}
+
+BOOST_AUTO_TEST_CASE(bpub_bytes)
+{
+    // A BPUB v5 stream, as its encoder writes it
+    const auto v5{ParseHex("000000ca05030000000000000180b25870e5538d2124919e1345dcb4674cab44d42456ad164038eb93f5e4f9969d006976a654abd02a15e1b2c15177f6e73f72ca9c2b339a651509ebf29bf1299d3bcf8c6df6aa2695cd184ad61eb1dd462f000a40ec28b0c273677fa0ef8b8a49540319ab20d0912a5ee05e445f98f078087d5532c24bb4c1e2704c913bcc6801ad6464d35d4fae82e95a5020a035e89da5d512011a4da91b2734737ea3cea48260b798faa33ce4aa13806859a490644a60d834964fb01829605702b9c3b3bf53")};
+    const std::vector<unsigned char> control(33, 3), other(33, 2);
+    const auto bytes_of = [&](const std::vector<unsigned char>& stream, size_t chunk, size_t per_input) {
+        CMutableTransaction tx;
+        const size_t bytes{AddBpubInputs(tx, stream, chunk, per_input, control)};
+        return std::pair{BPUBBytes(CTransaction{tx}), bytes};
+    };
+    const auto counted = [&](const std::vector<unsigned char>& stream, size_t chunk = 31, size_t per_input = 14) {
+        const auto [got, bytes] = bytes_of(stream, chunk, per_input);
+        return got == bytes && bytes > 0;
+    };
+    const auto ignored = [&](const std::vector<unsigned char>& stream) { return bytes_of(stream, 31, 14).first == 0; };
+
+    // As deployed: 1-of-15 of compressed keys
+    BOOST_CHECK(counted(v5));
+    // Any 1-of-N reads the same
+    BOOST_CHECK(counted(v5, 31, 10));
+    BOOST_CHECK(counted(v5, 31, 1));
+    // Readers take keys of any size, and the header can span inputs
+    BOOST_CHECK(counted(v5, 518, 6));
+    BOOST_CHECK(counted(v5, 3, 1));
+    BOOST_CHECK(counted(v5, 200000, 1));
+
+    auto stream{v5};
+    stream[4] = 4;
+    BOOST_CHECK(counted(stream));
+    stream = v5;
+    std::copy_n("BPUB\x01", 5, stream.begin());
+    BOOST_CHECK(counted(stream));
+    stream[4] = 2; // unknown legacy version
+    BOOST_CHECK(ignored(stream));
+    stream = v5;
+    stream[4] = 6; // unknown version
+    BOOST_CHECK(ignored(stream));
+    stream = v5;
+    stream[3] = 43; // body shorter than its header
+    BOOST_CHECK(ignored(stream));
+    stream[3] = 44;
+    BOOST_CHECK(counted(stream));
+    stream = v5;
+    stream[1] = 0x3d; stream[2] = 0x09; stream[3] = 0x01; // body larger than a block
+    BOOST_CHECK(ignored(stream));
+    stream[3] = 0x00;
+    BOOST_CHECK(counted(stream));
+    stream = v5;
+    stream[9] = 1; // uncompressed size no body can inflate to
+    BOOST_CHECK(ignored(stream));
+    stream = v5;
+    stream.insert(stream.begin(), 0); // header not where a reader looks
+    BOOST_CHECK(ignored(stream));
+
+    // Inputs signed by another key are another stream, so they neither hide the header nor count
+    CMutableTransaction tx;
+    AddBpubInputs(tx, std::vector<unsigned char>(62, 0), 31, 2, other);
+    const size_t bytes{AddBpubInputs(tx, v5, 31, 14, control)};
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{tx}), bytes);
+    // ...nor when interleaved with it
+    CMutableTransaction real, decoy, mixed;
+    const size_t real_bytes{AddBpubInputs(real, v5, 31, 2, control)};
+    AddBpubInputs(decoy, std::vector<unsigned char>(124, 0), 31, 2, other);
+    for (size_t i{0}; i < real.vin.size(); ++i) {
+        if (i < decoy.vin.size()) mixed.vin.push_back(decoy.vin[i]);
+        mixed.vin.push_back(real.vin[i]);
+    }
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{mixed}), real_bytes);
+
+    // An input only one reader takes cannot hide the header from the other
+    CMutableTransaction decoyed;
+    const CScript decoy_script{CScript() << OP_1 << std::vector<unsigned char>(34, 0) << control << OP_2 << OP_CHECKMULTISIG};
+    decoyed.vin.emplace_back().scriptWitness.stack = {{}, std::vector<unsigned char>(72, 1), {decoy_script.begin(), decoy_script.end()}};
+    const size_t decoyed_bytes{decoy_script.size() + AddBpubInputs(decoyed, v5, 31, 14, control)};
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{decoyed}), decoyed_bytes);
+    // Neither reader takes an input with an OP_0 key, so it cannot hide the header either
+    CMutableTransaction zero_key;
+    const CScript zero_key_script{CScript() << OP_1 << OP_0 << std::vector<unsigned char>(34, 0) << control << OP_3 << OP_CHECKMULTISIG};
+    zero_key.vin.emplace_back().scriptWitness.stack = {{}, std::vector<unsigned char>(72, 1), {zero_key_script.begin(), zero_key_script.end()}};
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{zero_key}), 0U);
+    const size_t zero_key_bytes{AddBpubInputs(zero_key, v5, 3, 1, control)};
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{zero_key}), zero_key_bytes);
+    // One reader takes N as any opcode valued 0x50 + N, so 17 keys end in OP_NOP
+    CScript nop_script{CScript() << OP_1};
+    for (size_t i{0}; i < 16; ++i) {
+        std::vector<unsigned char> key(13);
+        key[0] = 0x02;
+        std::copy_n(v5.begin() + 12 * i, 12, key.begin() + 1);
+        nop_script << key;
+    }
+    nop_script << std::vector<unsigned char>{0x11} << OP_NOP << OP_CHECKMULTISIG;
+    CMutableTransaction nop;
+    nop.vin.emplace_back().scriptWitness.stack = {{}, std::vector<unsigned char>(72, 1), {nop_script.begin(), nop_script.end()}};
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{nop}), nop_script.size());
+    nop.vin[0].scriptWitness.stack.back()[nop_script.size() - 2] = OP_16;
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{nop}), 0U);
+    // A key count the script does not have, or a witness that is only the script, is not BPUB
+    CMutableTransaction miscounted;
+    AddBpubInputs(miscounted, v5, 31, 14, control);
+    auto& miscounted_script{miscounted.vin[0].scriptWitness.stack.back()};
+    miscounted_script[miscounted_script.size() - 2] = OP_14;
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{miscounted}), 0U);
+    CMutableTransaction bare;
+    AddBpubInputs(bare, v5, 31, 14, control);
+    for (auto& txin : bare.vin) txin.scriptWitness.stack.erase(txin.scriptWitness.stack.begin(), txin.scriptWitness.stack.end() - 1);
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{bare}), 0U);
+
+    // It counts as non-standard datacarrier, and as data for -datacarriercost
+    CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+    for (uint32_t i{0}; i < tx.vin.size(); ++i) {
+        tx.vin[i].prevout = COutPoint{Txid::FromUint256(uint256::ONE), i};
+        const auto& script{tx.vin[i].scriptWitness.stack.back()};
+        coins.AddCoin(tx.vin[i].prevout, Coin{CTxOut{1000, GetScriptForDestination(WitnessV0ScriptHash{CScript(script.begin(), script.end())})}, 1, false}, false);
+    }
+    BOOST_CHECK_EQUAL(DatacarrierBytes(CTransaction{tx}, coins).second, bytes);
+    BOOST_CHECK_EQUAL(CalculateExtraTxWeight(CTransaction{tx}, coins, 4), int32_t(bytes * 3));
+    // -rejectbpub=0 counts none of it
+    g_reject_bpub = false;
+    BOOST_CHECK_EQUAL(DatacarrierBytes(CTransaction{tx}, coins).second, 0U);
+    BOOST_CHECK_EQUAL(CalculateExtraTxWeight(CTransaction{tx}, coins, 4), 0);
+    g_reject_bpub = true;
+
+    // Other multisig, and other spends, are not BPUB
+    for (const opcodetype m : {OP_1, OP_2}) {
+        CMutableTransaction honest;
+        const CScript multisig{CScript() << m << other << control << std::vector<unsigned char>(33, 4) << OP_3 << OP_CHECKMULTISIG};
+        honest.vin.emplace_back().scriptWitness.stack = {{}, std::vector<unsigned char>(72, 1), {multisig.begin(), multisig.end()}};
+        honest.vin.emplace_back().scriptWitness.stack = {std::vector<unsigned char>(72, 1), control};
+        BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{honest}), 0U);
+    }
+    CMutableTransaction two_of_n;
+    AddBpubInputs(two_of_n, v5, 31, 14, control);
+    for (auto& txin : two_of_n.vin) txin.scriptWitness.stack.back()[0] = OP_2;
+    BOOST_CHECK_EQUAL(BPUBBytes(CTransaction{two_of_n}), 0U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

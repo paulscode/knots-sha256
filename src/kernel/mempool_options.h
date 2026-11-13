@@ -26,14 +26,18 @@ inline constexpr unsigned int DEFAULT_MAX_MEMPOOL_SIZE_MB{300};
 inline constexpr unsigned int DEFAULT_BLOCKSONLY_MAX_MEMPOOL_SIZE_MB{5};
 /** Default for -mempoolexpiry, expiration time for mempool transactions in hours */
 inline constexpr unsigned int DEFAULT_MEMPOOL_EXPIRY_HOURS{336};
+/** Default for -minrelaycoinblocks */
+inline constexpr uint64_t DEFAULT_MINRELAYCOINBLOCKS{0};
+/** Default for -minrelaymaturity */
+inline constexpr int DEFAULT_MINRELAYMATURITY{0};
 /** Default for -mempoolreplacement; must update docs in init.cpp manually */
 inline constexpr RBFPolicy DEFAULT_MEMPOOL_RBF_POLICY{RBFPolicy::Always};
 /** Default for -mempooltruc; must update docs in init.cpp manually */
-inline constexpr TRUCPolicy DEFAULT_MEMPOOL_TRUC_POLICY{TRUCPolicy::Enforce};
+inline constexpr TRUCPolicy DEFAULT_MEMPOOL_TRUC_POLICY{TRUCPolicy::Accept};
 /** Whether to fall back to legacy V1 serialization when writing mempool.dat */
 inline constexpr bool DEFAULT_PERSIST_V1_DAT{false};
 /** Default for -acceptnonstddatacarrier */
-inline constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{true};
+inline constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{false};
 /** Default for -acceptnonstdtxn */
 inline constexpr bool DEFAULT_ACCEPT_NON_STD_TXN{false};
 /** Default for -acceptunknownwitness */
@@ -56,6 +60,8 @@ struct MemPoolOptions {
     int check_ratio{0};
     int64_t max_size_bytes{DEFAULT_MAX_MEMPOOL_SIZE_MB * 1'000'000};
     std::chrono::seconds expiry{std::chrono::hours{DEFAULT_MEMPOOL_EXPIRY_HOURS}};
+    uint64_t minrelaycoinblocks{DEFAULT_MINRELAYCOINBLOCKS};
+    int minrelaymaturity{DEFAULT_MINRELAYMATURITY};
     CFeeRate incremental_relay_feerate{DEFAULT_INCREMENTAL_RELAY_FEE};
     /** A fee rate smaller than this is considered zero fee (for relaying, mining and transaction creation) */
     CFeeRate min_relay_feerate{DEFAULT_MIN_RELAY_TX_FEE};
@@ -66,6 +72,7 @@ struct MemPoolOptions {
     int32_t dust_relay_target{0};
     /** Multiplier for dustdynamic assignments, in thousandths. */
     int dust_relay_multiplier{DEFAULT_DUST_RELAY_MULTIPLIER};
+    unsigned int maxtxlegacysigops{MAX_TX_LEGACY_SIGOPS};
     /**
      * A data carrying output is an unspendable output containing data. The script
      * type is designated as TxoutType::NULL_DATA.

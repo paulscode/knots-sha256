@@ -1,4 +1,7 @@
 (use-modules (gnu packages bison)
+             ((gnu packages gnome) #:select (librsvg-2.40))
+             ((gnu packages image) #:select (libicns))
+             ((gnu packages imagemagick) #:select (imagemagick))
              ((gnu packages compression) #:select (xz zip))
              (gnu packages gawk)
              ((gnu packages installers) #:select (nsis-x86_64))
@@ -13,6 +16,10 @@
         xz
         ;; Build tools
         ninja
+        ;; Rendering icons from SVG
+        imagemagick
+        libicns
+        librsvg-2.40
         ;; Packaging scripts
         python-minimal ;; (3.11)
         ;; Tests
