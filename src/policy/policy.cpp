@@ -12,6 +12,7 @@
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
 #include <crypto/common.h>
+#include <crypto/hex_base.h>
 #include <kernel/mempool_options.h>
 #include <policy/feerate.h>
 #include <policy/settings.h>
@@ -30,7 +31,11 @@
 #include <array>
 #include <cstddef>
 #include <limits>
+#include <map>
+#include <numeric>
 #include <optional>
+#include <set>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -173,6 +178,147 @@ static bool IsCounterpartyMessage(const CScript& scriptPubKey, const std::array<
     return true;
 }
 
+/** The data pushes after an OP_RETURN, joined, and the length of the first one. */
+struct NullDataPushes {
+    std::string joined;
+    size_t first_len{0};
+};
+
+/**
+ * Pushnums carry no bytes and are skipped, as Omni Core's own reader skips them, so an OP_1 in
+ * front of a payload does not hide it. Solver only calls a script NULL_DATA when everything
+ * after the OP_RETURN is a push. One pass over the script; the payload is copied once.
+ */
+static std::optional<NullDataPushes> GetNullDataPushes(const CScript& scriptPubKey)
+{
+    opcodetype opcode;
+    std::vector<unsigned char> data;
+    NullDataPushes pushes;
+    bool seen{false};
+    CScript::const_iterator pc{scriptPubKey.begin()};
+    if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_RETURN) return std::nullopt;
+    while (pc < scriptPubKey.end()) {
+        if (!scriptPubKey.GetOp(pc, opcode, data)) return std::nullopt;
+        if (opcode > OP_PUSHDATA4) continue;
+        if (!seen) pushes.first_len = data.size();
+        seen = true;
+        pushes.joined.append(data.begin(), data.end());
+    }
+    return pushes;
+}
+
+static bool IsJsonSpace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
+/**
+ * Read the JSON string that starts at s[i], a '"', and leave i after its closing quote. Escapes
+ * below U+0080 are decoded, so "p" reads as "p"; anything above becomes '\x80', which no key
+ * we look for contains. Other bytes are taken as they are, whether or not they are valid UTF-8.
+ */
+static std::optional<std::string> ReadJsonString(std::string_view s, size_t& i)
+{
+    std::string out;
+    for (++i; i < s.size();) {
+        const char c{s[i++]};
+        if (c == '"') return out;
+        if (c != '\\') {
+            out += c;
+            continue;
+        }
+        if (i >= s.size()) return std::nullopt;
+        const char e{s[i++]};
+        switch (e) {
+        case '"': case '\\': case '/': out += e; break;
+        case 'b': out += '\b'; break;
+        case 'f': out += '\f'; break;
+        case 'n': out += '\n'; break;
+        case 'r': out += '\r'; break;
+        case 't': out += '\t'; break;
+        case 'u': {
+            if (s.size() - i < 4) return std::nullopt;
+            unsigned int cp{0};
+            for (int k{0}; k < 4; ++k) {
+                const int d{HexDigit(s[i++])};
+                if (d < 0) return std::nullopt;
+                cp = cp * 16 + d;
+            }
+            out += cp < 0x80 ? char(cp) : '\x80';
+            break;
+        }
+        default: return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+/** Skip the JSON value that starts at s[i]; false if it is cut off or empty. */
+static bool SkipJsonValue(std::string_view s, size_t& i)
+{
+    if (s[i] == '"') return ReadJsonString(s, i).has_value();
+    if (s[i] == '{' || s[i] == '[') {
+        int depth{0};
+        while (i < s.size()) {
+            const char c{s[i]};
+            if (c == '"') {
+                if (!ReadJsonString(s, i)) return false;
+                continue;
+            }
+            ++i;
+            if (c == '{' || c == '[') ++depth;
+            if ((c == '}' || c == ']') && --depth == 0) return true;
+        }
+        return false;
+    }
+    const size_t start{i};
+    while (i < s.size() && s[i] != ',' && s[i] != '}' && !IsJsonSpace(s[i])) ++i;
+    return i > start;
+}
+
+/**
+ * BRC-20 and the protocols copied from it, ico-20 and crc-20 among them, write each operation as
+ * a JSON object whose "p" member names the protocol: {"p":"ico-20","op":"mint","tick":"LEAF"}.
+ * This matches an object with a top-level "p" member whose value is a string. It also matches
+ * with a UTF-8 byte order mark in front, duplicate keys (any "p" with a string value counts),
+ * escaped key characters, bytes that are not valid UTF-8, or anything after the "p" member,
+ * some of which a strict parser rejects. Data that only begins with '{' does not match. Linear
+ * in the payload, which IsStandard has already capped at -datacarriersize.
+ */
+static bool IsJsonTokenMessage(std::string_view s)
+{
+    size_t i{s.starts_with("\xEF\xBB\xBF") ? 3u : 0u};
+    const auto skip_space = [&] { while (i < s.size() && IsJsonSpace(s[i])) ++i; };
+    skip_space();
+    if (i >= s.size() || s[i] != '{') return false;
+    ++i;
+    while (true) {
+        skip_space();
+        if (i >= s.size() || s[i] != '"') return false;
+        const auto key{ReadJsonString(s, i)};
+        if (!key) return false;
+        skip_space();
+        if (i >= s.size() || s[i] != ':') return false;
+        ++i;
+        skip_space();
+        if (i >= s.size()) return false;
+        if (*key == "p" && s[i] == '"') return ReadJsonString(s, i).has_value();
+        if (!SkipJsonValue(s, i)) return false;
+        skip_space();
+        if (i >= s.size() || s[i] != ',') return false;
+        ++i;
+    }
+}
+
+/**
+ * Omni Layer messages in an OP_RETURN (its class C encoding). Omni Core takes the output when the
+ * first data push begins with "omni", then joins the pushes and reads a big-endian 16-bit version
+ * (0 or 1 so far) and a 16-bit type after the marker. Requiring the version's zero high byte
+ * keeps text that starts with "omni" out.
+ */
+static bool IsOmniMessage(const NullDataPushes& pushes)
+{
+    // The marker is in the first push when that push holds at least its four bytes
+    return pushes.first_len >= 4 && pushes.joined.starts_with("omni") && pushes.joined.size() >= 8 && pushes.joined[4] == '\0';
+}
+
 static inline bool MaybeReject_(std::string& out_reason, const std::string& reason, const std::string& reason_prefix, const ignore_rejects_type& ignore_rejects) {
     if (ignore_rejects.count(reason_prefix + reason)) {
         return false;
@@ -233,6 +379,7 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     unsigned int n_monetary{0};
     TxoutType whichType;
     std::optional<std::array<unsigned char, CNTRPRTY.size()>> cntrprty_keystream;
+    std::vector<size_t> null_data_outs;
     for (size_t i{tx.vout.size()}; i; ) {
         const CTxOut& txout = tx.vout[--i];
 
@@ -275,6 +422,7 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
                         MaybeReject("tokens-counterparty");
                     }
                 }
+                null_data_outs.push_back(i);
             }
             nDataOut++;
             unsigned int size = txout.scriptPubKey.size();
@@ -303,6 +451,30 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     // aggregate -datacarriersize; Bitcoin Knots SHA256 keeps the single-output rule by default, decisions/0013)
     if (nDataOut > 1 && !opts.datacarrier_multiple) {
         MaybeReject("multi-op-return");
+    }
+
+    // Token messages are looked for only after the check above, so a peer can make this read one
+    // OP_RETURN script per transaction, not every output of a transaction refused anyway; only an
+    // RPC caller can ignore multi-op-return, and then every OP_RETURN output is read. The bound per
+    // script: IsStandard above has refused any OP_RETURN script over -datacarriersize (at most
+    // MAX_OUTPUT_DATA_SIZE bytes), GetNullDataPushes walks it once and copies its pushes once, and
+    // each reader walks that copy left to right once, decoding keys into strings no longer than
+    // the copy. Nothing recurses, and beyond the index list (one entry per OP_RETURN output, filled
+    // only with -rejecttokens on) nothing is allocated that does not come from the script. The JSON
+    // scanner reads the pushes joined only: the first push is a prefix of them and the scanner
+    // returns true before it needs a byte past the "p" value, so a match on the first push alone
+    // is a match on the joined pushes.
+    if (opts.reject_tokens) {
+        for (const size_t i : null_data_outs) {
+            if (const auto pushes{GetNullDataPushes(tx.vout[i].scriptPubKey)}) {
+                if (IsJsonTokenMessage(pushes->joined)) {
+                    MaybeReject("tokens-json");
+                }
+                if (IsOmniMessage(*pushes)) {
+                    MaybeReject("tokens-omni");
+                }
+            }
+        }
     }
 
     if (!n_monetary) {
@@ -664,7 +836,146 @@ static bool FollowDeadBranches(const CTxIn& txin)
     return ::g_reject_dead_branches && GetSerializeSize(txin.scriptWitness.stack) <= g_script_size_policy_limit;
 }
 
-std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view)
+namespace {
+
+/** The hash or x-only key of a single-hash output type; empty for any other script. */
+std::vector<unsigned char> OutputProgram(const CScript& script, TxoutType& type)
+{
+    std::vector<std::vector<unsigned char>> solutions;
+    type = Solver(script, solutions);
+    switch (type) {
+    case TxoutType::PUBKEYHASH:
+    case TxoutType::SCRIPTHASH:
+    case TxoutType::WITNESS_V0_KEYHASH:
+    case TxoutType::WITNESS_V0_SCRIPTHASH:
+    case TxoutType::WITNESS_V1_TAPROOT:
+        return solutions[0];
+    default:
+        return {};
+    }
+}
+
+/**
+ * A hash or x-only key is uniformly random. One byte value turning up
+ * DATA_OUTPUT_BYTE_MULTIPLICITY times has probability 1.3e-10 in 32 random
+ * bytes and 1.7e-12 in 20; a run of DATA_OUTPUT_BYTE_RUN identical bytes
+ * 2.5e-11 and 1.4e-11. Length prefixes, headers, padding and plain text all
+ * trip one or the other. The all-zero hash is the conventional burn address
+ * and carries no payload, so it is left alone.
+ */
+bool ProgramLooksLikeData(const std::vector<unsigned char>& program)
+{
+    if (std::all_of(program.begin(), program.end(), [](unsigned char b) { return b == 0; })) return false;
+    // A vanity prefix such as 1111111 or bc1qqqqqqq is leading zero bytes, each one
+    // 256 times the work to grind, so up to DATA_OUTPUT_VANITY_ZEROS are skipped (2^56
+    // tries on average). A longer run is judged in full: chosen data such as a small
+    // number padded with zeros starts that way too.
+    auto start{std::find_if(program.begin(), program.end(), [](unsigned char b) { return b != 0; })};
+    if (size_t(start - program.begin()) > DATA_OUTPUT_VANITY_ZEROS) start = program.begin();
+    unsigned int counts[256]{};
+    unsigned int run{0};
+    unsigned char last{0};
+    for (auto it{start}; it != program.end(); ++it) {
+        const unsigned char b{*it};
+        if (++counts[b] >= DATA_OUTPUT_BYTE_MULTIPLICITY) return true;
+        run = (run && b == last) ? run + 1 : 1;
+        if (run >= DATA_OUTPUT_BYTE_RUN) return true;
+        last = b;
+    }
+    return false;
+}
+
+} // namespace
+
+std::vector<size_t> DataOutputBytes(const CTransaction& tx, const CCoinsViewCache* view)
+{
+    const size_t n{tx.vout.size()};
+    // Outputs that pay the script of a coin this transaction spends, such as change
+    // back to a vanity address; looked up by script without copying any
+    std::vector<bool> spent(n, false);
+    if (view && n) {
+        std::vector<size_t> by_script(n);
+        std::iota(by_script.begin(), by_script.end(), 0);
+        const auto script_order = [&tx](size_t a, size_t b) { return tx.vout[a].scriptPubKey < tx.vout[b].scriptPubKey; };
+        std::sort(by_script.begin(), by_script.end(), script_order);
+        for (const CTxIn& txin : tx.vin) {
+            const Coin& coin{view->AccessCoin(txin.prevout)};
+            if (coin.IsSpent()) continue;
+            const CScript& script{coin.out.scriptPubKey};
+            auto it{std::lower_bound(by_script.begin(), by_script.end(), script, [&tx](size_t a, const CScript& s) { return tx.vout[a].scriptPubKey < s; })};
+            // The outputs paying one script sit together and are marked together, so
+            // a script already seen is skipped: each output is visited at most once
+            if (it == by_script.end() || spent[*it]) continue;
+            for (; it != by_script.end() && tx.vout[*it].scriptPubKey == script; ++it) spent[*it] = true;
+        }
+    }
+    std::vector<size_t> program_size(n, 0);
+    std::vector<TxoutType> types(n, TxoutType::NONSTANDARD);
+    std::vector<bool> in_run(n, false);
+    std::vector<bool> data(n, false);
+    std::vector<bool> covered(n, false);
+    std::map<CAmount, std::set<std::vector<unsigned char>>> run_programs;
+    unsigned int curve_checks{0};
+
+    for (size_t i{0}; i < n; ++i) {
+        const CTxOut& txout{tx.vout[i]};
+        if (covered[i]) continue;
+        if (const size_t olga_bytes{txout.scriptPubKey.IsOLGA(n - i)}; olga_bytes) {
+            // The OLGA detector counts this header and its chunks already
+            const size_t olga_outputs{olga_bytes / (WITNESS_V0_SCRIPTHASH_SIZE + /* script length */ 1 + /* amount */ 8)};
+            for (size_t j{i}; j < std::min(n, i + olga_outputs); ++j) covered[j] = true;
+            continue;
+        }
+        const auto program{OutputProgram(txout.scriptPubKey, types[i])};
+        if (program.empty()) continue;
+        program_size[i] = program.size();
+        if (spent[i]) {
+            // A real hash or key, whatever it looks like
+        } else if (ProgramLooksLikeData(program)) {
+            data[i] = true;
+        } else if (types[i] == TxoutType::WITNESS_V1_TAPROOT && curve_checks < DATA_OUTPUT_CURVE_CHECKS) {
+            // Not a point on the curve: nobody can ever spend this. The check
+            // costs a field square root, so only the first
+            // DATA_OUTPUT_CURVE_CHECKS taproot outputs get it. A whitened
+            // chunk is off the curve half the time, so a payload among them
+            // trips this and the sibling rule marks the rest of its chunks.
+            ++curve_checks;
+            if (!XOnlyPubKey{program}.IsFullyValid()) data[i] = true;
+        }
+        if (types[i] == TxoutType::WITNESS_V0_SCRIPTHASH && txout.nValue <= DATA_OUTPUT_RUN_MAX_VALUE) {
+            in_run[i] = true;
+            run_programs[txout.nValue].insert(program);
+        }
+    }
+
+    // A payload is spread over several outputs, and its other chunks may be
+    // whitened, so anything caught marks its siblings of the same type and
+    // value. Separately, DATA_OUTPUT_DUST_RUN or more distinct P2WSH outputs
+    // sharing one small value are data on their own: encoders pay every chunk
+    // the same, Lightning anchors come in pairs and HTLC amounts differ, and
+    // padding repeats one script. Taproot is left to the curve check, since a
+    // run of small taproot outputs is ordinals postage, not a payload. Whitened
+    // chunks at distinct values, above DATA_OUTPUT_RUN_MAX_VALUE or in 20-byte
+    // outputs are not caught, since only their layout would mark them as data.
+    std::set<std::pair<TxoutType, CAmount>> data_groups;
+    for (size_t i{0}; i < n; ++i) {
+        if (data[i]) data_groups.emplace(types[i], tx.vout[i].nValue);
+    }
+    std::vector<size_t> ret(n, 0);
+    for (size_t i{0}; i < n; ++i) {
+        if (!program_size[i] || spent[i]) continue;
+        const bool sibling{data_groups.count({types[i], tx.vout[i].nValue}) > 0};
+        // Off by default (-datacarrierdustruns): a commitment with DATA_OUTPUT_DUST_RUN or more in-flight HTLCs of one
+        // amount up to DATA_OUTPUT_RUN_MAX_VALUE has the same layout, and refusing it can block a Lightning force close.
+        const bool dust_run{::g_datacarrier_dust_runs && in_run[i] && run_programs[tx.vout[i].nValue].size() >= DATA_OUTPUT_DUST_RUN};
+        if (data[i] || sibling || dust_run) {
+            ret[i] = program_size[i] + /* script length */ 1 + /* amount */ 8;
+        }
+    }
+    return ret;
+}
+
+std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view, const std::vector<size_t>& data_outputs)
 {
     std::pair<size_t, size_t> ret{0, 0};
 
@@ -680,13 +991,14 @@ std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsV
         const CTxOut& txout = tx.vout[--i];
         const auto dcb = txout.scriptPubKey.DatacarrierBytes(tx.vout.size() - i);
         ret.first += dcb.first;
-        ret.second += dcb.second;
+        // An OLGA header counts its whole payload, so keep the larger figure
+        ret.second += std::max(dcb.second, data_outputs[i]);
     }
 
     return ret;
 }
 
-int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& view, const unsigned int weight_per_data_byte)
+int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& view, const unsigned int weight_per_data_byte, const std::vector<size_t>& data_outputs)
 {
     int64_t mod_weight{0};
 
@@ -705,7 +1017,7 @@ int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& vi
             for (size_t i{tx.vout.size()}; i; ) {
                 const CTxOut& txout = tx.vout[--i];
                 const auto dcb = txout.scriptPubKey.DatacarrierBytes(tx.vout.size() - i);
-                mod_weight += (dcb.first + dcb.second) * (weight_per_data_byte - WITNESS_SCALE_FACTOR);
+                mod_weight += int64_t(std::max(dcb.first + dcb.second, data_outputs[i])) * (weight_per_data_byte - WITNESS_SCALE_FACTOR);
             }
         }
     }
@@ -714,6 +1026,8 @@ int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& vi
 }
 
 bool g_reject_bpub{DEFAULT_REJECT_BPUB};
+bool g_reject_fake_outputs{DEFAULT_REJECT_FAKE_OUTPUTS};
+bool g_datacarrier_dust_runs{DEFAULT_DATACARRIER_DUST_RUNS};
 
 static bool IsBPUBHeader(const std::vector<unsigned char>& head)
 {

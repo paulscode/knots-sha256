@@ -62,12 +62,17 @@ inline constexpr unsigned int DEFAULT_SCRIPT_SIZE_POLICY_LIMIT{1650};
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 /** Default for -bytespersigopstrict */
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
-/** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
-inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{4};
+/** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR): 2 vbytes per data byte (decisions/0024 item 2, P2/P3) */
+inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{8};
 /** Default for -rejectdeadbranches */
 inline constexpr bool DEFAULT_REJECT_DEAD_BRANCHES{true};
 /** Default for -rejecttokens */
-inline constexpr bool DEFAULT_REJECT_TOKENS{false};
+inline constexpr bool DEFAULT_REJECT_TOKENS{true};
+/** Default for -rejectfakeoutputs */
+inline constexpr bool DEFAULT_REJECT_FAKE_OUTPUTS{true};
+/** Default for -datacarrierdustruns: count runs of small P2WSH outputs at one value as data (off: they match a
+ *  Lightning force close with several equal in-flight HTLCs) */
+inline constexpr bool DEFAULT_DATACARRIER_DUST_RUNS{false};
 /** Default for -subdustfeepenalty */
 inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{true};
 
@@ -119,14 +124,14 @@ inline constexpr unsigned int DEFAULT_DESCENDANT_LIMIT{25};
 /** Default for -datacarrier */
 inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
- * Default setting for -datacarriersize. 80 bytes of data, +1 for OP_RETURN,
- * +2 for the pushdata opcodes.
+ * Default setting for -datacarriersize. 40 bytes of data, +1 for OP_RETURN,
+ * +1 for the pushdata opcode.
  */
 /** Default for -permitbaredatacarrier */
 inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{false};
 /** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
 inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
-inline constexpr unsigned int MAX_OP_RETURN_RELAY = 83;
+inline constexpr unsigned int MAX_OP_RETURN_RELAY{42};
 /** Default for -datacarrierfullcount */
 inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{true};
 /**
@@ -256,8 +261,38 @@ size_t BPUBBytes(const CTransaction& tx);
 
 std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript, const CTxIn&);
 
-std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view);
+/** A byte value seen this many times in one hash or key marks the output as data */
+static constexpr unsigned int DATA_OUTPUT_BYTE_MULTIPLICITY{8};
+/** A run of identical bytes this long in one hash or key marks the output as data */
+static constexpr unsigned int DATA_OUTPUT_BYTE_RUN{6};
+/** Leading zero bytes of a hash or key that the two tells above skip, as a vanity prefix may have them */
+static constexpr size_t DATA_OUTPUT_VANITY_ZEROS{7};
+/** Distinct P2WSH outputs sharing one value of at most DATA_OUTPUT_RUN_MAX_VALUE are data from this many up */
+static constexpr unsigned int DATA_OUTPUT_DUST_RUN{3};
+/** Highest output value a data run is looked for at; batch payouts appear from 600 sat up */
+static constexpr CAmount DATA_OUTPUT_RUN_MAX_VALUE{546};
+/** Taproot outputs per transaction whose key is checked to be on the curve */
+static constexpr unsigned int DATA_OUTPUT_CURVE_CHECKS{64};
 
-int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& view, const unsigned int weight_per_data_byte);
+/**
+ * Find outputs whose hash or key field carries data rather than a hash or key.
+ * Returns, per output, the bytes it spends on that data (program, script
+ * length and amount, as counted for OLGA), or 0 for a real output or one the
+ * OLGA detector already counts. With a view, an output whose script is the
+ * script of a coin the transaction spends is real and never counted: the
+ * spender can spend that coin, and a chosen hash or key costs at least 2^128
+ * work (a taproot key's discrete log), so the most it can carry is a ground
+ * prefix such as a vanity address.
+ */
+std::vector<size_t> DataOutputBytes(const CTransaction& tx, const CCoinsViewCache* view = nullptr);
+
+/** -rejectfakeoutputs: a global like -rejectbpub, so the PSBT size estimate follows it too */
+extern bool g_reject_fake_outputs;
+/** -datacarrierdustruns, read by DataOutputBytes */
+extern bool g_datacarrier_dust_runs;
+
+std::pair<size_t, size_t> DatacarrierBytes(const CTransaction& tx, const CCoinsViewCache& view, const std::vector<size_t>& data_outputs);
+
+int32_t CalculateExtraTxWeight(const CTransaction& tx, const CCoinsViewCache& view, const unsigned int weight_per_data_byte, const std::vector<size_t>& data_outputs);
 
 #endif // BITCOIN_POLICY_POLICY_H

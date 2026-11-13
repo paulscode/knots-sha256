@@ -770,6 +770,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-datacarriercost", strprintf("Treat extra data in transactions as at least N vbytes per actual byte (default: %s)", DEFAULT_WEIGHT_PER_DATA_BYTE / 4.0), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-rejectdeadbranches", strprintf("Count data in a conditional branch that a pushed constant makes unreachable as data carrier bytes; the OP_FALSE OP_IF envelope is counted either way (default: %u)", DEFAULT_REJECT_DEAD_BRANCHES), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrierfullcount", strprintf("Apply datacarriersize limit to all known datacarrier methods (default: %u)", DEFAULT_DATACARRIER_FULLCOUNT), ArgsManager::ALLOW_ANY | (DEFAULT_DATACARRIER_FULLCOUNT ? uint32_t{ArgsManager::DEBUG_ONLY} : 0), OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-datacarrierdustruns", strprintf("With -rejectfakeoutputs, also count three or more P2WSH outputs sharing one value of at most %d sat as data. Off by default: a Lightning commitment with several equal in-flight HTLCs has the same layout (default: %u)", DATA_OUTPUT_RUN_MAX_VALUE, DEFAULT_DATACARRIER_DUST_RUNS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-rejectfakeoutputs", strprintf("Count outputs whose hash or key is data as data carrier bytes (default: %u)", DEFAULT_REJECT_FAKE_OUTPUTS), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarriersize",
                    strprintf("Maximum size of data in data carrier transactions we relay and mine, in bytes (default: %u)",
                              MAX_OP_RETURN_RELAY),
@@ -826,7 +828,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                    OptionsCategory::NODE_RELAY);
     argsman.AddArg("-rejectparasites", strprintf("Refuse to relay or mine parasitic overlay protocols (default: %u)", DEFAULT_REJECT_PARASITES), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-rejecttokens",
-                   strprintf("Refuse to relay or mine transactions involving non-bitcoin tokens (default: %u)",
+                   strprintf("Refuse to relay or mine transactions involving non-bitcoin tokens: Runes, Counterparty, OLGA, JSON token messages (the BRC-20 format) and Omni Layer (default: %u)",
                              DEFAULT_REJECT_TOKENS),
                    ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-subdustfeepenalty",
@@ -933,6 +935,12 @@ void InitParameterInteraction(ArgsManager& args)
         args.SoftSetArg("-datacarriersize", "100000");
         args.SoftSetArg("-datacarriermultiple", "1");
         args.SoftSetArg("-rejectparasites", "0");
+        args.SoftSetArg("-rejecttokens", "0");
+        args.SoftSetArg("-rejectbpub", "0");  // Knots #463 has no -corepolicy reset; ours restores Core policy (P1)
+        args.SoftSetArg("-datacarrierunprovenkeys", "0");
+        args.SoftSetArg("-rejectdeadbranches", "0");  // Knots #400 resets it in its own -corepolicy block (P1)
+        args.SoftSetArg("-rejectfakeoutputs", "0");
+        args.SoftSetArg("-acceptunknownwitness", "1");  // our default is 0 (decisions/0025); Core relays them (P1)
         args.SoftSetArg("-subdustfeepenalty", "0");
         args.SoftSetArg("-datacarriercost", "0.25");
         args.SoftSetArg("-datacarrierfullcount", "0");
@@ -1314,6 +1322,8 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         g_weight_per_data_byte = ((*parsed * WITNESS_SCALE_FACTOR) + 99) / 100;
     }
     g_reject_bpub = args.GetBoolArg("-rejectbpub", DEFAULT_REJECT_BPUB);
+    g_reject_fake_outputs = args.GetBoolArg("-rejectfakeoutputs", DEFAULT_REJECT_FAKE_OUTPUTS);
+    g_datacarrier_dust_runs = args.GetBoolArg("-datacarrierdustruns", DEFAULT_DATACARRIER_DUST_RUNS);
 
     g_script_size_policy_limit = args.GetIntArg("-maxscriptsize", g_script_size_policy_limit);
 
