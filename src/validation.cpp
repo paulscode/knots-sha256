@@ -3999,8 +3999,6 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
         to_mark_failed = disconnected_tip;
     }
 
-    m_chainman.CheckBlockIndex();
-
     {
         LOCK(cs_main);
         if (m_chain.Contains(*to_mark_failed)) {
@@ -4030,6 +4028,13 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
 
         InvalidChainFound(to_mark_failed);
     }
+
+    // Check the block index only after the block above has restored it. The
+    // disconnect loop releases cs_main between iterations, so a block that
+    // arrives in that window is absent from the candidate set precalculated
+    // before the loop, and the block above is what puts it back. Checking any
+    // earlier asserts on the very inconsistency it exists to repair.
+    m_chainman.CheckBlockIndex();
 
     // Only notify about a new block tip if the active chain was modified.
     if (pindex_was_in_chain) {
