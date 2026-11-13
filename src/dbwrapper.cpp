@@ -295,6 +295,8 @@ CDBWrapper::CDBWrapper(const DBParams& params)
     DBContext().options = GetOptions(params.cache_bytes, params.bloom_filter);
     DBContext().options.create_if_missing = true;
     DBContext().options.max_file_size = params.max_file_size;
+    // -dbfilesize (DBOptions) replaces Core's default; a DBParams value set explicitly (tests, fuzzing) is kept
+    if (params.max_file_size == DBWRAPPER_MAX_FILE_SIZE) DBContext().options.max_file_size = params.options.max_file_size;
     assert(!(params.testing_env && params.memory_only));
     if (params.testing_env) {
         DBContext().options.env = params.testing_env;
