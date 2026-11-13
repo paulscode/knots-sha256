@@ -104,6 +104,9 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableWallet)
     ui->pruneSize->setEnabled(false);
     connect(ui->prune, &QPushButton::toggled, ui->pruneSize, &QWidget::setEnabled);
 
+    ui->networkPort->setValidator(new QIntValidator(1024, 65535, this));
+    connect(ui->networkPort, SIGNAL(textChanged(const QString&)), this, SLOT(checkLineEdit()));
+
     /* Network elements init */
     ui->proxyIp->setEnabled(false);
     ui->proxyPort->setEnabled(false);
@@ -209,6 +212,7 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableWallet)
 #endif
 
     GUIUtil::handleCloseWindowShortcut(this);
+    updateThemeColors();
 }
 
 OptionsDialog::~OptionsDialog()
@@ -265,6 +269,7 @@ void OptionsDialog::setModel(OptionsModel *_model)
     /* Wallet */
     connect(ui->spendZeroConfChange, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     /* Network */
+    connect(ui->networkPort, SIGNAL(textChanged(const QString &)), this, SLOT(showRestartWarning()));
     connect(ui->allowIncoming, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     connect(ui->enableServer, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     connect(ui->connectSocks, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
@@ -301,6 +306,7 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->m_enable_psbt_controls, OptionsModel::EnablePSBTControls);
 
     /* Network */
+    mapper->addMapping(ui->networkPort, OptionsModel::NetworkPort);
     mapper->addMapping(ui->mapPortNatpmp, OptionsModel::MapPortNatpmp);
     mapper->addMapping(ui->allowIncoming, OptionsModel::Listen);
     mapper->addMapping(ui->enableServer, OptionsModel::Server);
@@ -327,6 +333,19 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->lang, OptionsModel::Language);
     mapper->addMapping(ui->unit, OptionsModel::DisplayUnit);
     mapper->addMapping(ui->thirdPartyTxUrls, OptionsModel::ThirdPartyTxUrls);
+}
+
+void OptionsDialog::checkLineEdit()
+{
+    QLineEdit * const lineedit = qobject_cast<QLineEdit*>(QObject::sender());
+    if (lineedit->hasAcceptableInput()) {
+        lineedit->setStyleSheet("");
+    } else {
+        // Check the line edit's actual background to choose appropriate warning color
+        const bool lineedit_dark = GUIUtil::isDarkMode(lineedit->palette().color(lineedit->backgroundRole()));
+        const QColor lineedit_warning = lineedit_dark ? QColor("#FF8080") : QColor("#FF0000");
+        lineedit->setStyleSheet(QStringLiteral("color: %1;").arg(lineedit_warning.name()));
+    }
 }
 
 void OptionsDialog::setOkButtonState(bool fState)
@@ -388,6 +407,25 @@ void OptionsDialog::on_openBitcoinConfButton_clicked()
 
 void OptionsDialog::on_okButton_clicked()
 {
+    for (int i = 0; i < ui->tabWidget->count(); ++i) {
+        QWidget * const tab = ui->tabWidget->widget(i);
+        Q_FOREACH(QObject* o, tab->children()) {
+            QLineEdit * const lineedit = qobject_cast<QLineEdit*>(o);
+            if (lineedit && !lineedit->hasAcceptableInput()) {
+                int row = mapper->mappedSection(lineedit);
+                if (model->data(model->index(row, 0), Qt::EditRole) == lineedit->text()) {
+                    // Allow unchanged fields through
+                    continue;
+                }
+                ui->tabWidget->setCurrentWidget(tab);
+                lineedit->setFocus(Qt::OtherFocusReason);
+                lineedit->selectAll();
+                QMessageBox::critical(this, tr("Invalid setting"), tr("The value entered is invalid."));
+                return;
+            }
+        }
+    }
+
     model->setData(model->index(OptionsModel::FontForMoney, 0), ui->moneyFont->itemData(ui->moneyFont->currentIndex()));
     model->setData(model->index(OptionsModel::FontForQRCodes, 0), ui->qrFont->itemData(ui->qrFont->currentIndex()));
 
@@ -411,6 +449,15 @@ void OptionsDialog::on_showTrayIcon_stateChanged(int state)
     }
 }
 
+void OptionsDialog::changeEvent(QEvent* e)
+{
+    if (e->type() == QEvent::PaletteChange) {
+        updateThemeColors();
+    }
+
+    QWidget::changeEvent(e);
+}
+
 void OptionsDialog::togglePruneWarning(bool enabled)
 {
     ui->pruneWarning->setVisible(!ui->pruneWarning->isVisible());
@@ -418,8 +465,6 @@ void OptionsDialog::togglePruneWarning(bool enabled)
 
 void OptionsDialog::showRestartWarning(bool fPersistent)
 {
-    ui->statusLabel->setStyleSheet("QLabel { color: red; }");
-
     if(fPersistent)
     {
         ui->statusLabel->setText(tr("Client restart required to activate changes."));
@@ -453,7 +498,6 @@ void OptionsDialog::updateProxyValidationState()
     else
     {
         setOkButtonState(false);
-        ui->statusLabel->setStyleSheet("QLabel { color: red; }");
         ui->statusLabel->setText(tr("The supplied proxy address is invalid."));
     }
 }
@@ -475,6 +519,25 @@ void OptionsDialog::updateDefaultProxyNets()
 
     const auto proxy_onion = model->node().getProxy(NET_ONION);
     ui->proxyReachTor->setChecked(proxy_onion && proxy_onion->ToString() == proxyIpText);
+}
+
+void OptionsDialog::updateThemeColors()
+{
+    // Detect dark mode for color palette selection
+    const bool dark_mode = GUIUtil::isDarkMode(palette().color(backgroundRole()));
+
+    // set message warning color based on dark mode
+    const QColor warning_color = dark_mode ? QColor("#FF8080") : QColor("#FF0000");
+    ui->pruneWarning->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(warning_color.name()));
+    ui->statusLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(warning_color.name()));
+
+    // Update networkPort line edit color if it has validation errors
+    if (!ui->networkPort->hasAcceptableInput()) {
+        // Check networkPort's actual background for appropriate warning color
+        const bool networkport_dark = GUIUtil::isDarkMode(ui->networkPort->palette().color(ui->networkPort->backgroundRole()));
+        const QColor networkport_warning = networkport_dark ? QColor("#FF8080") : QColor("#FF0000");
+        ui->networkPort->setStyleSheet(QStringLiteral("color: %1;").arg(networkport_warning.name()));
+    }
 }
 
 ProxyAddressValidator::ProxyAddressValidator(QObject *parent) :
