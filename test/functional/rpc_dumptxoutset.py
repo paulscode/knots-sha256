@@ -6,6 +6,7 @@
 """
 
 from test_framework.blocktools import COINBASE_MATURITY
+from test_framework.messages import COIN
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -49,6 +50,71 @@ class DumptxoutsetTest(BitcoinTestFramework):
         assert_equal(out_mem['base_hash'], target_hash)
 
 
+    @staticmethod
+    def dump_ascii(node, name, **params):
+        out = node.dumptxoutset(path=f"{name}_txoutset.txt", **params)
+        # Text mode: the platform EOL (and only the platform EOL) becomes \n
+        with open(node.chain_path / f"{name}_txoutset.txt", 'r', encoding='utf-8') as f:
+            lines = [line.rstrip('\n') for line in f]
+        return out, lines
+
+    def test_human_readable(self):
+        node = self.nodes[0]
+        fields = ['txid', 'vout', 'value', 'coinbase', 'height', 'scriptPubKey']
+        tip_hash = node.getbestblockhash()
+        tip_height = node.getblockcount()
+
+        self.log.info("Test the human-readable (ASCII) format with all items")
+        out, lines = self.dump_ascii(node, 'all_data', type='latest', format=[])
+        assert_equal(lines[0], f"#(blockhash {tip_hash} ) " + ",".join(fields))
+        rows = [line.split(',') for line in lines[1:]]
+        assert_equal(len(rows), out['coins_written'])
+        for txid, vout, value, coinbase, height, spk in rows:
+            utxo = node.gettxout(txid, int(vout))
+            assert_equal(int(value), int(utxo['value'] * COIN))
+            assert_equal(spk, utxo['scriptPubKey']['hex'])
+            assert_equal(coinbase == '1', utxo['coinbase'])
+            assert_equal(int(height), tip_height - utxo['confirmations'] + 1)
+
+        self.log.info("Test selected items, in the requested order (repeats allowed)")
+        for name, fmt in [('partial_data_1', ['txid']),
+                          ('partial_data_order', ['height', 'vout']),
+                          ('partial_data_double', ['scriptPubKey', 'scriptPubKey'])]:
+            _, plines = self.dump_ascii(node, name, type='latest', format=fmt)
+            assert_equal(plines[0], f"#(blockhash {tip_hash} ) " + ",".join(fmt))
+            assert_equal(plines[1:], [",".join(row[fields.index(f)] for f in fmt) for row in rows])
+
+        self.log.info("Test show_header and separator")
+        _, no_header = self.dump_ascii(node, 'no_header', type='latest', format=[], show_header=False)
+        assert_equal(no_header, lines[1:])
+        _, separated = self.dump_ascii(node, 'separator', type='latest', format=[], separator=':')
+        assert_equal(separated, [line.replace(',', ':') for line in lines])
+        _, all_options = self.dump_ascii(node, 'all_options', type='latest', format=[], show_header=False, separator=':')
+        assert_equal(all_options, [line.replace(',', ':') for line in lines[1:]])
+
+        self.log.info("Test the human-readable format on the rollback path (temporary UTXO database)")
+        target_height = tip_height - 10
+        out, rb_lines = self.dump_ascii(node, 'rollback_data', type='rollback', rollback=target_height, format=['txid', 'vout'])
+        assert_equal(out['base_height'], target_height)
+        assert_equal(rb_lines[0], f"#(blockhash {node.getblockhash(target_height)} ) txid,vout")
+        assert_equal(len(rb_lines) - 1, out['coins_written'])
+
+        self.log.info("Test the Knots 0.20-28 positional form (path, format, show_header, separator)")
+        def compat(name, *a, **ka):
+            out = node.dumptxoutset(f"{name}_txoutset.txt", *a, **ka)
+            with open(node.chain_path / f"{name}_txoutset.txt", 'r', encoding='utf-8') as f:
+                return out, [line.rstrip('\n') for line in f]
+        expected = [line.replace(',', ':') for line in lines[1:]]
+        for name, a, ka in [('compat_positional', ([], False, ':'), {}),
+                            ('compat_named_separator', ([], False), {'separator': ':'}),
+                            ('compat_named_both', ([],), {'show_header': False, 'separator': ':'})]:
+            out, clines = compat(name, *a, **ka)
+            assert_equal(clines, expected)
+            assert_equal(out['base_hash'], tip_hash)
+
+        assert_raises_rpc_error(
+            -8, 'unable to find item \'sample\'', node.dumptxoutset, path='xxx', type='latest', format=['sample'])
+
     def run_test(self):
         """Test a trivial usage of the dumptxoutset RPC command."""
         node = self.nodes[0]
@@ -89,6 +155,8 @@ class DumptxoutsetTest(BitcoinTestFramework):
         self.log.info("Test that dumptxoutset with unknown dump type fails")
         assert_raises_rpc_error(
             -8, 'Invalid snapshot type "bogus" specified. Please specify "rollback" or "latest"', node.dumptxoutset, 'utxos.dat', "bogus")
+
+        self.test_human_readable()
 
         self.log.info("Testing dumptxoutset with chain fork at target height")
         self.test_dumptxoutset_with_fork()

@@ -224,6 +224,10 @@ public:
     explicit scriptnum_error(const std::string& str) : std::runtime_error(str) {}
 };
 
+/** Default for -datacarrierunprovenkeys: count multisig public keys no signature can prove as datacarrier bytes */
+static constexpr bool DEFAULT_DATACARRIER_UNPROVEN_PUBKEYS{true}; // decisions/0024 item 5, after its mainnet survey
+extern bool g_datacarrier_unproven_pubkeys;
+
 class CScriptNum
 {
 /**
@@ -401,6 +405,8 @@ using CScriptBase = prevector<36, uint8_t>;
 
 bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator end, opcodetype& opcodeRet, std::vector<unsigned char>* pvchRet);
 
+struct CScriptWitness;
+
 /** Serialized script, used inside transaction inputs and outputs */
 class CScript : public CScriptBase
 {
@@ -566,6 +572,10 @@ public:
         return (size() > 0 && *begin() == OP_RETURN) || (size() > MAX_SCRIPT_SIZE);
     }
 
+    size_t OPNetWitnessSize(const CScriptWitness& witness) const;
+    size_t IsOLGA(size_t remaining_outputs) const;
+    std::pair<size_t, size_t> DatacarrierBytes(size_t remaining_outputs, const CScriptWitness* witness = nullptr, bool dead_branches = false) const;
+
     void clear()
     {
         // The default prevector::clear() does not release memory
@@ -573,6 +583,22 @@ public:
         shrink_to_fit();
     }
 };
+
+/** Byte offsets of the OP_IF/OP_NOTIF whose first part, and the OP_ELSE whose part, a constant guard makes unreachable */
+struct DeadParts {
+    std::vector<bool> at_if, at_else;
+};
+
+/**
+ * Follow the script as far as constants determine it and mark the conditional
+ * parts that can never run. Anything read from the witness, a signature check,
+ * a hash or an opcode not modeled here is unknown, and an unknown condition
+ * marks nothing, so a spendable script is never read as dead.
+ */
+DeadParts FindDeadParts(const CScript& script);
+
+/** Whether the witness has the form of a taproot script path spend of LND's to_local revocation leaf, whose dropped key counts toward the -datacarriersize budget rather than as non-standard data */
+bool IsLnTaprootRevokeLeaf(const CScript& script, const CScriptWitness& witness);
 
 struct CScriptWitness
 {

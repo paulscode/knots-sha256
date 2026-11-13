@@ -205,10 +205,11 @@ static void RejectRequest(std::unique_ptr<HTTPRequest> hreq)
     WriteNoStoreErrorReply(*hreq, HTTP_SERVICE_UNAVAILABLE);
 }
 
-static std::vector<std::pair<std::string, uint16_t>> GetBindAddresses()
+static std::vector<std::pair<std::string, uint16_t>> GetBindAddresses(bool* is_default = nullptr)
 {
     uint16_t http_port{static_cast<uint16_t>(gArgs.GetIntArg("-rpcport", BaseParams().RPCPort()))};
     std::vector<std::pair<std::string, uint16_t>> endpoints;
+    if (is_default) *is_default = false;
 
     // Determine what addresses to bind to
     // To prevent misconfiguration and accidental exposure of the RPC
@@ -218,11 +219,12 @@ static std::vector<std::pair<std::string, uint16_t>> GetBindAddresses()
     if (gArgs.GetArgs("-rpcallowip").empty() || gArgs.GetArgs("-rpcbind").empty()) { // Default to loopback if not allowing external IPs
         endpoints.emplace_back("::1", http_port);
         endpoints.emplace_back("127.0.0.1", http_port);
+        if (is_default) *is_default = true;
         if (!gArgs.GetArgs("-rpcallowip").empty()) {
             LogWarning("Option -rpcallowip was specified without -rpcbind; this doesn't usually make sense");
         }
         if (!gArgs.GetArgs("-rpcbind").empty()) {
-            LogWarning("Option -rpcbind was ignored because -rpcallowip was not specified, refusing to allow everyone to connect");
+            InitWarning(_("Option -rpcbind was ignored because -rpcallowip was not specified, refusing to allow everyone to connect"));
         }
     } else { // Specific bind addresses
         for (const std::string& strRPCBind : gArgs.GetArgs("-rpcbind")) {
@@ -705,7 +707,7 @@ void HTTPRequest::WriteHeader(std::string&& hdr, std::string&& value)
     m_response_headers.Write(std::move(hdr), std::move(value));
 }
 
-util::Expected<void, std::string> HTTPServer::BindAndStartListening(const CService& to)
+util::Expected<void, std::string> HTTPServer::BindAndStartListening(const CService& to, int* bind_error)
 {
     // Create socket for listening for incoming connections
     sockaddr_storage storage;
@@ -717,6 +719,7 @@ util::Expected<void, std::string> HTTPServer::BindAndStartListening(const CServi
 
     std::unique_ptr<Sock> sock{CreateSock(to.GetSAFamily(), SOCK_STREAM, IPPROTO_TCP)};
     if (!sock) {
+        if (bind_error) *bind_error = WSAGetLastError();
         return util::Unexpected{strprintf("Cannot create %s listen socket: %s",
                                           to.ToStringAddrPort(),
                                           NetworkErrorString(WSAGetLastError()))};
@@ -770,6 +773,7 @@ util::Expected<void, std::string> HTTPServer::BindAndStartListening(const CServi
 
     if (sock->Bind(sa, len) == SOCKET_ERROR) {
         const int err{WSAGetLastError()};
+        if (bind_error) *bind_error = err;
         if (err == WSAEADDRINUSE) {
             return util::Unexpected{strprintf("Unable to bind to %s on this computer. %s is probably already running.",
                                               to.ToStringAddrPort(),
@@ -1361,8 +1365,10 @@ bool InitHTTPServer()
     g_http_server->SetMaxConnections(std::max(gArgs.GetArg<int>("-rpcmaxconnections", DEFAULT_MAX_HTTP_CONNECTIONS), 1));
 
     // Bind HTTP server to specified addresses
-    std::vector<std::pair<std::string, uint16_t>> endpoints{GetBindAddresses()};
+    bool is_default{false};
+    std::vector<std::pair<std::string, uint16_t>> endpoints{GetBindAddresses(&is_default)};
     bool bind_success{false};
+    int num_fail{0};
     for (const auto& [address_string, port] : endpoints) {
         LogInfo("Binding RPC on address %s port %i", address_string, port);
         const std::optional<CService> addr{Lookup(address_string, port, false)};
@@ -1370,19 +1376,34 @@ bool InitHTTPServer()
             if (addr->IsBindAny()) {
                 LogWarning("The RPC server is not safe to expose to untrusted networks such as the public internet");
             }
-            auto result{g_http_server->BindAndStartListening(addr.value())};
+            int bind_error{0};
+            auto result{g_http_server->BindAndStartListening(addr.value(), &bind_error)};
             if (!result) {
-                LogWarning("Binding RPC on address %s failed: %s", addr->ToStringAddrPort(), result.error());
+                // EAFNOSUPPORT: no IPv6 on this system, so the default ::1 socket cannot even be created.
+                if (!is_default || (bind_error != EADDRNOTAVAIL && bind_error != ENOENT && bind_error != EAFNOSUPPORT)) {
+                    LogWarning("Binding RPC on address %s failed: %s", addr->ToStringAddrPort(), result.error());
+                    ++num_fail;
+                } else {
+                    // Don't count failure if binding was not explicitly configured
+                    // (default settings) and the address is not available.
+                    // (for example: Travis without IPv6 localhost will return ENOENT)
+                    LogInfo("Binding RPC on address %s failed, error ignored because interface was unavailable: %s", addr->ToStringAddrPort(), result.error());
+                }
             } else {
                 bind_success = true;
             }
         } else {
             LogWarning("Could not bind RPC on address %s port %i: Address lookup failed.", address_string, port);
+            ++num_fail;
         }
     }
 
-    if (!bind_success) {
-        LogError("Unable to bind any endpoint for RPC server");
+    if (num_fail != 0 || !bind_success) {
+        if (num_fail) {
+            LogError("Unable to bind all endpoints for RPC server");
+        } else {
+            LogError("Unable to bind any endpoint for RPC server");
+        }
         return false;
     }
 

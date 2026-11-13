@@ -106,23 +106,37 @@ void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
 
 BlockAssembler::BlockAssembler(Chainstate& chainstate,
                                const CTxMemPool* mempool,
-                               BlockCreateOptions options)
+                               BlockCreateOptions options,
+                               ValidationSignals* validation_signals)
     : chainparams{chainstate.m_chainman.GetParams()},
       m_mempool{options.use_mempool ? mempool : nullptr},
       m_chainstate{chainstate},
+      m_validation_signals{validation_signals},
       m_options{[&] {
           if (auto result{CheckMiningOptions(options, /*use_argnames=*/false)}; !result) {
               throw std::runtime_error(util::ErrorString(result).original);
           }
-          return FlattenMiningOptions(std::move(options));
+          auto flat_options{FlattenMiningOptions(std::move(options))};
+          // Limit size to between block_reserved_size and MAX_BLOCK_SERIALIZED_SIZE for sanity:
+          Assert(flat_options.block_reserved_size <= MAX_BLOCK_SERIALIZED_SIZE);
+          flat_options.block_max_size = std::clamp<uint64_t>(*flat_options.block_max_size, flat_options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE);
+          return flat_options;
       }()}
 {
+    // Whether we need to account for byte usage (in addition to weight usage)
+    fNeedSizeAccounting = (*m_options.block_max_size < MAX_BLOCK_SERIALIZED_SIZE);
 }
 
 void BlockAssembler::resetBlock()
 {
     // Reserve space for fixed-size block header, txs count, and coinbase tx.
+    nBlockSize = m_options.block_reserved_size;
     nBlockWeight = *Assert(m_options.block_reserved_weight);
+    if (fNeedSizeAccounting) {
+        m_last_block_size = nBlockSize;
+    } else {
+        m_last_block_size = std::nullopt;
+    }
     nBlockSigOpsCost = m_options.coinbase_output_max_additional_sigops;
 
     // These counters do not include coinbase tx
@@ -130,7 +144,7 @@ void BlockAssembler::resetBlock()
     nFees = 0;
 }
 
-std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
+std::shared_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 {
     const auto time_start{SteadyClock::now()};
 
@@ -169,6 +183,11 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
     m_last_block_num_txs = nBlockTx;
     m_last_block_weight = nBlockWeight;
+    if (fNeedSizeAccounting) {
+        m_last_block_size = nBlockSize;
+    } else {
+        m_last_block_size = std::nullopt;
+    }
 
     // Create coinbase transaction.
     CMutableTransaction coinbaseTx;
@@ -227,7 +246,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         coinbase_tx.required_outputs.push_back(final_coinbase->vout[witness_index]);
     }
 
-    LogDebug(BCLog::MINING, "CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops %d\n", GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
+    uint64_t nSerializeSize = GetSerializeSize(TX_WITH_WITNESS(*pblock));
+    LogDebug(BCLog::MINING, "CreateNewBlock(): total size: %u block weight: %u txs: %u fees: %ld sigops %d\n", nSerializeSize, GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
 
     // Fill in header
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
@@ -246,6 +266,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
              Ticks<MillisecondsDouble>(time_1 - time_start),
              Ticks<MillisecondsDouble>(time_2 - time_1),
              Ticks<MillisecondsDouble>(time_2 - time_start));
+
+    if (m_validation_signals) m_validation_signals->NewBlockTemplate(pblocktemplate);
 
     return std::move(pblocktemplate);
 }
@@ -267,9 +289,17 @@ bool BlockAssembler::TestChunkBlockLimits(int64_t chunk_weight, int64_t chunk_si
 // - transaction finality (locktime)
 bool BlockAssembler::TestChunkTransactions(const std::vector<CTxMemPoolEntryRef>& txs) const
 {
+    uint64_t nPotentialBlockSize = nBlockSize; // only used with fNeedSizeAccounting
     for (const auto tx : txs) {
         if (!IsFinalTx(tx.get().GetTx(), nHeight, m_lock_time_cutoff)) {
             return false;
+        }
+        if (fNeedSizeAccounting) {
+            uint64_t nTxSize = ::GetSerializeSize(TX_WITH_WITNESS(tx.get().GetTx()));
+            if (nPotentialBlockSize + nTxSize >= *m_options.block_max_size) {
+                return false;
+            }
+            nPotentialBlockSize += nTxSize;
         }
     }
     return true;
@@ -280,6 +310,9 @@ void BlockAssembler::AddToBlock(const CTxMemPoolEntry& entry)
     pblocktemplate->block.vtx.emplace_back(entry.GetSharedTx());
     pblocktemplate->vTxFees.push_back(entry.GetFee());
     pblocktemplate->vTxSigOpsCost.push_back(entry.GetSigOpCost());
+    if (fNeedSizeAccounting) {
+        nBlockSize += ::GetSerializeSize(TX_WITH_WITNESS(entry.GetTx()));
+    }
     nBlockWeight += entry.GetTxWeight();
     ++nBlockTx;
     nBlockSigOpsCost += entry.GetSigOpCost();
@@ -298,6 +331,7 @@ void BlockAssembler::addChunks()
     // close to full; this is just a simple heuristic to finish quickly if the
     // mempool has a lot of entries.
     const int64_t MAX_CONSECUTIVE_FAILURES = 1000;
+    constexpr int32_t BLOCK_FULL_ENOUGH_SIZE_DELTA = 1000;
     constexpr int32_t BLOCK_FULL_ENOUGH_WEIGHT_DELTA = 4000;
     int64_t nConsecutiveFailed = 0;
 
@@ -317,14 +351,18 @@ void BlockAssembler::addChunks()
         }
 
         int64_t chunk_sig_ops = 0;
-        int64_t chunk_weight = 0;
+        int64_t chunk_policy_weight = 0;
         for (const auto& tx : selected_transactions) {
             chunk_sig_ops += tx.get().GetSigOpCost();
-            chunk_weight += tx.get().GetTxWeight();
+            // Fit with the -datacarriercost weight, as Knots and 31.2 did: a chunk that carries data needs room for
+            // its data cost too, so data does not fill the last slots of a template more cheaply than it is ordered
+            // (decisions/0025, P4). The sigop adjustment stays out, as Core 32 fixed (5be248341a): it is no price of
+            // data. The block still accumulates and caps real weight (AddToBlock), so no consensus limit is exceeded.
+            chunk_policy_weight += SaturatingAdd(int64_t{tx.get().GetTxWeight()}, int64_t{std::max(0, tx.get().GetExtraWeight())});
         }
 
         // Check to see if this chunk will fit.
-        if (!TestChunkBlockLimits(chunk_weight, chunk_sig_ops) || !TestChunkTransactions(selected_transactions)) {
+        if (!TestChunkBlockLimits(chunk_policy_weight, chunk_sig_ops) || !TestChunkTransactions(selected_transactions)) {
             // This chunk won't fit, so we skip it and will try the next best one.
             m_mempool->SkipBuilderChunk();
             ++nConsecutiveFailed;
@@ -334,6 +372,10 @@ void BlockAssembler::addChunks()
             if (nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockWeight +
                     BLOCK_FULL_ENOUGH_WEIGHT_DELTA > *m_options.block_max_weight) {
                 // Give up if we're close to full and haven't succeeded in a while
+                return;
+            }
+            if (fNeedSizeAccounting && nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockSize + BLOCK_FULL_ENOUGH_SIZE_DELTA > *m_options.block_max_size) {
+                // Same, by serialized size when -blockmaxsize is in use
                 return;
             }
         } else {
@@ -441,13 +483,14 @@ void InterruptWait(KernelNotifications& kernel_notifications, bool& interrupt_wa
     kernel_notifications.m_tip_block_cv.notify_all();
 }
 
-std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
+std::shared_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
                                                       KernelNotifications& kernel_notifications,
                                                       CTxMemPool* mempool,
-                                                      const std::unique_ptr<CBlockTemplate>& block_template,
+                                                      const std::shared_ptr<CBlockTemplate>& block_template,
                                                       const BlockWaitOptions& wait_options,
                                                       const BlockCreateOptions& create_options,
-                                                      bool& interrupt_wait)
+                                                      bool& interrupt_wait,
+                                                      ValidationSignals* validation_signals)
 {
     // Delay calculating the current template fees, just in case a new block
     // comes in before the next tick.
@@ -507,7 +550,8 @@ std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainma
             auto new_tmpl{BlockAssembler{
                 chainman.ActiveChainstate(),
                 mempool,
-                create_options
+                create_options,
+                validation_signals,
                 }.CreateNewBlock()};
 
             // If the tip changed, return the new template regardless of its fees.
