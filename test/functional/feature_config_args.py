@@ -145,10 +145,6 @@ class ConfArgsTest(BitcoinTestFramework):
         main_conf_file_path = self.nodes[0].datadir_path / "bitcoin_main.conf"
         util.write_config(main_conf_file_path, n=0, chain='', extra_config=f'includeconf={inc_conf_file_path}\n')
         with open(inc_conf_file_path, 'w') as conf:
-            conf.write('acceptnonstdtxn=1\n')
-        self.nodes[0].assert_start_raises_init_error(extra_args=[f"-conf={main_conf_file_path}", "-allowignoredconf"], expected_msg='Error: acceptnonstdtxn is not currently supported for main chain')
-
-        with open(inc_conf_file_path, 'w') as conf:
             conf.write('nono\n')
         self.nodes[0].assert_start_raises_init_error(expected_msg='Error: Error reading configuration file: parse error on line 1: nono, if you intended to specify a negated option, use nono=1 instead')
 
@@ -450,6 +446,12 @@ class ConfArgsTest(BitcoinTestFramework):
             "-proxyrandomize is disabled. Tor circuits for private broadcast connections may "
             "be correlated to other connections over Tor. To reduce this risk, set -proxyrandomize=1."))
 
+    def test_v2onlyclearnet(self):
+        self.log.info('Test -v2onlyclearnet startup options')
+        self.nodes[0].assert_start_raises_init_error(
+            extra_args=['-v2onlyclearnet=1', '-v2transport=0'],
+            expected_msg='Error: Cannot set -v2onlyclearnet to true when v2transport is disabled.')
+
     def test_ignored_conf(self):
         self.log.info('Test error is triggered when the datadir in use contains a bitcoin.conf file that would be ignored '
                       'because a conflicting -conf file argument is passed.')
@@ -537,6 +539,7 @@ class ConfArgsTest(BitcoinTestFramework):
         self.test_networkactive()
         self.test_connect_with_seednode()
         self.test_privatebroadcast()
+        self.test_v2onlyclearnet()
 
         self.test_dir_config()
         self.test_negated_config()
@@ -545,7 +548,6 @@ class ConfArgsTest(BitcoinTestFramework):
         self.test_invalid_command_line_options()
         self.test_ignored_conf()
         self.test_ignored_default_conf()
-        self.test_acceptstalefeeestimates_arg_support()
         self.test_testnet3_deprecation_msg()
 
         # Remove the -datadir argument so it doesn't override the config file

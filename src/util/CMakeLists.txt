@@ -16,6 +16,8 @@ add_library(bitcoin_util STATIC EXCLUDE_FROM_ALL
   fs.cpp
   fs_helpers.cpp
   hasher.cpp
+  mempressure.cpp
+  ioprio.cpp
   moneystr.cpp
   rbf.cpp
   readwritefile.cpp
@@ -24,6 +26,7 @@ add_library(bitcoin_util STATIC EXCLUDE_FROM_ALL
   sock.cpp
   strencodings.cpp
   string.cpp
+  subprocess.cpp
   syserror.cpp
   thread.cpp
   threadinterrupt.cpp

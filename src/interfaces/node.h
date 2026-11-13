@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 class CFeeRate;
@@ -204,7 +205,7 @@ public:
     virtual std::optional<Coin> getUnspentOutput(const COutPoint& output) = 0;
 
     //! Broadcast transaction.
-    virtual node::TransactionError broadcastTransaction(CTransactionRef tx, CAmount max_tx_fee, std::string& err_string) = 0;
+    virtual node::TransactionError broadcastTransaction(CTransactionRef tx, const std::variant<CAmount, CFeeRate>& max_tx_fee, std::string& err_string) = 0;
 
     //! Get wallet loader.
     virtual WalletLoader& walletLoader() = 0;
@@ -238,6 +239,10 @@ public:
     //! Register handler for network active messages.
     using NotifyNetworkActiveChangedFn = std::function<void(bool network_active)>;
     virtual std::unique_ptr<Handler> handleNotifyNetworkActiveChanged(NotifyNetworkActiveChangedFn fn) = 0;
+
+    //! Register handler for network local changed messages.
+    using NotifyNetworkLocalChangedFn = std::function<void()>;
+    virtual std::unique_ptr<Handler> handleNotifyNetworkLocalChanged(NotifyNetworkLocalChangedFn fn) = 0;
 
     //! Register handler for notify alert messages.
     using NotifyAlertChangedFn = std::function<void()>;
