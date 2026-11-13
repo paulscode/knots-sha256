@@ -6,6 +6,7 @@
 #define BITCOIN_ZMQ_ZMQNOTIFICATIONINTERFACE_H
 
 #include <primitives/transaction.h>
+#include <util/btcsignals.h>
 #include <validationinterface.h>
 
 #include <cstddef>
@@ -15,6 +16,8 @@
 #include <memory>
 #include <vector>
 
+
+class CBlock;
 class CBlockIndex;
 class CZMQAbstractNotifier;
 
@@ -31,6 +34,8 @@ protected:
     bool Initialize();
     void Shutdown();
 
+    void TransactionAddedToWallet(const CTransactionRef& tx, const uint256 &hashBlock);
+
     // CValidationInterface
     void TransactionAddedToMempool(const NewMempoolTransactionInfo& tx, uint64_t mempool_sequence) override;
     void TransactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRemovalReason reason, uint64_t mempool_sequence) override;
@@ -43,6 +48,7 @@ private:
 
     void* pcontext{nullptr};
     std::list<std::unique_ptr<CZMQAbstractNotifier>> notifiers;
+    btcsignals::connection m_wtx_added_connection;
 };
 
 extern std::unique_ptr<CZMQNotificationInterface> g_zmq_notification_interface;

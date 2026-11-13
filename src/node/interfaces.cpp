@@ -369,6 +369,7 @@ public:
         req.params = params;
         req.strMethod = command;
         req.URI = uri;
+        req.m_wallet_restriction.clear();
         return ::tableRPC.execute(req);
     }
     std::vector<std::string> listRpcCommands() override { return ::tableRPC.listCommands(); }
@@ -424,6 +425,9 @@ public:
     }
     std::unique_ptr<Handler> handleBannedListChanged(BannedListChangedFn fn) override
     {
+        if (m_context->banman) {
+            m_context->banman->EnsureSweepScheduled();
+        }
         return MakeSignalHandler(::uiInterface.BannedListChanged.connect(fn));
     }
     std::unique_ptr<Handler> handleNotifyBlockTip(NotifyBlockTipFn fn) override
@@ -1078,6 +1082,8 @@ public:
         req.context = &m_node;
         req.URI = std::move(uri);
         req.authUser = std::move(user);
+        // IPC clients (bitcoin -ipcconnect rpc) are trusted like the GUI console: no rpcauth wallet restriction applies
+        req.m_wallet_restriction.clear();
         HTTPStatusCode status;
         return ExecuteHTTPRPC(request, req, status);
     }
