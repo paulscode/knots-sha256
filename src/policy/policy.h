@@ -64,6 +64,8 @@ inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 /** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
 inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{4};
+/** Default for -rejectdeadbranches */
+inline constexpr bool DEFAULT_REJECT_DEAD_BRANCHES{true};
 /** Default for -rejecttokens */
 inline constexpr bool DEFAULT_REJECT_TOKENS{false};
 /** Default for -subdustfeepenalty */
