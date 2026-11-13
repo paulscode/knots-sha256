@@ -50,6 +50,34 @@ mkdir -p "$DISTSRC"
     # Extract the source tarball
     tar --strip-components=1 -xf "${GIT_ARCHIVE}"
 
+    # First build libbitcoinconsensus as a shared library
+    env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
+    cmake -S . -B build_libbitcoinconsensus \
+          --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
+          -DBUILD_BENCH=OFF \
+          -DBUILD_BITCOIN_BIN=OFF \
+          -DBUILD_CLI=OFF \
+          -DBUILD_DAEMON=OFF \
+          -DBUILD_FOR_FUZZING=OFF \
+          -DBUILD_FUZZ_BINARY=OFF \
+          -DBUILD_GUI=OFF \
+          -DBUILD_GUI_TESTS=OFF \
+          -DBUILD_KERNEL_LIB=OFF \
+          -DBUILD_TESTS=OFF \
+          -DBUILD_TX=OFF \
+          -DBUILD_UTIL=OFF \
+          -DBUILD_UTIL_CHAINSTATE=OFF \
+          -DBUILD_WALLET_TOOL=OFF \
+          -DCMAKE_INSTALL_PREFIX="${INSTALLPATH}" \
+          -DCMAKE_SHARED_LINKER_FLAGS="${HOST_LDFLAGS} -static-libstdc++ -static-libgcc" \
+          -DCMAKE_SKIP_RPATH=TRUE \
+          -DREDUCE_EXPORTS=ON \
+          -DWITH_CCACHE=OFF \
+          -DBUILD_SHARED_LIBS=ON \
+          -DBUILD_BITCOINCONSENSUS_LIB=ON
+    cmake --build build_libbitcoinconsensus -j "$JOBS"
+    cmake --install build_libbitcoinconsensus
+
     # Configure this DISTSRC for $HOST
     env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
     cmake -S . -B build \
@@ -71,6 +99,6 @@ mkdir -p "$DISTSRC"
     cmake --install build
 )
 
-rm -rf "$DISTSRC"/build
+rm -rf "$DISTSRC"/build "$DISTSRC"/build_libbitcoinconsensus
 
 exit 0
