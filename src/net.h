@@ -230,6 +230,8 @@ public:
     TransportProtocolType m_transport_type;
     /** BIP324 session id string in hex, if any. */
     std::string m_session_id;
+    /** whether this peer forced its connection by evicting another */
+    bool m_forced_inbound;
 };
 
 
@@ -676,6 +678,8 @@ struct CNodeOptions
     std::optional<Proxy> proxy_override = {};
     std::unique_ptr<i2p::sam::Session> i2p_sam_session = nullptr;
     bool prefer_evict = false;
+    // True if ForceInbound connection required evicting a peer
+    bool forced_inbound{false};
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
 };
@@ -737,6 +741,7 @@ public:
      */
     std::string cleanSubVer GUARDED_BY(m_subver_mutex){};
     const bool m_prefer_evict{false}; // This peer is preferred for eviction.
+    const bool m_forced_inbound{false}; // This peer forced an inbound connection
     bool HasPermission(NetPermissionFlags permission) const {
         return NetPermissions::HasFlag(m_permission_flags, permission);
     }
@@ -1566,9 +1571,11 @@ private:
      * Try to find an inbound connection to evict.
      * @param[in] evict_tx_relay_peer_only  Whether to only select full relay peers for eviction
      * @param[in] protect_peer              Protect peer with node id
+     * @param[in] force                     Try to evict a random inbound ban-able peer if
+     *                                      all connections are otherwise protected (ForceInbound)
      * @return                              True if a node was marked for disconnect
      */
-    bool AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::optional<NodeId> protect_peer = std::nullopt) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    bool AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::optional<NodeId> protect_peer = std::nullopt, bool force = false) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
     /**
      * Open a new P2P connection.
