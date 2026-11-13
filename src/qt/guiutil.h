@@ -23,6 +23,7 @@
 #include <QProgressBar>
 #include <QString>
 #include <QTableView>
+#include <Qt>
 
 #include <cassert>
 #include <chrono>
@@ -445,7 +446,7 @@ namespace GUIUtil
     /**
      * Shows a QDialog instance asynchronously, and deletes it on close.
      */
-    void ShowModalDialogAsynchronously(QDialog* dialog);
+    void ShowModalDialogAsynchronously(QDialog* dialog, Qt::WindowModality modality=Qt::ApplicationModal);
 
     inline bool IsEscapeOrBack(int key)
     {

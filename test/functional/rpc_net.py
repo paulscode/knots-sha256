@@ -107,7 +107,8 @@ class NetTest(BitcoinTestFramework):
         time_now = int(time.time())
         peer_info = [x.getpeerinfo() for x in self.nodes]
         # Verify last_block and last_transaction keys/values.
-        for node, peer, field in product(range(self.num_nodes), range(2), ['last_block', 'last_transaction']):
+        for node, peer, field in product(range(self.num_nodes), range(2),
+                                         ['last_block', 'last_block_announcement', 'last_transaction']):
             assert field in peer_info[node][peer].keys()
             if peer_info[node][peer][field] != 0:
                 assert_approx(peer_info[node][peer][field], time_now, vspan=60)
@@ -162,12 +163,13 @@ class NetTest(BitcoinTestFramework):
                 "inbound": True,
                 "inflight": [],
                 "last_block": 0,
+                "last_block_announcement": 0,
                 "last_transaction": 0,
                 "lastrecv": 0 if not self.options.v2transport else no_version_peer_conntime,
                 "lastsend": 0 if not self.options.v2transport else no_version_peer_conntime,
                 "minfeefilter": Decimal("0E-8"),
                 "network": "not_publicly_routable",
-                "permissions": [],
+                "permissions": ['bloomfilter'],
                 "forced_inbound": False,
                 "presynced_headers": -1,
                 "relaytxes": False,
@@ -182,6 +184,7 @@ class NetTest(BitcoinTestFramework):
                 "timeoffset": 0,
                 "transport_protocol_type": "v1" if not self.options.v2transport else "v2",
                 "version": 0,
+                "misbehavior_score": 0,
             },
         )
         no_version_peer.peer_disconnect()

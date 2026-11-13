@@ -148,6 +148,16 @@ OptionsModel::FontChoice OptionsModel::FontChoiceFromString(const QString& s)
     }
 }
 
+static QString CanonicalMempoolReplacement(const OptionsModel& model)
+{
+    switch (model.node().mempool().m_opts.rbf_policy) {
+    case RBFPolicy::Never:  return "never";
+    case RBFPolicy::OptIn:  return "fee,optin";
+    case RBFPolicy::Always: return "fee,-optin";
+    }
+    assert(0);
+}
+
 OptionsModel::OptionsModel(interfaces::Node& node, QObject *parent) :
     QAbstractListModel(parent), m_node{node}
 {
@@ -211,6 +221,10 @@ bool OptionsModel::Init(bilingual_str& error)
             m_display_bitcoin_unit = BitcoinUnit::BTC;
         }
     }
+
+    if (!settings.contains("bDisplayAddresses"))
+        settings.setValue("bDisplayAddresses", false);
+    bDisplayAddresses = settings.value("bDisplayAddresses", false).toBool();
 
     if (!settings.contains("strThirdPartyTxUrls"))
         settings.setValue("strThirdPartyTxUrls", "");
@@ -310,7 +324,7 @@ static void BackupSettings(const fs::path& filename, const QSettings& src)
     CopySettings(dst, src);
 }
 
-void OptionsModel::Reset()
+bool OptionsModel::Reset()
 {
     // Backup and reset settings.json
     node().resetSettings();
@@ -324,6 +338,9 @@ void OptionsModel::Reset()
     QString dataDir = GUIUtil::getDefaultDataDirectory();
     dataDir = settings.value("strDataDir", dataDir).toString();
 
+    // Remove rw config file
+    const bool rwconf_reset{gArgs.EraseRWConfigFile()};
+
     // Remove all entries from our QSettings object
     settings.clear();
 
@@ -336,6 +353,8 @@ void OptionsModel::Reset()
     // default setting for OptionsModel::StartAtStartup - disabled
     if (GUIUtil::GetStartOnSystemStartup())
         GUIUtil::SetStartOnSystemStartup(false);
+
+    return rwconf_reset;
 }
 
 int OptionsModel::rowCount(const QModelIndex & parent) const
@@ -486,6 +505,8 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
 #endif
     case DisplayUnit:
         return QVariant::fromValue(m_display_bitcoin_unit);
+    case DisplayAddresses:
+        return bDisplayAddresses;
     case ThirdPartyTxUrls:
         return strThirdPartyTxUrls;
     case Language:
@@ -526,7 +547,7 @@ QFont OptionsModel::getFontForChoice(const FontChoice& fc)
     QFont f;
     if (std::holds_alternative<FontChoiceAbstract>(fc)) {
         f = GUIUtil::fixedPitchFont(fc != UseBestSystemFont);
-        f.setWeight(QFont::Bold);
+        if (fc == UseBestSystemFont) f.setWeight(QFont::Bold);
     } else {
         f = std::get<QFont>(fc);
     }
@@ -666,6 +687,10 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
 #endif
     case DisplayUnit:
         setDisplayUnit(value);
+        break;
+    case DisplayAddresses:
+        bDisplayAddresses = value.toBool();
+        settings.setValue("bDisplayAddresses", bDisplayAddresses);
         break;
     case ThirdPartyTxUrls:
         if (strThirdPartyTxUrls != value.toString()) {

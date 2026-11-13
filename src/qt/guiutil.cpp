@@ -113,7 +113,7 @@ QFont fixedPitchFont(bool use_embedded_font)
 {
     if (use_embedded_font) {
         // If we don't specify a size, various contexts will initialize it differently
-        return {"Embedded variant of Roboto Mono", QFont().pointSize()};
+        return {"OCR-Bitcoin", QFont().pointSize()};
     }
     return QFontDatabase::systemFont(QFontDatabase::FixedFont);
 }
@@ -523,14 +523,26 @@ void bringToFront(QWidget* w)
 #endif
 
     if (w) {
-        // activateWindow() (sometimes) helps with keyboard focus on Windows
-        if (w->isMinimized()) {
-            w->showNormal();
-        } else {
+#if (QT_VERSION < QT_VERSION_CHECK(6, 3, 2))
+        if (QGuiApplication::platformName() == "wayland") {
+            // Workaround for bug fixed in https://codereview.qt-project.org/c/qt/qtwayland/+/421125
+            auto flags = w->windowFlags();
+            w->setWindowFlags(flags|Qt::WindowStaysOnTopHint);
             w->show();
+            w->setWindowFlags(flags);
+            w->show();
+        } else
+#endif
+        {
+            // activateWindow() (sometimes) helps with keyboard focus on Windows
+            if (w->isMinimized()) {
+                w->showNormal();
+            } else {
+                w->show();
+            }
+            w->activateWindow();
+            w->raise();
         }
-        w->activateWindow();
-        w->raise();
     }
 }
 
@@ -732,8 +744,14 @@ bool GetStartOnSystemStartup()
 
 bool SetStartOnSystemStartup(bool fAutoStart)
 {
-    if (!fAutoStart)
-        fs::remove(GetAutostartFilePath());
+    if (!fAutoStart) {
+        try {
+            fs::remove(GetAutostartFilePath());
+        } catch(const fs::filesystem_error& e) {
+            LogWarning("Failed to remove autostart file: %s\n", e.what());
+            return false;
+        }
+    }
     else
     {
         char pszExePath[MAX_PATH+1];
@@ -743,7 +761,12 @@ bool SetStartOnSystemStartup(bool fAutoStart)
         }
         pszExePath[r] = '\0';
 
-        fs::create_directories(GetAutostartDir());
+        try {
+            fs::create_directories(GetAutostartDir());
+        } catch(const fs::filesystem_error& e) {
+            LogWarning("Failed to create autostart directory: %s\n", e.what());
+            return false;
+        }
 
         std::ofstream optionFile{GetAutostartFilePath().std_path(), std::ios_base::out | std::ios_base::trunc};
         if (!optionFile.good())
@@ -1137,15 +1160,18 @@ void PrintSlotException(
     PrintExceptionContinue(exception, description);
 }
 
-void ShowModalDialogAsynchronously(QDialog* dialog)
+void ShowModalDialogAsynchronously(QDialog* dialog, const Qt::WindowModality modality)
 {
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowModality(Qt::ApplicationModal);
+    dialog->setWindowModality(modality);
     dialog->show();
 }
 
 QString WalletDisplayName(const QString& name)
 {
+    if (name.endsWith(".dat")) {
+        return name.chopped(4);
+    }
     return name.isEmpty() ? "[" + QObject::tr("default wallet") + "]" : name;
 }
 

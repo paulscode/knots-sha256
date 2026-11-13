@@ -10,6 +10,7 @@
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
 #include <qt/paymentserver.h>
+#include <qt/psbtoperationsdialog.h>
 #include <qt/recentrequeststablemodel.h>
 #include <qt/sendcoinsdialog.h>
 #include <qt/transactiontablemodel.h>
@@ -21,6 +22,7 @@
 #include <node/interface_ui.h>
 #include <node/types.h>
 #include <psbt.h>
+#include <util/rbf.h>
 #include <util/translation.h>
 #include <wallet/coincontrol.h>
 #include <wallet/types.h>
@@ -480,6 +482,8 @@ WalletModel::UnlockContext::~UnlockContext()
 
 bool WalletModel::bumpFee(Txid hash, Txid& new_hash)
 {
+    const CTransactionRef old_tx = m_wallet->getTx(hash);
+
     CCoinControl coin_control;
     std::vector<bilingual_str> errors;
     CAmount old_fee;
@@ -518,6 +522,11 @@ bool WalletModel::bumpFee(Txid hash, Txid& new_hash)
         questionString.append(tr("Warning: This may pay the additional fee by reducing change outputs or adding inputs, when necessary. It may add a new change output if one does not already exist. These changes may potentially leak privacy."));
     }
 
+    if (!SignalsOptInRBF(*old_tx)) {
+        questionString.append(QStringLiteral("<br><br>"));
+        questionString.append(tr("Warning: The old transaction did not enable BIP 125 replace-by-fee. You can still attempt to bump the fee, but it may encounter delays."));
+    }
+
     const bool enable_send{!wallet().privateKeysDisabled() || wallet().hasExternalSigner()};
     const bool always_show_unsigned{getOptionsModel()->getEnablePSBTControls()};
     auto confirmationDialog = new SendConfirmationDialog(tr("Confirm fee bump"), questionString, "", "", SEND_CONFIRM_DELAY, enable_send, always_show_unsigned, nullptr);
@@ -540,11 +549,16 @@ bool WalletModel::bumpFee(Txid hash, Txid& new_hash)
             QMessageBox::critical(nullptr, tr("Fee bump error"), tr("Can't draft transaction."));
             return false;
         }
+        auto dlg = new PSBTOperationsDialog(nullptr, this, m_client_model);
+        dlg->openWithPSBT(psbtx);
+        GUIUtil::ShowModalDialogAsynchronously(dlg, Qt::NonModal);
+#if 0
         // Serialize the PSBT
         DataStream ssTx{};
         ssTx << psbtx;
         GUIUtil::setClipboard(EncodeBase64(ssTx.str()).c_str());
         Q_EMIT message(tr("PSBT copied"), tr("Fee-bump PSBT copied to clipboard"), CClientUIInterface::MSG_INFORMATION | CClientUIInterface::MODAL);
+#endif
         return true;
     }
 

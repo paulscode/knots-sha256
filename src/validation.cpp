@@ -58,6 +58,7 @@
 #include <util/log.h>
 #include <util/mempressure.h>
 #include <util/moneystr.h>
+#include <util/overflow.h>
 #include <util/rbf.h>
 #include <util/result.h>
 #include <util/signalinterrupt.h>
@@ -117,6 +118,8 @@ static bool ShouldCompactChainstate(bool in_ibd)
     static constexpr uint32_t flush_ratio{320}; // Roughly every 2 weeks with hourly flushes
     return !in_ibd && FastRandomContext().randrange(flush_ratio) == 0;
 }
+
+SpkReuseModes SpkReuseMode;
 
 TRACEPOINT_SEMAPHORE(validation, block_connected);
 TRACEPOINT_SEMAPHORE(utxocache, flush);
@@ -267,7 +270,39 @@ bool CheckSequenceLocksAtTip(CBlockIndex* tip,
     return EvaluateSequenceLocks(index, {lock_points.height, lock_points.time});
 }
 
-static void LimitMempoolSize(CTxMemPool& pool, CCoinsViewCache& coins_cache)
+/** Compute accurate total signature operation cost of a transaction.
+ *  Not consensus-critical, since legacy sigops counting is always used in the protocol.
+ */
+int64_t GetAccurateTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags)
+{
+    if (tx.IsCoinBase()) {
+        return 0;
+    }
+
+    unsigned int nSigOps = 0;
+    for (const auto& txin : tx.vin) {
+        nSigOps += txin.scriptSig.GetSigOpCount(false);
+    }
+
+    if (flags & SCRIPT_VERIFY_P2SH) {
+        nSigOps += GetP2SHSigOpCount(tx, inputs);
+    }
+
+    nSigOps *= WITNESS_SCALE_FACTOR;
+
+    if (flags & SCRIPT_VERIFY_WITNESS) {
+        for (const auto& txin : tx.vin) {
+            const Coin& coin = inputs.AccessCoin(txin.prevout);
+            assert(!coin.IsSpent());
+            const CTxOut &prevout = coin.out;
+            nSigOps += CountWitnessSigOps(txin.scriptSig, prevout.scriptPubKey, txin.scriptWitness, flags);
+        }
+    }
+
+    return nSigOps;
+}
+
+void LimitMempoolSize(CTxMemPool& pool, CCoinsViewCache& coins_cache)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main, pool.cs)
 {
     AssertLockHeld(::cs_main);
@@ -626,7 +661,8 @@ private:
         explicit Workspace(const CTransactionRef& ptx) : m_ptx(ptx), m_hash(ptx->GetHash()) {}
         /** Txids of mempool transactions that this transaction directly conflicts with or may
          * replace via sibling eviction. */
-        std::set<Txid> m_conflicts;
+        /** .second=true is a consensus conflict, and .second=false is a policy conflict. */
+        std::map<Txid, bool> m_conflicts_incl_policy;
         /** Iterators to mempool entries that this transaction directly conflicts with or may
          * replace via sibling eviction. */
         CTxMemPool::setEntries m_iters_conflicting;
@@ -634,7 +670,7 @@ private:
         std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> m_parents;
         /* Handle to the tx in the changeset */
         CTxMemPool::ChangeSet::TxHandle m_tx_handle;
-        /** Whether RBF-related data structures (m_conflicts, m_iters_conflicting,
+        /** Whether RBF-related data structures (m_conflicts_incl_policy, m_iters_conflicting,
          * m_replaced_transactions) include a sibling in addition to txns with conflicting inputs. */
         bool m_sibling_eviction{false};
 
@@ -814,6 +850,10 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     if (tx.IsCoinBase())
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "coinbase");
 
+    if (tx.version == TRUC_VERSION && m_pool.m_opts.truc_policy == TRUCPolicy::Reject) {
+        return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "version");
+    }
+
     // Rather not work on nonstandard transactions (unless -testnet/-regtest)
     std::string reason;
     if (m_pool.m_opts.require_standard && !IsStandardTx(tx, m_pool.m_opts, reason, ignore_rejects)) {
@@ -840,6 +880,12 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_CONFLICT, "txn-same-nonwitness-data-in-mempool");
     }
 
+    auto spk_reuse_mode = SpkReuseMode;
+    if (ignore_rejects.count("txn-spk-reused")) {
+        spk_reuse_mode = SRM_ALLOW;
+    }
+    SPKStates_t mapSPK;
+
     // Check for conflicts with in-memory transactions
     for (const CTxIn &txin : tx.vin)
     {
@@ -849,7 +895,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                 // Transaction conflicts with a mempool tx, but we're not allowing replacements.
                 return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bip125-replacement-disallowed");
             }
-            if (!ws.m_conflicts.count(ptxConflicting->GetHash()))
+            if (!ws.m_conflicts_incl_policy.count(ptxConflicting->GetHash()))
             {
                 // Transactions that don't explicitly signal replaceability are
                 // *not* replaceable with the current logic, even if one of their
@@ -875,8 +921,27 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                     return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "txn-mempool-conflict");
                 }
 
-                ws.m_conflicts.insert(ptxConflicting->GetHash());
+                ws.m_conflicts_incl_policy.emplace(ptxConflicting->GetHash(), true);
             }
+        }
+    }
+
+    if (spk_reuse_mode != SRM_ALLOW) {
+        for (const CTxOut& txout : tx.vout) {
+            uint160 hashSPK = ScriptHashkey(txout.scriptPubKey);
+            const auto& SPKUsedIn = m_pool.mapUsedSPK.find(hashSPK);
+            if (SPKUsedIn != m_pool.mapUsedSPK.end()) {
+                if (SPKUsedIn->second.first) {
+                    ws.m_conflicts_incl_policy.emplace(SPKUsedIn->second.first->GetHash(), false);
+                }
+                if (SPKUsedIn->second.second) {
+                    ws.m_conflicts_incl_policy.emplace(SPKUsedIn->second.second->GetHash(), false);
+                }
+            }
+            if (mapSPK.find(hashSPK) != mapSPK.end()) {
+                MaybeReject(TxValidationResult::TX_MEMPOOL_POLICY, "txn-spk-reused-twinoutputs");
+            }
+            mapSPK[hashSPK] = MemPool_SPK_State(mapSPK[hashSPK] | MSS_CREATED);
         }
     }
 
@@ -928,14 +993,58 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     }
 
     // The mempool holds txs for the next block, so pass height+1 to CheckTxInputs
-    if (!Consensus::CheckTxInputs(tx, state, m_view, m_active_chainstate.m_chain.Height() + 1, ws.m_base_fees)) {
+    const auto block_height_current = m_active_chainstate.m_chain.Height();
+    const auto block_height_next = block_height_current + 1;
+    if (!Consensus::CheckTxInputs(tx, state, m_view, block_height_next, ws.m_base_fees)) {
         return false; // state filled in by CheckTxInputs
     }
 
+    if (m_pool.m_opts.minrelaymaturity) {
+        auto max_coin_height = block_height_next - m_pool.m_opts.minrelaymaturity;
+        static_assert(std::is_signed_v<decltype(max_coin_height)>, "Unsigned max_coin_height needs a range check");
+        for (const CTxIn &txin : tx.vin) {
+            const Coin &coin = m_view.AccessCoin(txin.prevout);
+            if (coin.nHeight > max_coin_height) {
+                MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-input-immature-depth");
+            }
+        }
+    }
+
+    if (spk_reuse_mode != SRM_ALLOW) {
+        for (const CTxIn& txin : tx.vin) {
+            const Coin &coin = m_view.AccessCoin(txin.prevout);
+            uint160 hashSPK = ScriptHashkey(coin.out.scriptPubKey);
+
+            SPKStates_t::iterator mssit = mapSPK.find(hashSPK);
+            if (mssit != mapSPK.end()) {
+                if (mssit->second & MSS_CREATED) {
+                    MaybeReject(TxValidationResult::TX_MEMPOOL_POLICY, "txn-spk-reused-change");
+                }
+            }
+            const auto& SPKit = m_pool.mapUsedSPK.find(hashSPK);
+            if (SPKit != m_pool.mapUsedSPK.end()) {
+                if (SPKit->second.second /* Spent */) {
+                    ws.m_conflicts_incl_policy.emplace(SPKit->second.second->GetHash(), false);
+                }
+            }
+            mapSPK[hashSPK] = MemPool_SPK_State(mapSPK[hashSPK] | MSS_SPENT);
+        }
+    }
+
     if (m_pool.m_opts.require_standard) {
-        state = ValidateInputsStandardness(tx, m_view, ignore_rejects);
+        state = ValidateInputsStandardness(tx, m_view, m_pool.m_opts, ignore_rejects);
         if (state.IsInvalid()) {
             return false;
+        }
+    }
+
+    if (m_pool.m_opts.datacarrier_fullcount || !m_pool.m_opts.accept_non_std_datacarrier) {
+        const auto dcb = DatacarrierBytes(tx, m_view);
+        if (dcb.second > 0 && !(m_pool.m_opts.accept_non_std_datacarrier || args.m_ignore_rejects.count("txn-datacarrier-nonstandard"))) {
+            return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "txn-datacarrier-nonstandard");
+        }
+        if (m_pool.m_opts.datacarrier_fullcount && (!args.m_ignore_rejects.count("txn-datacarrier-exceeded")) && dcb.first + dcb.second > m_pool.m_opts.max_datacarrier_bytes.value_or(0)) {
+            return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "txn-datacarrier-exceeded");
         }
     }
 
@@ -957,18 +1066,55 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
+    // "Coin blocks" of the confirmed inputs (value in atoms x confirmations at the next height). The coin-age
+    // helper belonged to the superseded mining_priority topic (decisions/0017), so it is computed here.
+    if (m_pool.m_opts.minrelaycoinblocks > 0) {
+        double inputs_coin_age{0};
+        for (const CTxIn& txin : tx.vin) {
+            const Coin& coin = m_view.AccessCoin(txin.prevout);
+            if (!coin.IsSpent() && coin.nHeight <= block_height_next) {
+                inputs_coin_age += (double)(coin.out.nValue) * (block_height_next - coin.nHeight);
+            }
+        }
+        if (inputs_coin_age < m_pool.m_opts.minrelaycoinblocks) {
+            MaybeReject(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-input-immature-coinblocks");
+        }
+    }
+
     // Set entry_sequence to 0 when rejectmsg_zero_mempool_entry_seq is used; this allows txs from a block
     // reorg to be marked earlier than any child txs that were already in the mempool.
     const uint64_t entry_sequence = args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) ? 0 : m_pool.GetSequence();
+    int32_t extra_weight = CalculateExtraTxWeight(*ptx, m_view, ::g_weight_per_data_byte);
     if (!m_subpackage.m_changeset) {
         m_subpackage.m_changeset = m_pool.GetChangeSet();
     }
-    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, m_active_chainstate.m_chain.Height(), entry_sequence, fSpendsCoinbase, nSigOpsCost, lock_points.value());
+    ws.m_tx_handle = m_subpackage.m_changeset->StageAddition(ptx, ws.m_base_fees, nAcceptTime, block_height_current, entry_sequence, fSpendsCoinbase, /*extra_weight=*/ extra_weight, /*sigops_cost=*/ nSigOpsCost, lock_points.value());
+
+    if (spk_reuse_mode != SRM_ALLOW) {
+        m_subpackage.m_changeset->ModifyEntry(ws.m_tx_handle, [=](CTxMemPoolEntry& e) {
+            e.mapSPK = mapSPK;
+        });
+    }
 
     // ws.m_modified_fees includes any fee deltas from PrioritiseTransaction
     ws.m_modified_fees = ws.m_tx_handle->GetModifiedFee();
 
     ws.m_vsize = ws.m_tx_handle->GetTxSize();
+
+    // Reduce effective fee by dust threshold for each sub-dust output
+    if (m_pool.m_opts.subdustfeepenalty) {
+        CAmount dust_penalty{0};
+        for (const auto& txout : tx.vout) {
+            const CAmount dust_threshold = GetDustThreshold(txout, m_pool.m_opts.dust_relay_feerate);
+            if (txout.nValue < dust_threshold) {
+                dust_penalty = SaturatingAdd(dust_penalty, dust_threshold - txout.nValue);
+            }
+        }
+        if (dust_penalty > 0) {
+            m_subpackage.m_changeset->UpdateStagedModifiedFee(ws.m_tx_handle, -dust_penalty);
+            ws.m_modified_fees = SaturatingAdd(ws.m_modified_fees, -dust_penalty);
+        }
+    }
 
     // Enforces 0-fee for dust transactions, no incentive to be mined alone
     if (m_pool.m_opts.require_standard && !ignore_rejects.count("dust")) {
@@ -977,31 +1123,39 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
-    if (nSigOpsCost > MAX_STANDARD_TX_SIGOPS_COST)
+    // To avoid rejecting low-sigop bare-multisig transactions, the sigops
+    // are counted a second time more accurately.
+    if ((nSigOpsCost > MAX_STANDARD_TX_SIGOPS_COST) || (nBytesPerSigOpStrict && GetAccurateTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS) > ws.m_vsize * WITNESS_SCALE_FACTOR / nBytesPerSigOpStrict)) {
         MaybeRejectDbg(TxValidationResult::TX_NOT_STANDARD, "bad-txns-too-many-sigops",
                 strprintf("%d", nSigOpsCost));
+    }
 
     // No individual transactions are allowed below the mempool min feerate except from disconnected
     // blocks and transactions in a package. Package transactions will be checked using package
     // feerate later.
     if (!args.m_package_feerates && !CheckFeeRate(ws.m_vsize, ws.m_modified_fees, state, args.m_ignore_rejects)) return false;
 
-    ws.m_iters_conflicting = m_pool.GetIterSet(ws.m_conflicts);
+    std::set<Txid> conflicts_as_a_set;
+    std::transform(ws.m_conflicts_incl_policy.begin(), ws.m_conflicts_incl_policy.end(),
+                    std::inserter(conflicts_as_a_set, conflicts_as_a_set.end()),
+                    [](const std::pair<Txid, bool>& pair){ return pair.first; });
+    ws.m_iters_conflicting = m_pool.GetIterSet(conflicts_as_a_set);
 
     ws.m_parents = m_pool.GetParents(*ws.m_tx_handle);
 
     // Core skips the TRUC checks for disconnected-block re-adds (bypass_limits); that caller now passes the legacy
     // ignore set, whose zero-entry-sequence reason is unique to it.
-    if (!args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) && !args.m_ignore_rejects.count("truc")) {
+    if (m_pool.m_opts.truc_policy == TRUCPolicy::Enforce && !args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) && !args.m_ignore_rejects.count("truc")) {
         // Perform the TRUC checks, using the in-mempool parents.
-        if (const auto err{SingleTRUCChecks(m_pool, ws.m_ptx, "truc-", reason, args.m_ignore_rejects, ws.m_parents, ws.m_conflicts, ws.m_vsize)}) {
+        if (const auto err{SingleTRUCChecks(m_pool, ws.m_ptx, "truc-", reason, args.m_ignore_rejects, ws.m_parents, conflicts_as_a_set, ws.m_vsize)}) {
             // Single transaction contexts only.
             if (args.m_allow_sibling_eviction && err->second != nullptr) {
                 // We should only be considering where replacement is considered valid as well.
                 Assume(args.m_allow_replacement);
                 // Potential sibling eviction. Add the sibling to our list of mempool conflicts to be
                 // included in RBF checks.
-                ws.m_conflicts.insert(err->second->GetHash());
+                ws.m_conflicts_incl_policy.emplace(err->second->GetHash(), false);
+                conflicts_as_a_set.insert(err->second->GetHash());
                 // Adding the sibling to m_iters_conflicting here means that it doesn't count towards
                 // RBF Carve Out above. This is correct, since removing to-be-replaced transactions from
                 // the descendant count is done separately in SingleTRUCChecks for TRUC transactions.
@@ -1016,9 +1170,8 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
             }
         }
     }
-
     // We want to detect conflicts in any tx in a package to trigger package RBF logic
-    m_subpackage.m_rbf |= !ws.m_conflicts.empty();
+    m_subpackage.m_rbf |= !ws.m_conflicts_incl_policy.empty();
     return true;
 }
 
@@ -1460,17 +1613,22 @@ MempoolAcceptResult MemPoolAccept::AcceptSingleTransactionInternal(const CTransa
 
     // Now that we've verified the cluster limit is respected, we can perform
     // calculations involving the full ancestors of the tx.
-    if (ws.m_conflicts.size()) {
+    if (ws.m_conflicts_incl_policy.size()) {
         auto ancestors = m_subpackage.m_changeset->CalculateMemPoolAncestors(ws.m_tx_handle);
 
         // A transaction that spends outputs that would be replaced by it is invalid. Now
         // that we have the set of all ancestors we can detect this
-        // pathological case by making sure ws.m_conflicts and this tx's ancestors don't
+        // pathological case by making sure ws.m_conflicts_incl_policy and this tx's ancestors don't
         // intersect.
-        if (const auto err_string{EntriesAndTxidsDisjoint(ancestors, ws.m_conflicts, ptx->GetHash())}) {
+        bool has_policy_conflict{false};
+        if (const auto err_string{EntriesAndTxidsDisjoint(ancestors, ws.m_conflicts_incl_policy, ptx->GetHash(), &has_policy_conflict)}) {
             // We classify this as a consensus error because a transaction depending on something it
             // conflicts with would be inconsistent.
             ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-spends-conflicting-tx", *err_string);
+            return MempoolAcceptResult::Failure(ws.m_state);
+        }
+        if (has_policy_conflict && !args.m_ignore_rejects.count("txn-spk-reused-chained")) {
+            ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "txn-spk-reused-chained");
             return MempoolAcceptResult::Failure(ws.m_state);
         }
     }
@@ -1596,13 +1754,14 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
 
     // At this point we have all in-mempool parents, and we know every transaction's vsize.
     // Run the TRUC checks on the package.
+    if (m_pool.m_opts.truc_policy == TRUCPolicy::Enforce) {
     std::string reason;
     for (Workspace& ws : workspaces) {
         if (auto err{PackageTRUCChecks(m_pool, ws.m_ptx, ws.m_vsize, "truc-", reason, args.m_ignore_rejects, txns, ws.m_parents)}) {
             package_state.Invalid(PackageValidationResult::PCKG_POLICY, reason, err.value());
             return PackageMempoolAcceptResult(package_state, {});
         }
-    }
+    }}
 
     // Transactions must meet two minimum feerates: the mempool minimum fee and min relay fee.
     // For transactions consisting of exactly one child and its parents, it suffices to use the
@@ -2636,7 +2795,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // for as long as `control`.
     std::vector<PrecomputedTransactionData> txsdata(block.vtx.size());
     std::optional<CCheckQueueControl<CScriptCheck>> control;
-    if (auto& queue = m_chainman.GetCheckQueue(); queue.HasThreads() && fScriptChecks) control.emplace(queue);
+    if (auto& queue = m_chainman.GetCheckQueue(); m_chainman.m_script_check_queue_enabled && queue.HasThreads() && fScriptChecks) control.emplace(queue);
 
     std::vector<int> prevheights;
     CAmount nFees = 0;
@@ -3027,14 +3186,75 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
     if (!m_chainman.IsInitialBlockDownload()) {
         auto bits = m_chainman.m_versionbitscache.CheckUnknownActivations(pindexNew, m_chainman.GetParams());
         for (auto [bit, active] : bits) {
-            const bilingual_str warning = strprintf(_("Unknown new rules activated (versionbit %i)"), bit);
-            if (active) {
+            // Knots: warn as soon as an unknown deployment is LOCKED_IN, not only once it is active
+            const bilingual_str warning = strprintf(_("WARNING: Unknown new rules activated (versionbit %i) - this software is not secure"), bit);
+            {
                 m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_ACTIVATED, warning);
-            } else {
                 warning_messages.push_back(warning);
             }
         }
+
+        // Check the version of the last 100 blocks to see if we need to upgrade:
+        const CBlockIndex* pindex = pindexNew;
+        // BIP 323 narrowed VERSIONBITS_NUM_BITS to the deployment bits (0-4) and leaves bits 5-28 to version
+        // rolling; keep watching all 29 bits, with the higher threshold for the rolling range
+        static constexpr int WARN_NUM_BITS{29};
+        int unexpected_bit_count[WARN_NUM_BITS], nonversionbit_count = 0;
+        for (size_t i = 0; i < WARN_NUM_BITS; ++i) unexpected_bit_count[i] = 0;
+        // NOTE: The warning_threshold_hit* variables are static to ensure the warnings persist even after the condition changes, until the node is restarted
+        static std::set<uint8_t> warning_threshold_hit_bits;
+        static int32_t warning_threshold_hit_int{-1};
+        for (int i = 0; i < 100 && pindex != nullptr; i++)
+        {
+            int32_t nExpectedVersion = m_chainman.m_versionbitscache.ComputeBlockVersion(pindex->pprev, m_chainman.GetConsensus());
+            if (pindex->nVersion <= VERSIONBITS_LAST_OLD_BLOCK_VERSION) {
+                // We don't care
+            } else if ((pindex->nVersion & VERSIONBITS_TOP_MASK) != VERSIONBITS_TOP_BITS) {
+                // Non-versionbits upgrade
+                static constexpr int WARNING_THRESHOLD = 100/2;
+                if (++nonversionbit_count > WARNING_THRESHOLD) {
+                    if (warning_threshold_hit_int == -1) {
+                        warning_threshold_hit_int = pindex->nVersion;
+                    } else if (warning_threshold_hit_int != pindex->nVersion) {
+                        warning_threshold_hit_int = -2;
+                    }
+                }
+            } else if ((pindex->nVersion & ~nExpectedVersion) != 0) {
+                for (int bit = 0; bit < WARN_NUM_BITS; ++bit) {
+                    const int32_t mask = 1 << bit;
+                    if ((pindex->nVersion & mask) && !(nExpectedVersion & mask)) {
+                        const int warning_threshold = (bit >= VERSIONBITS_NUM_BITS ? 75 : 50);
+                        if (++unexpected_bit_count[bit] > warning_threshold) {
+                            warning_threshold_hit_bits.insert(bit);
+                        }
+                    }
+                }
+            }
+            pindex = pindex->pprev;
+        }
+        if (!warning_threshold_hit_bits.empty()) {
+            const auto warning = strprintf(_("Warning: Miners are attempting to activate unknown new rules (bit %s)! You may or may not need to act to remain secure"), util::Join(warning_threshold_hit_bits, ", ", [](const uint8_t bit){ return util::ToString(int(bit)); }));
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_VBITS, warning, /*update=*/true);
+            warning_messages.push_back(warning);
+        }
+        if (warning_threshold_hit_int != -1) {
+            bilingual_str warning;
+            if (warning_threshold_hit_int == -2) {
+                warning = _("Warning: Unrecognised block versions are being mined! Unknown rules may or may not be in effect");
+            } else {
+                warning = strprintf(_("Warning: Unrecognised block version (0x%08x) is being mined! Unknown rules may or may not be in effect"), warning_threshold_hit_int);
+            }
+            m_chainman.GetNotifications().warningSet(kernel::Warning::UNKNOWN_NEW_RULES_SIGNAL_INTVER, warning, /*update=*/true);
+            warning_messages.push_back(warning);
+        }
     }
+
+    static constexpr int32_t BIP320_MASK = 0x1fffe000UL;
+    if ((pindexNew->nVersion & BIP320_MASK) && pindexNew->nVersion != m_chainman.m_versionbitscache.ComputeBlockVersion(pindexNew->pprev, m_chainman.GetConsensus())) {
+        const auto warning = _("Miner violated version bit protocol");
+        warning_messages.push_back(warning);
+    }
+
     UpdateTipLog(m_chainman, coins_tip, pindexNew, __func__, "",
                  util::Join(warning_messages, Untranslated(", ")).original, /*background_validation=*/false);
 }

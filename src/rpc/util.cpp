@@ -651,7 +651,11 @@ UniValue RPCMethod::HandleRequest(const JSONRPCRequest& request) const
      * the user is asking for help information, and throw help when appropriate.
      */
     if (request.mode == JSONRPCRequest::GET_HELP || !IsValidNumArgs(request.params.size())) {
-        throw HelpResult{ToString()};
+        std::string help_format = "default";
+        if (request.strMethod == "format") {
+            help_format = request.params[1].get_str();
+        }
+        throw HelpResult{ToString(help_format)};
     }
     UniValue arg_mismatch{UniValue::VOBJ};
     for (size_t i{0}; i < m_args.size(); ++i) {
@@ -769,7 +773,7 @@ std::vector<std::pair<std::string, bool>> RPCMethod::GetArgNames() const
 size_t RPCMethod::GetParamIndex(std::string_view key) const
 {
     auto it{std::find_if(
-        m_args.begin(), m_args.end(), [&key](const auto& arg) { return arg.GetName() == key;}
+        m_args.begin(), m_args.end(), [&key](const auto& arg) { return arg.GetFirstName() == key;}
     )};
 
     CHECK_NONFATAL(it != m_args.end());  // TODO: ideally this is checked at compile time
@@ -837,6 +841,34 @@ std::string RPCMethod::ToString() const
     ret += m_examples.ToDescriptionString();
 
     return ret;
+}
+
+std::string RPCMethod::ToStringArgsCli() const
+{
+    std::string res;
+    for (const auto& arg : m_args) {
+        const bool is_file = ToLower(arg.m_description).find("file") != std::string::npos;
+        res += arg.m_names + ":" + (is_file ? "file" : arg.ToTypeString()) + ",";
+    }
+
+    if (res.size() > 0) {
+        res.pop_back();
+    }
+
+    return res;
+}
+
+std::string RPCMethod::ToString(const std::string& format) const
+{
+    if (format == "default") {
+        return this->ToString();
+    }
+
+    if (format == "args_cli") {
+        return this->ToStringArgsCli();
+    }
+
+    throw std::runtime_error("unrecogonized help format");
 }
 
 UniValue RPCMethod::GetArgMap() const
@@ -946,6 +978,32 @@ bool RPCArg::IsOptional() const
     }
 }
 
+std::string RPCArg::ToTypeString() const
+{
+    switch (m_type) {
+    case Type::STR_HEX:
+    case Type::STR:
+        return "string";
+    case Type::NUM:
+        return "numeric";
+    case Type::AMOUNT:
+        return "numeric or string";
+    case Type::RANGE:
+        return "numeric or array";
+    case Type::BOOL:
+        return "boolean";
+    case Type::OBJ:
+    case Type::OBJ_NAMED_PARAMS:
+    case Type::OBJ_USER_KEYS:
+        return "json object";
+    case Type::ARR:
+        return"json array";
+    } // no default case, so the compiler can warn about missing cases
+
+    //gcc and msvc might complain we don't return anything even if we handle all cases
+    throw std::runtime_error("unknown argument type");
+}
+
 std::string RPCArg::ToDescriptionString(bool is_named_arg) const
 {
     std::string ret;
@@ -953,39 +1011,7 @@ std::string RPCArg::ToDescriptionString(bool is_named_arg) const
     if (m_opts.type_str.size() != 0) {
         ret += m_opts.type_str.at(1);
     } else {
-        switch (m_type) {
-        case Type::STR_HEX:
-        case Type::STR: {
-            ret += "string";
-            break;
-        }
-        case Type::NUM: {
-            ret += "numeric";
-            break;
-        }
-        case Type::AMOUNT: {
-            ret += "numeric or string";
-            break;
-        }
-        case Type::RANGE: {
-            ret += "numeric or array";
-            break;
-        }
-        case Type::BOOL: {
-            ret += "boolean";
-            break;
-        }
-        case Type::OBJ:
-        case Type::OBJ_NAMED_PARAMS:
-        case Type::OBJ_USER_KEYS: {
-            ret += "json object";
-            break;
-        }
-        case Type::ARR: {
-            ret += "json array";
-            break;
-        }
-        } // no default case, so the compiler can warn about missing cases
+        ret += this->ToTypeString();
     }
     if (m_fallback.index() == 1) {
         ret += ", optional, default=" + std::get<RPCArg::DefaultHint>(m_fallback);
@@ -1399,6 +1425,23 @@ std::vector<uint32_t> ParsePathBIP32(const std::string& path)
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid BIP32 keypath");
     }
     return out;
+}
+
+std::vector<CTransactionRef> ParseTransactionVector(const UniValue txns_param)
+{
+    std::vector<CTransactionRef> txns;
+    const UniValue& raw_transactions = txns_param.get_array();
+    txns.reserve(raw_transactions.size());
+
+    for (const auto& rawtx : raw_transactions.getValues()) {
+        CMutableTransaction mtx;
+        if (!DecodeHexTx(mtx, rawtx.get_str())) {
+            throw JSONRPCError(RPC_DESERIALIZATION_ERROR,
+                               "TX decode failed: " + rawtx.get_str() + " Make sure the prev tx has at least one input.");
+        }
+        txns.emplace_back(MakeTransactionRef(std::move(mtx)));
+    }
+    return txns;
 }
 
 /** Convert a vector of bilingual strings to a UniValue::VARR containing their original untranslated values. */

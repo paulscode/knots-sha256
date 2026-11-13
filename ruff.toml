@@ -12,5 +12,9 @@ select = [
 ]
 ignore = [
     "E501", # line too long
+    "E701", # multiple statements on one line (colon)
+    "E714", # test for object identity should be "is not"
     "E741", # ambiguous-variable-name
+    "F401", # module imported but unused
+    "F841", # local variable 'foo' is assigned to but never used
 ]

@@ -320,7 +320,7 @@ QString TransactionTableModel::formatTxStatus(const TransactionRecord *wtx) cons
         status = tr("Abandoned");
         break;
     case TransactionStatus::AssumedConfirmed:
-        status = tr("%1 confirmations, pending verification of historical blocks").arg(wtx->status.depth);
+        status = tr("Unconfirmed (%1 confirmations pending verification of historical blocks)").arg(wtx->status.depth);
         break;
     case TransactionStatus::Confirming:
         status = tr("Confirming (%1 of %2 recommended confirmations)").arg(wtx->status.depth).arg(TransactionRecord::RecommendedNumConfirmations);
@@ -362,7 +362,7 @@ QString TransactionTableModel::lookupAddress(const std::string &address, bool to
     {
         description += label;
     }
-    if(label.isEmpty() || tooltip)
+    if(label.isEmpty() || walletModel->getOptionsModel()->getDisplayAddresses() || tooltip)
     {
         description += QString(" (") + QString::fromStdString(address) + QString(")");
     }
@@ -458,13 +458,12 @@ QVariant TransactionTableModel::txStatusDecoration(const TransactionRecord *wtx)
     switch(wtx->status.status)
     {
     case TransactionStatus::Unconfirmed:
+    case TransactionStatus::AssumedConfirmed:
         return QIcon(":/icons/transaction_0");
     case TransactionStatus::Abandoned:
         return QIcon(":/icons/transaction_abandoned");
-    case TransactionStatus::AssumedConfirmed:
-        return QIcon(":/icons/transaction_1");
     case TransactionStatus::Confirming:
-        switch(wtx->status.depth)
+        switch (wtx->status.depth * 6 / TransactionRecord::RecommendedNumConfirmations)
         {
         case 1: return QIcon(":/icons/transaction_1");
         case 2: return QIcon(":/icons/transaction_2");
@@ -629,14 +628,7 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
             return details;
         }
     case ConfirmedRole:
-        switch (rec->status.status) {
-            case TransactionStatus::Status::AssumedConfirmed:
-            case TransactionStatus::Status::Confirming:
-            case TransactionStatus::Status::Confirmed:
-                return true;
-            default:
-                return false;
-        }
+        return rec->status.status == TransactionStatus::Status::Confirming || rec->status.status == TransactionStatus::Status::Confirmed;
     case FormattedAmountRole:
         // Used for copy/export, so don't include separators
         return formatTxAmount(rec, false, BitcoinUnits::SeparatorStyle::NEVER);

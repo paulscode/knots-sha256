@@ -7,6 +7,7 @@
 #include <qt/bitcoin.h>
 
 #include <chainparams.h>
+#include <clientversion.h>
 #include <common/args.h>
 #include <common/init.h>
 #include <common/system.h>
@@ -57,6 +58,7 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QSettings>
+#include <QString>
 #include <QThread>
 #include <QTimer>
 #include <QTranslator>
@@ -87,6 +89,7 @@ static void RegisterMetaTypes()
     // Register typedefs (see https://doc.qt.io/qt-5/qmetatype.html#qRegisterMetaType)
     // IMPORTANT: if CAmount is no longer a typedef use the normal variant above (see https://doc.qt.io/qt-5/qmetatype.html#qRegisterMetaType-1)
     qRegisterMetaType<CAmount>("CAmount");
+    qRegisterMetaType<CTransactionRef>("CTransactionRef");
     qRegisterMetaType<size_t>("size_t");
 
     qRegisterMetaType<std::function<void()>>("std::function<void()>");
@@ -241,7 +244,9 @@ bool BitcoinApplication::createOptionsModel(bool resetSettings)
 {
     optionsModel = new OptionsModel(node(), this);
     if (resetSettings) {
-        optionsModel->Reset();
+        if (!optionsModel->Reset()) {
+            QMessageBox::warning(nullptr, tr("Options reset"), tr("The settings file %1 could not be backed up, so it was kept and its settings still apply. See debug.log for details.").arg(GUIUtil::PathToQString(gArgs.GetRWConfigFilePath())));
+        }
     }
     bilingual_str error;
     if (!optionsModel->Init(error)) {
@@ -471,6 +476,7 @@ bool BitcoinApplication::event(QEvent* e)
 static void SetupUIArgs(ArgsManager& argsman)
 {
     argsman.AddArg("-choosedatadir", strprintf("Choose data directory on startup (default: %u)", DEFAULT_CHOOSE_DATADIR), ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
+    argsman.AddArg("-guisettingsdir=<path>", "Choose a custom data directory especially for the Qt Settings", ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
     argsman.AddArg("-lang=<lang>", "Set language, for example \"de_DE\" (default: system locale)", ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
     argsman.AddArg("-min", "Start minimized", ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
     argsman.AddArg("-resetguisettings", "Reset all settings changed in the GUI", ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
@@ -558,6 +564,11 @@ int GuiMain(int argc, char* argv[])
     QApplication::setOrganizationName(QAPP_ORG_NAME);
     QApplication::setOrganizationDomain(QAPP_ORG_DOMAIN);
     QApplication::setApplicationName(QAPP_APP_NAME_DEFAULT);
+    const std::string qt_settings_path = gArgs.GetArg("-guisettingsdir", "");
+    if (!qt_settings_path.empty()) {
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QString::fromStdString(qt_settings_path));
+    }
 
     /// 4. Initialization of translations, so that intro dialog is in user's language
     // Now that QSettings are accessible, initialize translations

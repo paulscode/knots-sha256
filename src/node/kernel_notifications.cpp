@@ -35,7 +35,7 @@ static void AlertNotify(const std::string& strMessage)
     // Alert text should be plain ascii coming from a trusted source, but to
     // be safe we first strip anything not in safeChars, then add single quotes around
     // the whole string before passing it to the shell:
-    std::string singleQuote("'");
+    std::string singleQuote("\"");
     std::string safeStatus = SanitizeString(strMessage);
     safeStatus = singleQuote+safeStatus+singleQuote;
 
@@ -79,9 +79,9 @@ void KernelNotifications::progress(const bilingual_str& title, int progress_perc
     uiInterface.ShowProgress(title.translated, progress_percent, resume_possible);
 }
 
-void KernelNotifications::warningSet(kernel::Warning id, const bilingual_str& message)
+void KernelNotifications::warningSet(kernel::Warning id, const bilingual_str& message, const bool update)
 {
-    if (m_warnings.Set(id, message)) {
+    if (m_warnings.Set(id, message, update)) {
         AlertNotify(message.original);
     }
 }

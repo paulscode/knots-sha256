@@ -2383,7 +2383,7 @@ OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& chang
     }
 
     // if m_default_address_type is legacy, use legacy address as change.
-    if (m_default_address_type == OutputType::LEGACY) {
+    if (m_default_address_type == OutputType::LEGACY && GetScriptPubKeyMan(OutputType::LEGACY, /*internal=*/true)) {
         return OutputType::LEGACY;
     }
 
@@ -2405,7 +2405,7 @@ OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& chang
     }
 
     const bool has_bech32m_spkman(GetScriptPubKeyMan(OutputType::BECH32M, /*internal=*/true));
-    if (has_bech32m_spkman && any_tr) {
+    if (has_bech32m_spkman && any_tr && m_default_address_type == OutputType::BECH32M) {
         // Currently tr is the only type supported by the BECH32M spkman
         return OutputType::BECH32M;
     }
@@ -2425,6 +2425,16 @@ OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& chang
         // Currently pkh is the only type supported by the LEGACY spkman
         return OutputType::LEGACY;
     }
+    if (!GetScriptPubKeyMan(m_default_address_type, /*internal=*/true)) {
+        // Default type not available, so look for anything else to fallback to
+        // NOTE: Sane behaviour assumes OUTPUT_TYPES is sorted oldest to newest
+        for (const auto& ot : OUTPUT_TYPES) {
+            if (GetScriptPubKeyMan(ot, /*internal=*/true)) {
+                return ot;
+            }
+        }
+    }
+    return m_default_address_type;
 
     if (has_bech32m_spkman) {
         return OutputType::BECH32M;
@@ -2770,6 +2780,13 @@ void CWallet::ForEachAddrBookEntry(const ListAddrBookFunc& func) const
     }
 }
 
+bool CWallet::IsDestinationActive(const CTxDestination& dest) const
+{
+    const CScript& script{GetScriptForDestination(dest)};
+    const std::set<ScriptPubKeyMan*>& spkms{GetActiveScriptPubKeyMans()};
+    return std::any_of(spkms.cbegin(), spkms.cend(), [&script](const auto& spkm) { return spkm->IsKeyActive(script); });
+}
+
 std::vector<CTxDestination> CWallet::ListAddrBookAddresses(const std::optional<AddrBookFilter>& _filter) const
 {
     AssertLockHeld(cs_wallet);
@@ -2843,9 +2860,8 @@ util::Result<void> CWallet::DisplayAddress(const CTxDestination& dest)
         if (signer_spk_man == nullptr) {
             continue;
         }
-        auto signer{ExternalSignerScriptPubKeyMan::GetExternalSigner()};
-        if (!signer) throw std::runtime_error(util::ErrorString(signer).original);
-        return signer_spk_man->DisplayAddress(dest, *signer);
+        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
+        return signer_spk_man->DisplayAddress(dest, signer);
     }
     return util::Error{_("There is no ScriptPubKeyManager for this address")};
 }
@@ -3779,12 +3795,11 @@ void CWallet::SetupDescriptorScriptPubKeyMans()
             return true;
         })) throw std::runtime_error("Error: cannot process db transaction for descriptors setup");
     } else {
-        auto signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
-        if (!signer) throw std::runtime_error(util::ErrorString(signer).original);
+        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
 
         // TODO: add account parameter
         int account = 0;
-        UniValue signer_res = signer->GetDescriptors(account);
+        UniValue signer_res = signer.GetDescriptors(account);
 
         if (!signer_res.isObject()) throw std::runtime_error(std::string(__func__) + ": Unexpected result");
 

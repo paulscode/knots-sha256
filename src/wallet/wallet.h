@@ -128,7 +128,7 @@ inline constexpr bool DEFAULT_SPEND_ZEROCONF_CHANGE = true;
 //! Default for -walletrejectlongchains
 inline constexpr bool DEFAULT_WALLET_REJECT_LONG_CHAINS{true};
 //! -txconfirmtarget default
-inline constexpr unsigned int DEFAULT_TX_CONFIRM_TARGET = 6;
+inline constexpr unsigned int DEFAULT_TX_CONFIRM_TARGET = 144;
 //! -walletrbf default
 inline constexpr bool DEFAULT_WALLET_RBF = true;
 inline constexpr bool DEFAULT_WALLETBROADCAST = true;
@@ -158,6 +158,7 @@ inline constexpr uint64_t KNOWN_WALLET_FLAGS =
     |   WALLET_FLAG_EXTERNAL_SIGNER;
 
 inline constexpr uint64_t MUTABLE_WALLET_FLAGS =
+        WALLET_FLAG_EXTERNAL_SIGNER |
         WALLET_FLAG_AVOID_REUSE;
 
 static const std::map<WalletFlags, std::string> WALLET_FLAG_TO_STRING{
@@ -806,6 +807,11 @@ public:
      */
     using ListAddrBookFunc = std::function<void(const CTxDestination& dest, const std::string& label, bool is_change, const std::optional<AddressPurpose> purpose)>;
     void ForEachAddrBookEntry(const ListAddrBookFunc& func) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+
+    /**
+     * Determines if a destination is in the active spkm (not imported and not dumped for a new keypool)
+     */
+    [[nodiscard]] bool IsDestinationActive(const CTxDestination& dest) const;
 
     /**
      * Marks all outputs in each one of the destinations dirty, so their cache is

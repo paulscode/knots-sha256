@@ -12,6 +12,7 @@
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <common/args.h>
 #include <common/bloom.h>
 #include <consensus/amount.h>
 #include <consensus/params.h>
@@ -595,7 +596,7 @@ public:
     /** Implement PeerManager */
     void StartScheduledTasks(CScheduler& scheduler) override;
     void CheckForStaleTipAndEvictPeers() override;
-    util::Expected<void, std::string> FetchBlock(NodeId peer_id, const CBlockIndex& block_index) override
+    util::Expected<void, std::string> FetchBlock(NodeId peer_id, const uint256& hash, const CBlockIndex* block_index) override
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     bool GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) const override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     std::vector<node::TxOrphanage::OrphanInfo> GetOrphanTransactions() override EXCLUSIVE_LOCKS_REQUIRED(!m_tx_download_mutex);
@@ -978,6 +979,7 @@ private:
 
     /** Have we requested this block from a peer */
     bool IsBlockRequested(const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool IsBlockRequestedFromPeer(const uint256& hash, NodeId peer) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** Have we requested this block from an outbound peer */
     bool IsBlockRequestedFromOutbound(const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main, !m_peer_mutex);
@@ -1080,7 +1082,7 @@ private:
     /** Number of peers from which we're downloading blocks. */
     int m_peers_downloading_from GUARDED_BY(cs_main) = 0;
 
-    void AddToCompactExtraTransactions(const CTransactionRef& tx) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
+    void AddToCompactExtraTransactions(const CTransactionRef& tx, size_t tx_dynamic_usage) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
 
     /** Orphan/conflicted/etc transactions that are kept for compact block reconstruction.
      *  The last -blockreconstructionextratxn/DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN of
@@ -1088,6 +1090,7 @@ private:
     std::vector<std::pair<Wtxid, CTransactionRef>> vExtraTxnForCompact GUARDED_BY(g_msgproc_mutex);
     /** Offset into vExtraTxnForCompact to insert the next tx */
     size_t vExtraTxnForCompactIt GUARDED_BY(g_msgproc_mutex) = 0;
+    size_t blockreconstructionextratxn_memusage{0};
 
     /** Check whether the last unknown block a peer advertised is not yet known. */
     void ProcessBlockAvailability(NodeId nodeid) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1284,6 +1287,16 @@ std::chrono::microseconds PeerManagerImpl::NextInvToInbounds(std::chrono::micros
 bool PeerManagerImpl::IsBlockRequested(const uint256& hash)
 {
     return mapBlocksInFlight.contains(hash);
+}
+
+bool PeerManagerImpl::IsBlockRequestedFromPeer(const uint256& hash, NodeId peer)
+{
+    for (auto range = mapBlocksInFlight.equal_range(hash); range.first != range.second; range.first++) {
+        auto [nodeid, block_it] = range.first->second;
+        if (nodeid == peer) return true;
+    }
+
+    return false;
 }
 
 bool PeerManagerImpl::IsBlockRequestedFromOutbound(const uint256& hash)
@@ -1922,6 +1935,7 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
             if (queue.pindex)
                 stats.vHeightInFlight.push_back(queue.pindex->nHeight);
         }
+        stats.m_last_block_announcement = NodeSeconds{std::chrono::seconds{state->m_last_block_announcement}};
     }
 
     PeerRef peer = GetPeerRef(nodeid);
@@ -1961,6 +1975,7 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
         }
     }
     stats.time_offset = peer->m_time_offset;
+    stats.m_misbehavior_score = WITH_LOCK(peer->m_misbehavior_mutex, return peer->m_should_discourage) ? 100 : 0;
 
     return true;
 }
@@ -2014,16 +2029,27 @@ int PeerManagerImpl::GetNumberOfPeersWithValidatedDownloads() const
     return m_peers_downloading_from;
 }
 
-void PeerManagerImpl::AddToCompactExtraTransactions(const CTransactionRef& tx)
+void PeerManagerImpl::AddToCompactExtraTransactions(const CTransactionRef& tx, const size_t tx_dynamic_usage)
 {
-    if (m_opts.max_extra_txs == 0) return;
-    if (vExtraTxnForCompact.size() < m_opts.max_extra_txs) {
-        if (vExtraTxnForCompact.empty()) vExtraTxnForCompact.reserve(m_opts.max_extra_txs);
-        vExtraTxnForCompact.emplace_back(tx->GetWitnessHash(), tx);
-    } else {
-        vExtraTxnForCompact[vExtraTxnForCompactIt] = std::make_pair(tx->GetWitnessHash(), tx);
+    if (m_opts.max_extra_txs <= 0)
+        return;
+    if (!vExtraTxnForCompact.size())
+        vExtraTxnForCompact.resize(m_opts.max_extra_txs);
+
+    {
+        auto& entry = vExtraTxnForCompact[vExtraTxnForCompactIt];
+        if (entry.second) blockreconstructionextratxn_memusage -= RecursiveDynamicUsage(*entry.second);
+        entry = std::make_pair(tx->GetWitnessHash(), tx);
+        blockreconstructionextratxn_memusage += tx_dynamic_usage;
     }
     vExtraTxnForCompactIt = (vExtraTxnForCompactIt + 1) % m_opts.max_extra_txs;
+
+    while (blockreconstructionextratxn_memusage > m_opts.max_extra_txs_size) {
+        auto& entry = vExtraTxnForCompact[vExtraTxnForCompactIt];
+        if (entry.second) blockreconstructionextratxn_memusage -= RecursiveDynamicUsage(*entry.second);
+        entry = {};
+        vExtraTxnForCompactIt = (vExtraTxnForCompactIt + 1) % m_opts.max_extra_txs;
+    }
 }
 
 void PeerManagerImpl::Misbehaving(Peer& peer, const std::string& message)
@@ -2106,7 +2132,7 @@ bool PeerManagerImpl::BlockRequestAllowed(const CBlockIndex& block_index)
            (GetBlockProofEquivalentTime(*m_chainman.m_best_header, block_index, *m_chainman.m_best_header, m_chainparams.GetConsensus()) < STALE_RELAY_AGE_LIMIT);
 }
 
-util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const CBlockIndex& block_index)
+util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const uint256& hash, const CBlockIndex* block_index)
 {
     if (m_chainman.m_blockman.LoadingBlocks()) return util::Unexpected{"Loading blocks ..."};
 
@@ -2123,14 +2149,18 @@ util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, co
     // Ignore pre-segwit peers
     if (!CanServeWitnesses(*peer)) return util::Unexpected{"Pre-SegWit peer"};
 
+    if (IsBlockRequestedFromPeer(hash, peer_id)) return util::Unexpected{"Already requested from this peer"};
+
+    // Mark block as in-flight unless we don't have the header.
+    if (block_index != nullptr) {
     // Forget about all prior requests
-    RemoveBlockRequest(block_index.GetBlockHash(), std::nullopt);
+    RemoveBlockRequest(hash, std::nullopt);
 
     // Mark block as in-flight
-    if (!BlockRequested(peer_id, block_index)) return util::Unexpected{"Already requested from this peer"};
+        Assume(BlockRequested(peer_id, *block_index));
+    }
 
     // Construct message to request the block
-    const uint256& hash{block_index.GetBlockHash()};
     std::vector<CInv> invs{CInv(MSG_BLOCK | MSG_WITNESS_FLAG, hash)};
 
     // Send block request message to the peer
@@ -2146,6 +2176,12 @@ util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, co
     return {};
 }
 
+util::Expected<void, std::string> PeerManager::FetchBlock(NodeId peer_id, const CBlockIndex& block_index)
+{
+    const uint256& hash{block_index.GetBlockHash()};
+    return FetchBlock(peer_id, hash, &block_index);
+}
+
 std::unique_ptr<PeerManager> PeerManager::make(CConnman& connman, AddrMan& addrman,
                                                BanMan* banman, ChainstateManager& chainman,
                                                CTxMemPool& pool, node::Warnings& warnings, Options opts)
@@ -2153,11 +2189,12 @@ std::unique_ptr<PeerManager> PeerManager::make(CConnman& connman, AddrMan& addrm
     return std::make_unique<PeerManagerImpl>(connman, addrman, banman, chainman, pool, warnings, opts);
 }
 
+static_assert(CORE_INCREMENTAL_RELAY_FEE < DEFAULT_INCREMENTAL_RELAY_FEE, "Trinary logic for m_fee_filter_rounder is based on assumption that CORE_INCREMENTAL_RELAY_FEE is less than DEFAULT_INCREMENTAL_RELAY_FEE");
 PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                                  BanMan* banman, ChainstateManager& chainman,
                                  CTxMemPool& pool, node::Warnings& warnings, Options opts)
     : m_rng{opts.deterministic_rng},
-      m_fee_filter_rounder{CFeeRate{DEFAULT_MIN_RELAY_TX_FEE}, m_rng},
+      m_fee_filter_rounder{CFeeRate{pool.m_opts.incremental_relay_feerate.GetFeePerK() < DEFAULT_INCREMENTAL_RELAY_FEE ? CORE_INCREMENTAL_RELAY_FEE : DEFAULT_INCREMENTAL_RELAY_FEE}, m_rng},
       m_chainparams(chainman.GetParams()),
       m_connman(connman),
       m_addrman(addrman),
@@ -3419,8 +3456,9 @@ std::optional<node::PackageToValidate> PeerManagerImpl::ProcessInvalidTx(NodeId 
 
     const auto& [add_extra_compact_tx, unique_parents, package_to_validate] = m_txdownloadman.MempoolRejectedTx(ptx, state, nodeid, first_time_failure);
 
-    if (add_extra_compact_tx && RecursiveDynamicUsage(*ptx) < 100000) {
-        AddToCompactExtraTransactions(ptx);
+    const size_t tx_dynamic_usage{RecursiveDynamicUsage(*ptx)};
+    if (add_extra_compact_tx && tx_dynamic_usage < BLOCK_RECONSTRUCTION_EXTRA_TXN_PER_TXN_SIZE_LIMIT) {
+        AddToCompactExtraTransactions(ptx, tx_dynamic_usage);
     }
     for (const Txid& parent_txid : unique_parents) {
         if (peer) AddKnownTx(*peer, parent_txid.ToUint256());
@@ -3446,7 +3484,8 @@ void PeerManagerImpl::ProcessValidTx(NodeId nodeid, const CTransactionRef& tx, c
     InitiateTxBroadcastToAll(tx->GetWitnessHash());
 
     for (const CTransactionRef& removedTx : replaced_transactions) {
-        AddToCompactExtraTransactions(removedTx);
+        const size_t tx_dynamic_usage{RecursiveDynamicUsage(*removedTx)};
+        AddToCompactExtraTransactions(removedTx, tx_dynamic_usage);
     }
 }
 
@@ -3918,7 +3957,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (!vRecv.empty()) {
             std::string strSubVer;
             vRecv >> LIMITED_STRING(strSubVer, MAX_SUBVERSION_LENGTH);
-            cleanSubVer = SanitizeString(strSubVer);
+            cleanSubVer = SanitizeString(strSubVer, SAFE_CHARS_PRINTABLE);
         }
         if (!vRecv.empty()) {
             vRecv >> starting_height;
@@ -3983,7 +4022,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         const auto mapped_as{m_connman.GetMappedAS(pfrom.addr)};
         LogDebug(BCLog::NET, "receive version message: %s: version %d, blocks=%d, us=%s, txrelay=%d, %s%s",
-                  cleanSubVer.empty() ? "<no user agent>" : cleanSubVer, pfrom.nVersion,
+                  cleanSubVer.empty() ? "<no user agent>" : SanitizeString(cleanSubVer, SAFE_CHARS_DEFAULT, true), pfrom.nVersion,
                   starting_height, addrMe.ToStringAddrPort(), fRelay, pfrom.LogPeer(),
                   (mapped_as ? strprintf(", mapped_as=%d", mapped_as) : ""));
 
@@ -5874,6 +5913,7 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
 {
     if (m_opts.ignore_incoming_txs) return;
     if (pto.GetCommonVersion() < FEEFILTER_VERSION) return;
+    if (!gArgs.GetBoolArg("-feefilter", DEFAULT_FEEFILTER)) return;
     // peers with the forcerelay permission should not filter txs to us
     if (pto.HasPermission(NetPermissionFlags::ForceRelay)) return;
     // Don't send feefilter messages to outbound block-relay-only peers since they should never announce
