@@ -62,12 +62,12 @@ inline constexpr unsigned int DEFAULT_SCRIPT_SIZE_POLICY_LIMIT{1650};
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 /** Default for -bytespersigopstrict */
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
-/** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
-inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{4};
+/** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR): 2 vbytes per data byte (decisions/0024 item 2, P2/P3) */
+inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{8};
 /** Default for -rejectdeadbranches */
 inline constexpr bool DEFAULT_REJECT_DEAD_BRANCHES{true};
 /** Default for -rejecttokens */
-inline constexpr bool DEFAULT_REJECT_TOKENS{false};
+inline constexpr bool DEFAULT_REJECT_TOKENS{true};
 /** Default for -rejectfakeoutputs */
 inline constexpr bool DEFAULT_REJECT_FAKE_OUTPUTS{true};
 /** Default for -datacarrierdustruns: count runs of small P2WSH outputs at one value as data (off: they match a
@@ -124,14 +124,14 @@ inline constexpr unsigned int DEFAULT_DESCENDANT_LIMIT{25};
 /** Default for -datacarrier */
 inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
- * Default setting for -datacarriersize. 80 bytes of data, +1 for OP_RETURN,
- * +2 for the pushdata opcodes.
+ * Default setting for -datacarriersize. 40 bytes of data, +1 for OP_RETURN,
+ * +1 for the pushdata opcode.
  */
 /** Default for -permitbaredatacarrier */
 inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{false};
 /** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
 inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
-inline constexpr unsigned int MAX_OP_RETURN_RELAY = 83;
+inline constexpr unsigned int MAX_OP_RETURN_RELAY{42};
 /** Default for -datacarrierfullcount */
 inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{true};
 /**

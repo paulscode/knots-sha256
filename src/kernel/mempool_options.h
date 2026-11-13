@@ -41,7 +41,9 @@ inline constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{false};
 /** Default for -acceptnonstdtxn */
 inline constexpr bool DEFAULT_ACCEPT_NON_STD_TXN{false};
 /** Default for -acceptunknownwitness */
-inline constexpr bool DEFAULT_ACCEPTUNKNOWNWITNESS{true};
+// Bitcoin Knots SHA256: outputs to witness versions 2-16 have no use until a soft fork defines one and carry data no
+// filter examines (decisions/0025 item 5, P2/P4); -corepolicy=1 accepts them again
+inline constexpr bool DEFAULT_ACCEPTUNKNOWNWITNESS{false};
 
 namespace kernel {
 /**
