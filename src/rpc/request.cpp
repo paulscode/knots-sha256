@@ -102,7 +102,7 @@ static fs::path GetAuthCookieFile(bool temp=false)
 
 static std::optional<std::string> g_generated_cookie;
 
-AuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cookie_perms,
+AuthCookieResult GenerateAuthCookie(const std::pair<std::optional<fs::perms>, bool>& cookie_perms,
                                     std::string& user,
                                     std::string& pass)
 {
@@ -125,9 +125,9 @@ AuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cookie_perms
         return AuthCookieResult::Error;
     }
 
-    if (cookie_perms) {
+    if (cookie_perms.first) {
         std::error_code code;
-        fs::permissions(filepath_tmp, cookie_perms.value(), fs::perm_options::replace, code);
+        fs::permissions(filepath_tmp, cookie_perms.first.value(), fs::perm_options::replace, code);
         if (code) {
             LogWarning("Unable to set permissions on cookie authentication file %s", fs::PathToString(filepath_tmp));
             return AuthCookieResult::Error;
@@ -145,7 +145,9 @@ AuthCookieResult GenerateAuthCookie(const std::optional<fs::perms>& cookie_perms
 
     g_generated_cookie = COOKIEAUTH_USER + ":" + rand_pwd_hex;
     LogInfo("Generated RPC authentication cookie %s\n", fs::PathToString(filepath));
-    LogInfo("Permissions used for cookie: %s\n", PermsToSymbolicString(fs::status(filepath).permissions()));
+    LogInfo("Permissions used for cookie%s: %s\n",
+              (cookie_perms.first && cookie_perms.second) ? " (set by -rpccookieperms)" : "",
+              PermsToSymbolicString(fs::status(filepath).permissions()));
 
     user = COOKIEAUTH_USER;
     pass = rand_pwd_hex;
