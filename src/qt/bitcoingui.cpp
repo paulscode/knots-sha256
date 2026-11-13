@@ -7,6 +7,7 @@
 #include <qt/bitcoingui.h>
 
 #include <qt/bitcoinunits.h>
+#include <qt/blockview.h>
 #include <qt/clientmodel.h>
 #include <qt/createwalletdialog.h>
 #include <qt/guiconstants.h>
@@ -32,6 +33,9 @@
 
 #ifdef Q_OS_MACOS
 #include <qt/macdockiconhandler.h>
+#endif
+#ifdef BITCOIN_QT_WIN_TASKBAR
+#include <qt/wintaskbarprogress.h>
 #endif
 
 #include <chain.h>
@@ -198,6 +202,7 @@ BitcoinGUI::BitcoinGUI(interfaces::Node& node, const PlatformStyle *_platformSty
     progressBarLabel->setVisible(false);
     progressBar = new GUIUtil::ProgressBar();
     progressBar->setAlignment(Qt::AlignCenter);
+    progressBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     progressBar->setVisible(false);
 
     // Override style sheet for progress bar for styles that have a segmented progress bar,
@@ -210,7 +215,7 @@ BitcoinGUI::BitcoinGUI(interfaces::Node& node, const PlatformStyle *_platformSty
     }
 
     statusBar()->addWidget(progressBarLabel);
-    statusBar()->addWidget(progressBar);
+    statusBar()->addWidget(progressBar, 1);
     statusBar()->addPermanentWidget(frameBlocks);
 
     // Install event filter to be able to catch status tip events (QEvent::StatusTip)
@@ -232,6 +237,10 @@ BitcoinGUI::BitcoinGUI(interfaces::Node& node, const PlatformStyle *_platformSty
 #ifdef Q_OS_MACOS
     m_app_nap_inhibitor = new CAppNapInhibitor;
 #endif
+#ifdef BITCOIN_QT_WIN_TASKBAR
+    m_taskbar_progress = new WinTaskbarProgress(this);
+    QApplication::instance()->installNativeEventFilter(m_taskbar_progress);
+#endif
 
     GUIUtil::handleCloseWindowShortcut(this);
 }
@@ -248,6 +257,9 @@ BitcoinGUI::~BitcoinGUI()
 #ifdef Q_OS_MACOS
     delete m_app_nap_inhibitor;
     MacDockIconHandler::cleanup();
+#endif
+#ifdef BITCOIN_QT_WIN_TASKBAR
+    QApplication::instance()->removeNativeEventFilter(m_taskbar_progress);
 #endif
 
     delete NetWatch;
@@ -456,7 +468,6 @@ void BitcoinGUI::createActions()
                 connect(action, &QAction::triggered, [this, path] {
                     auto activity = new OpenWalletActivity(m_wallet_controller, this);
                     connect(activity, &OpenWalletActivity::opened, this, &BitcoinGUI::setCurrentWallet, Qt::QueuedConnection);
-                    connect(activity, &OpenWalletActivity::opened, rpcConsole, &RPCConsole::setCurrentWallet, Qt::QueuedConnection);
                     activity->open(path);
                 });
             }
@@ -490,7 +501,6 @@ void BitcoinGUI::createActions()
 
             auto activity = new RestoreWalletActivity(m_wallet_controller, this);
             connect(activity, &RestoreWalletActivity::restored, this, &BitcoinGUI::setCurrentWallet, Qt::QueuedConnection);
-            connect(activity, &RestoreWalletActivity::restored, rpcConsole, &RPCConsole::setCurrentWallet, Qt::QueuedConnection);
 
             auto backup_file_path = fs::PathFromString(backup_file.toStdString());
             activity->restore(backup_file_path, wallet_name.toStdString());
@@ -661,6 +671,14 @@ void BitcoinGUI::createMenuBar()
     window_menu->addSeparator();
     window_menu->addAction(m_show_netwatch_action);
     window_menu->addAction(showMempoolStatsAction);
+
+    auto show_blockview_action = new QAction(tr("Block &Visualizer"), this);
+    window_menu->addAction(show_blockview_action);
+    connect(show_blockview_action, &QAction::triggered, [this] {
+        auto blockview = new GuiBlockView(platformStyle, m_network_style);
+        blockview->setClientModel(clientModel);
+        GUIUtil::bringToFront(blockview);
+    });
 
     window_menu->addSeparator();
     for (RPCConsole::TabTypes tab_type : rpcConsole->tabs()) {
@@ -1307,6 +1325,9 @@ void BitcoinGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVer
 
         progressBarLabel->setVisible(false);
         progressBar->setVisible(false);
+#ifdef BITCOIN_QT_WIN_TASKBAR
+        m_taskbar_progress->setVisible(false);
+#endif
     }
     else
     {
@@ -1314,9 +1335,18 @@ void BitcoinGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVer
 
         progressBarLabel->setVisible(true);
         progressBar->setFormat(tr("%1 behind").arg(timeBehindText));
+        const auto min_width = GUIUtil::TextWidth(progressBar->fontMetrics(), progressBar->format() + "00");
+        if (progressBar->minimumWidth() < min_width) {
+            progressBar->setMinimumWidth(min_width);
+        }
         progressBar->setMaximum(1000000000);
         progressBar->setValue(nVerificationProgress * 1000000000.0 + 0.5);
         progressBar->setVisible(true);
+#ifdef BITCOIN_QT_WIN_TASKBAR
+        m_taskbar_progress->setWindow(this);
+        m_taskbar_progress->setValue(qRound(nVerificationProgress * 100.0));
+        m_taskbar_progress->setVisible(true);
+#endif
 
         tooltip = tr("Catching up…") + QString("<br>") + tooltip;
         if(count != prevBlocks)
@@ -1355,7 +1385,6 @@ void BitcoinGUI::createWallet()
 #ifdef ENABLE_WALLET
     auto activity = new CreateWalletActivity(getWalletController(), this);
     connect(activity, &CreateWalletActivity::created, this, &BitcoinGUI::setCurrentWallet);
-    connect(activity, &CreateWalletActivity::created, rpcConsole, &RPCConsole::setCurrentWallet);
     activity->create();
 #endif // ENABLE_WALLET
 }

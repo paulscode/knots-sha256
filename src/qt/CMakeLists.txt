@@ -93,6 +93,8 @@ add_library(bitcoinqt STATIC EXCLUDE_FROM_ALL
   bitcoingui.h
   bitcoinunits.cpp
   bitcoinunits.h
+  blockview.cpp
+  blockview.h
   clientmodel.cpp
   clientmodel.h
   csvmodelwriter.cpp
@@ -254,6 +256,17 @@ endif()
 
 if(WITH_DBUS)
   target_link_libraries(bitcoinqt PRIVATE Qt6::DBus)
+endif()
+if(WITH_TASKBAR_PROGRESS)
+  target_sources(bitcoinqt
+    PRIVATE
+      $<$<PLATFORM_ID:Windows>:wintaskbarprogress.cpp>
+      $<$<PLATFORM_ID:Windows>:wintaskbarprogress.h>
+  )
+  target_link_libraries(bitcoinqt
+    PRIVATE
+      $<$<PLATFORM_ID:Windows>:ole32>
+  )
 endif()
 
 if(qt_lib_type STREQUAL "STATIC_LIBRARY")
