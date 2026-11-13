@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <bitcoin-build-config.h> // IWYU pragma: keep
+
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
 #include <script/script.h>
@@ -24,6 +26,10 @@
 #include <boost/test/unit_test.hpp>
 
 #include <univalue.h>
+
+#if defined(HAVE_CONSENSUS_LIB)
+#include <script/bitcoinconsensus.h>
+#endif
 
 script_verify_flags ParseScriptFlags(std::string strFlags);
 
@@ -118,12 +124,28 @@ static void AssetTest(const UniValue& test, SignatureCache& signature_cache)
         txdata.Init(tx, std::vector<CTxOut>(prevouts));
         CachingTransactionSignatureChecker txcheck(&tx, idx, prevouts[idx].nValue, true, signature_cache, txdata);
 
+#if defined(HAVE_CONSENSUS_LIB)
+        DataStream stream;
+        stream << TX_WITH_WITNESS(tx);
+        std::vector<UTXO> utxos;
+        utxos.resize(prevouts.size());
+        for (size_t i = 0; i < prevouts.size(); i++) {
+            utxos[i].scriptPubKey = prevouts[i].scriptPubKey.data();
+            utxos[i].scriptPubKeySize = prevouts[i].scriptPubKey.size();
+            utxos[i].value = prevouts[i].nValue;
+        }
+#endif
+
         for (const auto flags : ALL_CONSENSUS_FLAGS) {
             // "final": true tests are valid for all flags. Others are only valid with flags that are
             // a subset of test_flags.
             if (fin || ((flags & test_flags) == flags)) {
                 bool ret = VerifyScript(tx.vin[idx].scriptSig, prevouts[idx].scriptPubKey, &tx.vin[idx].scriptWitness, flags, txcheck, nullptr);
                 BOOST_CHECK(ret);
+#if defined(HAVE_CONSENSUS_LIB)
+                int lib_ret = bitcoinconsensus_verify_script_with_spent_outputs(prevouts[idx].scriptPubKey.data(), prevouts[idx].scriptPubKey.size(), prevouts[idx].nValue, UCharCast(stream.data()), stream.size(), utxos.data(), utxos.size(), idx, flags.as_int(), nullptr);
+                BOOST_CHECK(lib_ret == 1);
+#endif
             }
         }
     }
@@ -136,11 +158,27 @@ static void AssetTest(const UniValue& test, SignatureCache& signature_cache)
         txdata.Init(tx, std::vector<CTxOut>(prevouts));
         CachingTransactionSignatureChecker txcheck(&tx, idx, prevouts[idx].nValue, true, signature_cache, txdata);
 
+#if defined(HAVE_CONSENSUS_LIB)
+        DataStream stream;
+        stream << TX_WITH_WITNESS(tx);
+        std::vector<UTXO> utxos;
+        utxos.resize(prevouts.size());
+        for (size_t i = 0; i < prevouts.size(); i++) {
+            utxos[i].scriptPubKey = prevouts[i].scriptPubKey.data();
+            utxos[i].scriptPubKeySize = prevouts[i].scriptPubKey.size();
+            utxos[i].value = prevouts[i].nValue;
+        }
+#endif
+
         for (const auto flags : ALL_CONSENSUS_FLAGS) {
             // If a test is supposed to fail with test_flags, it should also fail with any superset thereof.
             if ((flags & test_flags) == test_flags) {
                 bool ret = VerifyScript(tx.vin[idx].scriptSig, prevouts[idx].scriptPubKey, &tx.vin[idx].scriptWitness, flags, txcheck, nullptr);
                 BOOST_CHECK(!ret);
+#if defined(HAVE_CONSENSUS_LIB)
+                int lib_ret = bitcoinconsensus_verify_script_with_spent_outputs(prevouts[idx].scriptPubKey.data(), prevouts[idx].scriptPubKey.size(), prevouts[idx].nValue, UCharCast(stream.data()), stream.size(), utxos.data(), utxos.size(), idx, flags.as_int(), nullptr);
+                BOOST_CHECK(lib_ret == 0);
+#endif
             }
         }
     }

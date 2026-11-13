@@ -147,6 +147,16 @@ void FlatSigningProvider::DeleteMuSig2Session(const uint256& session_id) const
     musig2_secnonces->erase(session_id);
 }
 
+void FlatSigningProvider::AddMasterKey(const CExtKey& key)
+{
+    CPubKey pubkey = key.Neuter().pubkey;
+    const auto id = pubkey.GetID();
+    KeyOriginInfo origin;
+    origin.fingerprint = key.fingerprint;
+    origins[id] = std::make_pair(pubkey, origin);
+    keys[id] = key.key;
+}
+
 FlatSigningProvider& FlatSigningProvider::Merge(FlatSigningProvider&& b)
 {
     scripts.merge(b.scripts);
