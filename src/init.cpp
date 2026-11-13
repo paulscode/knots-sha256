@@ -340,6 +340,14 @@ void Shutdown(NodeContext& node)
             client.reset();
         }
     }
+    for (auto& client : node.chain_clients) {
+        try {
+            client->stop();
+        } catch (const ipc::Exception& e) {
+            LogDebug(BCLog::IPC, "Chain client did not disconnect cleanly: %s", e.what());
+            client.reset();
+        }
+    }
     StopMapPort();
 
     // Because these depend on each-other, we make sure that neither can be
@@ -641,6 +649,11 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-timeout=<n>", strprintf("Specify socket connection timeout in milliseconds. If an initial attempt to connect is unsuccessful after this amount of time, drop it (minimum: 1, default: %d)", DEFAULT_CONNECT_TIMEOUT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-peertimeout=<n>", strprintf("Specify a p2p connection timeout delay in seconds. After connecting to a peer, wait this amount of time before considering disconnection based on inactivity (minimum: 1, default: %d)", DEFAULT_PEER_CONNECT_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-torcontrol=<ip>:<port>", strprintf("Tor control host and port to use if onion listening enabled (default: %s). If no port is specified, the default port of %i will be used.", DEFAULT_TOR_CONTROL, DEFAULT_TOR_CONTROL_PORT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+#ifdef ENABLE_TOR_SUBPROCESS
+    argsman.AddArg("-torexecute=<command>", strprintf("Tor command to use if not already running (default: %s)", DEFAULT_TOR_EXECUTE), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+#else
+    hidden_args.emplace_back("-torexecute=<command>");
+#endif
     argsman.AddArg("-torpassword=<pass>", "Tor control port password (default: empty)", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
     argsman.AddArg("-natpmp", strprintf("Use PCP or NAT-PMP to map the listening port (default: %u)", DEFAULT_NATPMP), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-whitebind=<[permissions@]addr>", "Bind to the given address and add permission flags to the peers connecting to it. "
@@ -2432,7 +2445,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             }
             onion_service_target.SetIP(loopback_addr);
         }
-        node.tor_controller = std::make_unique<TorController>(gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target);
+        node.tor_controller = std::make_unique<TorController>(gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target, TorExecuteCommand(gArgs));
     }
 
     bool should_discover = connOptions.bind_on_any;
@@ -2573,6 +2586,8 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     scheduler.scheduleEvery([banman]{
         banman->DumpBanlist();
     }, DUMP_BANS_INTERVAL);
+
+    banman->SetScheduler(scheduler);
 
     if (node.peerman) node.peerman->StartScheduledTasks(scheduler);
 
