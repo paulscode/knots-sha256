@@ -226,6 +226,7 @@ static RPCMethod getpeerinfo()
                                                               "best capture connection behaviors."},
                     {RPCResult::Type::STR, "transport_protocol_type", "Type of transport protocol: \n" + Join(TRANSPORT_TYPE_DOC, ",\n") + ".\n"},
                     {RPCResult::Type::STR, "session_id", "The session ID for this connection, or \"\" if there is none (\"v2\" transport protocol only).\n"},
+                    {RPCResult::Type::NUM, "misbehavior_score", "The misbehavior score for this peer. Always 0, but may be 100 if the peer is about to be disconnected. (DEPRECATED)\n"},
                 }},
             }},
         },
@@ -343,6 +344,7 @@ static RPCMethod getpeerinfo()
         obj.pushKV("connection_type", ConnectionTypeAsString(stats.m_conn_type));
         obj.pushKV("transport_protocol_type", TransportTypeAsString(stats.m_transport_type));
         obj.pushKV("session_id", stats.m_session_id);
+        obj.pushKV("misbehavior_score", statestats.m_misbehavior_score);
 
         ret.push_back(std::move(obj));
     }
