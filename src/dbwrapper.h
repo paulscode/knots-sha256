@@ -35,7 +35,7 @@ inline constexpr size_t DBWRAPPER_PREALLOC_KEY_SIZE = 64;
 inline constexpr size_t DBWRAPPER_PREALLOC_VALUE_SIZE = 1024;
 inline constexpr size_t DBWRAPPER_MAX_FILE_SIZE{32_MiB};
 
-static constexpr size_t DEFAULT_DB_FILE_SIZE{32};
+static constexpr size_t DEFAULT_DB_FILE_SIZE{64};
 
 //! User-controlled performance and debug options.
 struct DBOptions {
