@@ -51,6 +51,8 @@ class ValidationSignals;
 
 struct bilingual_str;
 
+static constexpr std::chrono::minutes DYNAMIC_DUST_FEERATE_UPDATE_INTERVAL{15};
+
 /** Fake height value used in Coin to signify they are only in the memory pool (since 0.8) */
 inline constexpr uint32_t MEMPOOL_HEIGHT = 0x7FFFFFFF;
 
@@ -114,6 +116,8 @@ public:
 // Multi_index tag names
 struct entry_time {};
 struct index_by_wtxid {};
+
+class FeeRateEstimatorManager;
 
 /**
  * Information about a mempool transaction.
@@ -364,6 +368,8 @@ public:
      * the tx is not dependent on other mempool transactions to be included in a block.
      */
     bool HasNoInputsOf(const CTransaction& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs);
+
+    void UpdateDynamicDustFeerate();
 
     /** Affect CreateNewBlock prioritisation of transactions */
     void PrioritiseTransaction(const Txid& hash, const CAmount& nFeeDelta);
@@ -674,7 +680,7 @@ public:
         /** Modify a staged (not yet applied) entry in place; Knots uses this to attach the scriptPubKey states. */
         template <typename Modifier>
         void ModifyEntry(TxHandle it, Modifier&& fn) { m_to_add.modify(it, std::forward<Modifier>(fn)); }
-        TxHandle StageAddition(const CTransactionRef& tx, CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int64_t sigops_cost, LockPoints lp);
+        TxHandle StageAddition(const CTransactionRef& tx, CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int32_t extra_weight, int64_t sigops_cost, LockPoints lp);
 
         void StageRemoval(CTxMemPool::txiter it);
 
