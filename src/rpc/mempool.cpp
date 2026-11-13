@@ -1275,8 +1275,8 @@ static std::vector<RPCResult> OrphanDescription()
         RPCResult{RPCResult::Type::STR_HEX, "txid", "The transaction hash in hex"},
         RPCResult{RPCResult::Type::STR_HEX, "wtxid", "The transaction witness hash in hex"},
         RPCResult{RPCResult::Type::NUM, "bytes", "The serialized transaction size in bytes"},
-        RPCResult{RPCResult::Type::NUM, "vsize", "(DEPRECATED) use vsize_bip141 instead. The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
-        RPCResult{RPCResult::Type::NUM, "vsize_bip141", "The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
+        RPCResult{RPCResult::Type::NUM, "vsize", "(DEPRECATED) use vsize_bip141 instead. The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted. CAUTION: Since orphan transactions are missing input data, this can be incorrect!"},
+        RPCResult{RPCResult::Type::NUM, "vsize_bip141", "The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted. CAUTION: Since orphan transactions are missing input data, this can be incorrect!"},
         RPCResult{RPCResult::Type::NUM, "weight", "The transaction weight as defined in BIP 141."},
         RPCResult{RPCResult::Type::ARR, "from", "",
         {
