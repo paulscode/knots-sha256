@@ -14,7 +14,6 @@
     "magic": "0b110907",
     "dns_seeds": [
       "testnet-seed.bitcoin.jonasschnelli.ch.",
-      "seed.tbtc.petertodd.net.",
       "testnet-seed.bluematt.me.",
       "seed.testnet.achownodes.xyz."
     ]
