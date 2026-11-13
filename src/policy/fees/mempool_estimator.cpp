@@ -4,6 +4,8 @@
 
 #include <policy/fees/mempool_estimator.h>
 
+#include <consensus/consensus.h>
+
 #include <logging.h>
 #include <node/miner.h>
 #include <policy/feerate.h>
@@ -96,7 +98,8 @@ std::optional<ActiveTip> GetActiveTip(const ChainstateManager& chainman)
 MemPoolFeeRateEstimator::Percentiles MemPoolFeeRateEstimator::CalculateMaxWeightPercentiles(std::span<const FeePerVSize> chunk_feerates)
 {
     Assume(std::is_sorted(chunk_feerates.begin(), chunk_feerates.end(), [](const auto& a, const auto& b) { return ByRatio{a} > ByRatio{b}; }));
-    constexpr int64_t total_weight{DEFAULT_BLOCK_MAX_WEIGHT};
+    // Models a block as other miners build it: the consensus maximum, not our own (Knots-lowered) template default
+    constexpr int64_t total_weight{MAX_BLOCK_WEIGHT};
     const int64_t p50_weight{total_weight / 2};
     const int64_t p75_weight{total_weight * 3 / 4};
     Percentiles percentiles{};
@@ -328,7 +331,7 @@ void MemPoolFeeRateEstimator::MempoolTxsRemovedForBlock(const std::shared_ptr<co
 
 // Require at least one block worth of activity across the window before using
 // the coverage ratio as a representative mempool health signal.
-static constexpr uint64_t MIN_REPRESENTATIVE_WINDOW_WEIGHT{DEFAULT_BLOCK_MAX_WEIGHT};
+static constexpr uint64_t MIN_REPRESENTATIVE_WINDOW_WEIGHT{MAX_BLOCK_WEIGHT};
 
 MemPoolFeeRateEstimator::MempoolHealth MemPoolFeeRateEstimator::GetMempoolHealth() const
 {
@@ -397,6 +400,12 @@ util::Expected<FeeRateEstimation, FeeRateEstimationError> MemPoolFeeRateEstimato
     }
     node::BlockCreateOptions options;
     options.test_block_validity = false;
+    // Estimate against a block as the network builds it, not our own (Knots-lowered) template limits
+    options.block_max_weight = MAX_BLOCK_WEIGHT;
+    options.block_max_size = MAX_BLOCK_SERIALIZED_SIZE;
+    // Bitcoin Core's block minimum (1 sat/kvB), not ours: transactions below 1 sat/vB in our mempool (with -corepolicy=1
+    // or a lowered -minrelaytxfee) are mined by the network and must count
+    options.block_min_fee_rate = CFeeRate{1};
     const auto blocktemplate = WITH_LOCK(::cs_main, return (node::BlockAssembler{m_chainman.CurrentChainstate(), &m_mempool, options}).CreateNewBlock());
     if (!blocktemplate) return EstimationError(strprintf("%s: Failed to create block template for fee rate estimation", FeeRateEstimatorTypeToString(estimator_type)));
     // Sort again because the rounding up when converting from weight to vsize may cause slight misorder.

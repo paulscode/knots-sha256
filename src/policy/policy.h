@@ -27,9 +27,9 @@ struct MemPoolOptions;
 };
 
 /** Default for -blockmaxsize, which controls the maximum size of block the mining code will create **/
-inline constexpr unsigned int DEFAULT_BLOCK_MAX_SIZE{MAX_BLOCK_SERIALIZED_SIZE};
+inline constexpr unsigned int DEFAULT_BLOCK_MAX_SIZE = 300000;
 /** Default for -blockmaxweight, which controls the range of block weights the mining code will create **/
-inline constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{MAX_BLOCK_WEIGHT};
+inline constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{DEFAULT_BLOCK_MAX_SIZE * WITNESS_SCALE_FACTOR};
 /** Default for BlockCreateOptions.block_reserved_size **/
 inline constexpr unsigned int DEFAULT_BLOCK_RESERVED_SIZE{1000};
 /** Default for -blockreservedweight **/
@@ -42,7 +42,7 @@ inline constexpr unsigned int DEFAULT_COINBASE_OUTPUT_MAX_ADDITIONAL_SIGOPS{400}
  * Setting a lower value is prevented at startup. */
 inline constexpr unsigned int MINIMUM_BLOCK_RESERVED_WEIGHT{2000};
 /** Default for -blockmintxfee, which sets the minimum feerate for a transaction in blocks created by mining code **/
-inline constexpr unsigned int DEFAULT_BLOCK_MIN_TX_FEE{1};
+inline constexpr unsigned int DEFAULT_BLOCK_MIN_TX_FEE{1000};
 /** The maximum weight for transactions we're willing to relay/mine */
 inline constexpr int32_t MAX_STANDARD_TX_WEIGHT{400'000};
 /** The minimum non-witness size for transactions we're willing to relay/mine: one larger than 64  */
@@ -54,34 +54,37 @@ inline constexpr unsigned int MAX_STANDARD_TX_SIGOPS_COST{MAX_BLOCK_SIGOPS_COST/
 /** The maximum number of potentially executed legacy signature operations in a single standard tx */
 inline constexpr unsigned int MAX_TX_LEGACY_SIGOPS{2'500};
 /** Default for -incrementalrelayfee, which sets the minimum feerate increase for mempool limiting or replacement **/
-inline constexpr unsigned int DEFAULT_INCREMENTAL_RELAY_FEE{100};
+inline constexpr unsigned int DEFAULT_INCREMENTAL_RELAY_FEE{1000};
+inline constexpr CAmount CORE_INCREMENTAL_RELAY_FEE{100};
 /** Default for -maxscriptsize */
-inline constexpr unsigned int DEFAULT_SCRIPT_SIZE_POLICY_LIMIT{std::numeric_limits<unsigned int>::max()};
+inline constexpr unsigned int DEFAULT_SCRIPT_SIZE_POLICY_LIMIT{1650};
 /** Default for -bytespersigop */
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 /** Default for -bytespersigopstrict */
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 /** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
-inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{1};
+inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{4};
 /** Default for -rejecttokens */
 inline constexpr bool DEFAULT_REJECT_TOKENS{false};
+/** Default for -subdustfeepenalty */
+inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{true};
 
 // NOTE: Changes to these three require manually adjusting doc in init.cpp
 /** Default for -permitephemeral=send */
-inline constexpr bool DEFAULT_PERMITEPHEMERAL_SEND{true};
+inline constexpr bool DEFAULT_PERMITEPHEMERAL_SEND{false};
 /** Default for -permitephemeral=dust */
-inline constexpr bool DEFAULT_PERMITEPHEMERAL_DUST{true};
+inline constexpr bool DEFAULT_PERMITEPHEMERAL_DUST{false};
 /** Default for -permitephemeral=anchor */
 inline constexpr bool DEFAULT_PERMITEPHEMERAL_ANCHOR{true};
 
 /** Default for -permitbareanchor */
 inline constexpr bool DEFAULT_PERMITBAREANCHOR{true};
 /** Default for -permitbarepubkey */
-inline constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
+inline constexpr bool DEFAULT_PERMIT_BAREPUBKEY{false};
 /** Default for -permitbaremultisig */
-inline constexpr bool DEFAULT_PERMIT_BAREMULTISIG{true};
+inline constexpr bool DEFAULT_PERMIT_BAREMULTISIG{false};
 /** Default for -rejectparasites */
-inline constexpr bool DEFAULT_REJECT_PARASITES{false};
+inline constexpr bool DEFAULT_REJECT_PARASITES{true};
 /** The maximum number of witness stack items in a standard P2WSH script */
 inline constexpr unsigned int MAX_STANDARD_P2WSH_STACK_ITEMS{100};
 /** The maximum size in bytes of each witness stack item in a standard P2WSH script */
@@ -102,7 +105,7 @@ static const std::string DEFAULT_DUST_DYNAMIC{"off"};
 static const int DEFAULT_DUST_RELAY_MULTIPLIER{3'000};
 static const std::string DEFAULT_SPKREUSE{"allow"};
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
-inline constexpr unsigned int DEFAULT_MIN_RELAY_TX_FEE{100};
+inline constexpr unsigned int DEFAULT_MIN_RELAY_TX_FEE{1000};
 /** Maximum number of transactions per cluster (default) */
 inline constexpr unsigned int DEFAULT_CLUSTER_LIMIT{64};
 /** Maximum size of cluster in virtual kilobytes */
@@ -114,15 +117,16 @@ inline constexpr unsigned int DEFAULT_DESCENDANT_LIMIT{25};
 /** Default for -datacarrier */
 inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
- * Default setting for -datacarriersize in vbytes.
+ * Default setting for -datacarriersize. 80 bytes of data, +1 for OP_RETURN,
+ * +2 for the pushdata opcodes.
  */
 /** Default for -permitbaredatacarrier */
-inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{true};
+inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{false};
 /** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
 inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
-inline constexpr unsigned int MAX_OP_RETURN_RELAY = MAX_STANDARD_TX_WEIGHT / WITNESS_SCALE_FACTOR;
+inline constexpr unsigned int MAX_OP_RETURN_RELAY = 83;
 /** Default for -datacarrierfullcount */
-inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{false};
+inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{true};
 /**
  * An extra transaction can be added to a package, as long as it only has one
  * ancestor and is no larger than this. Not really any reason to make this
