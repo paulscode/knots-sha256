@@ -1117,6 +1117,10 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     CKey key;
     key.MakeNewKey(true);
 
+    const kernel::MemPoolOptions mempool_opts{
+        .maxtxlegacysigops = 2'500,
+    };
+
     // Create a pathological P2SH script padded with as many sigops as is standard.
     CScript max_sigops_redeem_script{CScript() << std::vector<unsigned char>{} << key.GetPubKey()};
     for (unsigned i{0}; i < MAX_P2SH_SIGOPS - 1; ++i) max_sigops_redeem_script << OP_2DUP << OP_CHECKSIG << OP_DROP;
@@ -1126,7 +1130,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     // Create a transaction fanning out as many such P2SH outputs as is standard to spend in a
     // single transaction, and a transaction spending them.
     CMutableTransaction tx_create, tx_max_sigops;
-    const unsigned p2sh_inputs_count{MAX_TX_LEGACY_SIGOPS / MAX_P2SH_SIGOPS};
+    const unsigned p2sh_inputs_count{mempool_opts.maxtxlegacysigops / MAX_P2SH_SIGOPS};
     tx_create.vout.reserve(p2sh_inputs_count);
     for (unsigned i{0}; i < p2sh_inputs_count; ++i) {
         tx_create.vout.emplace_back(424242 + i, max_sigops_p2sh);
@@ -1138,12 +1142,12 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     }
 
     // p2sh_inputs_count is truncated to 166 (from 166.6666..)
-    BOOST_CHECK_LT(p2sh_inputs_count * MAX_P2SH_SIGOPS, MAX_TX_LEGACY_SIGOPS);
+    BOOST_CHECK_LE(p2sh_inputs_count * MAX_P2SH_SIGOPS, mempool_opts.maxtxlegacysigops);
     AddCoins(coins, CTransaction(tx_create), 0, false);
 
     // 2490 sigops is below the limit.
     BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(tx_max_sigops), coins), 2490);
-    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins).IsValid());
+    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts).IsValid());
 
     // Adding one more input will bump this to 2505, hitting the limit.
     tx_create.vout.emplace_back(424242, max_sigops_p2sh);
@@ -1159,10 +1163,16 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     std::string reject_reason("bad-txns-input-sigops-toomany-overall");
     std::string sigop_limit_reject_debug_message("non-witness sigops exceed bip54 limit");
     {
-        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins);
+        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts);
         BOOST_CHECK(validation_state.IsInvalid());
         BOOST_CHECK_EQUAL(validation_state.GetRejectReason(), reject_reason);
         BOOST_CHECK_EQUAL(validation_state.GetDebugMessage(), sigop_limit_reject_debug_message);
+    }
+    {
+        // -maxtxlegacysigops reaches the check: a raised limit admits the same transaction
+        kernel::MemPoolOptions raised{mempool_opts};
+        raised.maxtxlegacysigops = 3000;
+        BOOST_CHECK(ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, raised).IsValid());
     }
 
 
@@ -1183,7 +1193,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
 
     // The transaction now contains exactly 2500 sigops, the check should pass.
     BOOST_CHECK_EQUAL(p2sh_inputs_count * MAX_P2SH_SIGOPS + p2pk_inputs_count * 1, MAX_TX_LEGACY_SIGOPS);
-    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins).IsValid());
+    BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts).IsValid());
 
     // Now, add some Segwit inputs. We add one for each defined Segwit output type. The limit
     // is exclusively on non-witness sigops and therefore those should not be counted.
@@ -1199,7 +1209,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
 
     // The transaction now still contains exactly 2500 sigops, the check should pass.
     AddCoins(coins, CTransaction(tx_create_segwit), 0, false);
-    BOOST_REQUIRE(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins).IsValid());
+    BOOST_REQUIRE(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts).IsValid());
 
     // Add one more P2PK input. We'll reach the limit.
     tx_create_p2pk.vout.emplace_back(212121, p2pk_script);
@@ -1213,7 +1223,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     auto legacy_sigop_count_p2pk = p2sh_inputs_count * MAX_P2SH_SIGOPS + p2pk_inputs_count * 1;
     BOOST_CHECK_GT(legacy_sigop_count_p2pk, MAX_TX_LEGACY_SIGOPS);
     {
-        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins);
+        auto validation_state = ValidateInputsStandardness(CTransaction(tx_max_sigops), coins, mempool_opts);
         BOOST_CHECK(validation_state.IsInvalid());
         BOOST_CHECK_EQUAL(validation_state.GetRejectReason(), reject_reason);
         BOOST_CHECK_EQUAL(validation_state.GetDebugMessage(), sigop_limit_reject_debug_message);
