@@ -17,6 +17,7 @@
 #include <clientversion.h>
 #include <common/args.h>
 #include <common/messages.h>
+#include <common/pcp.h>
 #include <common/system.h>
 #include <compat/compat.h>
 #include <consensus/params.h>
@@ -802,6 +803,9 @@ static bool AppInitServers(NodeContext& node)
 // Parameter interaction based on rules
 void InitParameterInteraction(ArgsManager& args)
 {
+    // Before any SoftSetArg so we get the actual user-set value
+    g_pcp_warn_for_unauthorized = args.GetBoolArg("-natpmp", false);
+
     // when specifying an explicit binding address, you want to listen on it
     // even when -connect or -proxy is specified
     if (!args.GetArgs("-bind").empty()) {
