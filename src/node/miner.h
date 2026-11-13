@@ -25,6 +25,7 @@ class CBlockIndex;
 class CChainParams;
 class Chainstate;
 class ChainstateManager;
+class ValidationSignals;
 
 namespace Consensus {
 struct Params;
@@ -61,10 +62,13 @@ class BlockAssembler
 {
 private:
     // The constructed block template
-    std::unique_ptr<CBlockTemplate> pblocktemplate;
+    std::shared_ptr<CBlockTemplate> pblocktemplate;
+
+    bool fNeedSizeAccounting;
 
     // Information on the current status of the block
     uint64_t nBlockWeight;
+    uint64_t nBlockSize;
     uint64_t nBlockTx;
     uint64_t nBlockSigOpsCost;
     CAmount nFees;
@@ -76,19 +80,23 @@ private:
     const CChainParams& chainparams;
     const CTxMemPool* const m_mempool;
     Chainstate& m_chainstate;
+    /** Notified of each new template (NewBlockTemplate), if set */
+    ValidationSignals* const m_validation_signals;
 
 public:
     explicit BlockAssembler(Chainstate& chainstate,
                             const CTxMemPool* mempool,
-                            BlockCreateOptions create_options);
+                            BlockCreateOptions create_options,
+                            ValidationSignals* validation_signals = nullptr);
 
     /** Construct a new block template */
-    std::unique_ptr<CBlockTemplate> CreateNewBlock();
+    std::shared_ptr<CBlockTemplate> CreateNewBlock();
 
     /** The number of transactions in the last assembled block (excluding coinbase transaction) */
     inline static std::optional<int64_t> m_last_block_num_txs{};
     /** The weight of the last assembled block (including reserved weight for block header, txs count and coinbase tx) */
     inline static std::optional<int64_t> m_last_block_weight{};
+    inline static std::optional<int64_t> m_last_block_size{};
 
 private:
     const BlockCreateOptions m_options;
@@ -140,13 +148,14 @@ void InterruptWait(KernelNotifications& kernel_notifications, bool& interrupt_wa
  * Return a new block template when fees rise to a certain threshold or after a
  * new tip; return nullopt if timeout is reached.
  */
-std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
+std::shared_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
                                                       KernelNotifications& kernel_notifications,
                                                       CTxMemPool* mempool,
-                                                      const std::unique_ptr<CBlockTemplate>& block_template,
+                                                      const std::shared_ptr<CBlockTemplate>& block_template,
                                                       const BlockWaitOptions& wait_options,
                                                       const BlockCreateOptions& create_options,
-                                                      bool& interrupt_wait);
+                                                      bool& interrupt_wait,
+                                                      ValidationSignals* validation_signals = nullptr);
 
 /* Locks cs_main and returns the block hash and block height of the active chain if it exists; otherwise, returns nullopt.*/
 std::optional<BlockRef> GetTip(ChainstateManager& chainman);

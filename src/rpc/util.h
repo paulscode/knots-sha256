@@ -8,6 +8,7 @@
 #include <addresstype.h>
 #include <consensus/amount.h>
 #include <policy/feerate.h>
+#include <primitives/transaction.h>
 #include <pubkey.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
@@ -16,6 +17,7 @@
 #include <univalue.h>
 #include <util/check.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -132,7 +134,7 @@ std::string HelpExampleRpc(const std::string& methodname, const std::string& arg
 std::string HelpExampleRpcNamed(const std::string& methodname, const RPCArgList& args);
 
 CPubKey HexToPubKey(const std::string& hex_in);
-CTxDestination AddAndGetMultisigDestination(int required, const std::vector<CPubKey>& pubkeys, OutputType type, FlatSigningProvider& keystore, CScript& script_out);
+CTxDestination AddAndGetMultisigDestination(int required, const std::vector<CPubKey>& pubkeys, OutputType type, FlatSigningProvider& keystore, CScript& script_out, bool sort = false);
 
 UniValue DescribeAddress(const CTxDestination& dest);
 
@@ -154,6 +156,8 @@ std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, Fl
 
 //! Parse BIP32 path
 std::vector<uint32_t> ParsePathBIP32(const std::string& path);
+/** Parses a vector of transactions from a univalue array. */
+std::vector<CTransactionRef> ParseTransactionVector(const UniValue txns_param);
 
 /**
  * Serializing JSON objects depends on the outer type. Only arrays and
@@ -224,6 +228,7 @@ struct RPCArg {
 
     const std::string m_names; //!< The name of the arg (can be empty for inner args, can contain multiple aliases separated by | for named request arguments)
     const Type m_type;
+    const std::vector<Type> m_type_per_name;
     const std::vector<RPCArg> m_inner; //!< Only used for arrays or dicts
     const Fallback m_fallback;
     const std::string m_description;
@@ -242,6 +247,24 @@ struct RPCArg {
           m_opts{std::move(opts)}
     {
         CHECK_NONFATAL(type != Type::ARR && type != Type::OBJ && type != Type::OBJ_NAMED_PARAMS && type != Type::OBJ_USER_KEYS);
+    }
+
+    RPCArg(
+        std::string name,
+        std::vector<Type> types,
+        Fallback fallback,
+        std::string description,
+        std::vector<RPCArg> inner = {},
+        RPCArgOptions opts = {})
+        : m_names{std::move(name)},
+          m_type{types.at(0)},
+          m_type_per_name{std::move(types)},
+          m_inner{std::move(inner)},
+          m_fallback{std::move(fallback)},
+          m_description{std::move(description)},
+          m_opts{std::move(opts)}
+    {
+        CHECK_NONFATAL(m_type_per_name.size() == size_t(std::count(m_names.begin(), m_names.end(), '|')) + 1);
     }
 
     RPCArg(
@@ -285,6 +308,10 @@ struct RPCArg {
      * Set oneline to get the oneline representation (less whitespace)
      */
     std::string ToStringObj(bool oneline) const;
+    /**
+     * Return the type as a string
+     */
+    std::string ToTypeString() const;
     /**
      * Return the description string, including the argument type and whether
      * the argument is required.
@@ -512,6 +539,8 @@ public:
         }
     }
     std::string ToString() const;
+    std::string ToStringArgsCli() const;
+    std::string ToString(const std::string& format) const;
     /** Return the named args that need to be converted from string to another JSON type */
     UniValue GetArgMap() const;
     /** If the supplied number of args is neither too small nor too high */
@@ -545,6 +574,9 @@ private:
  */
 void PushWarnings(const UniValue& warnings, UniValue& obj);
 void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj);
+
+bool GetWalletRestrictionFromJSONRPCRequest(const JSONRPCRequest& request, std::string& out_wallet_allowed);
+void EnsureNotWalletRestricted(const JSONRPCRequest& request);
 
 std::vector<RPCResult> ScriptPubKeyDoc();
 

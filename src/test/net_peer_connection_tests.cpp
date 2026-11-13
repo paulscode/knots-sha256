@@ -130,6 +130,15 @@ BOOST_FIXTURE_TEST_CASE(test_addnode_getaddednodeinfo_and_connection_detection, 
     BOOST_CHECK(!connman->AddNode({/*m_added_node=*/"127.1", /*m_use_v2transport=*/true}));
 #endif
 
+    BOOST_TEST_MESSAGE("\nCall AddNode() with a CJDNS service equal to an existing addnode entry; it should not be added");
+    BOOST_CHECK(!connman->AddNode({/*m_added_node=*/"[fc00:3344:5566:7788:9900:aabb:ccdd:eeff]:1234", /*m_use_v2transport=*/false}));
+
+    BOOST_TEST_MESSAGE("\nCall AddNode() with a CJDNS addr equal to an existing inbound one but with a different port specified; it should not be added");
+    BOOST_CHECK(!connman->AddNode({/*m_added_node=*/"[fc00:3344:5566:7788:9900:aabb:ccdd:eeff]:8333", /*m_use_v2transport=*/false}));
+
+    BOOST_TEST_MESSAGE("\nCall AddNode() with a CJDNS addr equal to an existing inbound one but resolving to a different port; it should not be added");
+    BOOST_CHECK(!connman->AddNode({/*m_added_node=*/"fc00:3344:5566:7788:9900:aabb:ccdd:eeff", /*m_use_v2transport=*/false}));
+
     BOOST_TEST_MESSAGE("\nExpect GetAddedNodeInfo to return expected number of peers with `include_connected` true/false");
     BOOST_CHECK_EQUAL(connman->GetAddedNodeInfo(/*include_connected=*/true).size(), nodes.size());
     BOOST_CHECK(connman->GetAddedNodeInfo(/*include_connected=*/false).empty());
@@ -161,6 +170,73 @@ BOOST_FIXTURE_TEST_CASE(test_addnode_getaddednodeinfo_and_connection_detection, 
         peerman->FinalizeNode(*node);
     }
     connman->ClearTestNodes();
+}
+
+/** Under -v2onlyclearnet, an inbound v1 peer is disconnected only if it reached us over clearnet. */
+BOOST_AUTO_TEST_CASE(v2onlyclearnet_inbound_v1)
+{
+    auto connman = std::make_unique<ConnmanTestMsg>(0x1337, 0x1337, *m_node.addrman, *m_node.netgroupman, Params());
+    auto peerman = PeerManager::make(*connman, *m_node.addrman, nullptr, *m_node.chainman, *m_node.mempool, *m_node.warnings, {});
+
+    CConnman::Options options;
+    options.m_msgproc = peerman.get();
+    options.m_v2only_clearnet = true;
+    connman->Init(options);
+
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+
+    // Hacky way to test an onion inbound: inbound_onion alone makes
+    // CNode::ConnectedThroughNetwork() report NET_ONION, so the peer can keep this
+    // clearnet address and still be treated as onion.
+    const CAddress addr{ip(0xa0b0c001), NODE_NONE};
+    NodeId id{0};
+
+    // A v1 peer reaching us over clearnet is disconnected while its version message is processed.
+    {
+        CNode node{++id,
+                   /*sock=*/std::make_shared<StaticContentsSock>(""),
+                   addr,
+                   /*nKeyedNetGroupIn=*/0,
+                   /*nLocalHostNonceIn=*/0,
+                   CAddress{},
+                   /*addrNameIn=*/"",
+                   ConnectionType::INBOUND,
+                   /*inbound_onion=*/false,
+                   /*network_key=*/0};
+        BOOST_REQUIRE_EQUAL(node.ConnectedThroughNetwork(), Network::NET_IPV4);
+        connman->Handshake(node,
+                           /*successfully_connected=*/false,
+                           /*remote_services=*/ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                           /*local_services=*/ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                           /*version=*/PROTOCOL_VERSION,
+                           /*relay_txs=*/true);
+        BOOST_CHECK(node.fDisconnect);
+        peerman->FinalizeNode(node);
+    }
+
+    // A v1 peer reaching us over Tor is kept: onion inbound connections are already encrypted,
+    // and arrive on a dedicated bind socket rather than from an onion address.
+    {
+        CNode node{++id,
+                   /*sock=*/std::make_shared<StaticContentsSock>(""),
+                   addr,
+                   /*nKeyedNetGroupIn=*/0,
+                   /*nLocalHostNonceIn=*/0,
+                   CAddress{},
+                   /*addrNameIn=*/"",
+                   ConnectionType::INBOUND,
+                   /*inbound_onion=*/true,
+                   /*network_key=*/0};
+        BOOST_REQUIRE_EQUAL(node.ConnectedThroughNetwork(), Network::NET_ONION);
+        connman->Handshake(node,
+                           /*successfully_connected=*/true,
+                           /*remote_services=*/ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                           /*local_services=*/ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                           /*version=*/PROTOCOL_VERSION,
+                           /*relay_txs=*/true);
+        BOOST_CHECK(!node.fDisconnect);
+        peerman->FinalizeNode(node);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

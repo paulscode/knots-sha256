@@ -9,11 +9,14 @@ set -o errexit -o pipefail
     cd "$DISTSRC"
 
     # Perform basic security checks on installed executables.
+    # The checks are for executables. libbitcoinconsensus (on Windows a DLL installed to bin/) is a library and, as in
+    # Knots 29.3, is not checked by them.
+    mapfile -t CHECK_BINARIES < <(find "${INSTALLPATH}/bin" "${INSTALLPATH}/libexec" -maxdepth 1 -type f ! -name 'libbitcoinconsensus*' | sort)
     echo "Checking binary security on installed executables..."
-    python3 "${DISTSRC}/contrib/guix/security-check.py" "${INSTALLPATH}/bin/"* "${INSTALLPATH}/libexec/"*
+    python3 "${DISTSRC}/contrib/guix/security-check.py" "${CHECK_BINARIES[@]}"
     # Check that executables only contain allowed version symbols.
     echo "Running symbol and dynamic library checks on installed executables..."
-    python3 "${DISTSRC}/contrib/guix/symbol-check.py" "${INSTALLPATH}/bin/"* "${INSTALLPATH}/libexec/"*
+    python3 "${DISTSRC}/contrib/guix/symbol-check.py" "${CHECK_BINARIES[@]}"
 
     (
         cd installed
@@ -24,6 +27,9 @@ set -o errexit -o pipefail
                 # Split binaries from their debug symbols
                 {
                     find "${DISTNAME}/bin" "${DISTNAME}/libexec" -type f -executable -print0
+                    if test -d "${DISTNAME}/lib"; then
+                        find "${DISTNAME}/lib" -type f -executable -print0
+                    fi
                 } | xargs -0 -P"$JOBS" -I{} "${DISTSRC}/build/split-debug.sh" {} {} {}.dbg
                 ;;
         esac

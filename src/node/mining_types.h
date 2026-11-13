@@ -36,6 +36,11 @@ struct BlockCreateOptions {
      */
     bool use_mempool{true};
     /**
+     * The default reserved size for the fixed-size block header,
+     * transaction count and coinbase transaction.
+     */
+    size_t block_reserved_size{DEFAULT_BLOCK_RESERVED_SIZE};
+    /**
      * Minimum fee rate for transactions to be included. Providing a value
      * overrides the -blockmintxfee startup setting.
      */
@@ -63,6 +68,10 @@ struct BlockCreateOptions {
      * block_reserved_weight leaves no room for non-coinbase transactions.
      */
     std::optional<uint64_t> block_max_weight{};
+    /**
+     * Maximum serialized block size, defaults to -blockmaxsize
+     */
+    std::optional<uint64_t> block_max_size{};
     /**
      * The maximum additional sigops which the pool will add in coinbase
      * transaction outputs.

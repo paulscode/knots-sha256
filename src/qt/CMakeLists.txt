@@ -57,10 +57,24 @@ set(CMAKE_AUTORCC OFF)
 configure_file(bitcoin_locale.qrc bitcoin_locale.qrc USE_SOURCE_PERMISSIONS COPYONLY)
 qt6_add_resources(BITCOIN_QRC bitcoin.qrc)
 qt6_add_resources(BITCOIN_LOCALE_QRC ${CMAKE_CURRENT_BINARY_DIR}/bitcoin_locale.qrc)
+
+# The bundled font (Tonal digits and BTC symbol) ships base85+lzma-encoded; decode it at configure time so the
+# resource compiler can see it.
+set(FONT_PATH "res/fonts/RobotoTonalMono-Bold.ttf")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/res/fonts")
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} -c "import base64, lzma, sys; sys.stdout.buffer.write(lzma.decompress(base64.b85decode(sys.stdin.read())))"
+  INPUT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${FONT_PATH}.in"
+  OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/${FONT_PATH}"
+  COMMAND_ERROR_IS_FATAL ANY
+)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${FONT_PATH}.in")
+configure_file(font.qrc font.qrc USE_SOURCE_PERMISSIONS COPYONLY)
+qt6_add_resources(BITCOIN_FONT_QRC ${CMAKE_CURRENT_BINARY_DIR}/font.qrc)
 # See: https://bugreports.qt.io/browse/QTBUG-141858.
 get_target_property(warn_flags warn_interface INTERFACE_COMPILE_OPTIONS)
 if("-Wtrailing-whitespace=any" IN_LIST warn_flags)
-  set_source_files_properties(${BITCOIN_QRC} ${BITCOIN_LOCALE_QRC} PROPERTIES COMPILE_OPTIONS -Wno-trailing-whitespace)
+  set_source_files_properties(${BITCOIN_QRC} ${BITCOIN_LOCALE_QRC} ${BITCOIN_FONT_QRC} PROPERTIES COMPILE_OPTIONS -Wno-trailing-whitespace)
 endif()
 unset(warn_flags)
 
@@ -79,6 +93,8 @@ add_library(bitcoinqt STATIC EXCLUDE_FROM_ALL
   bitcoingui.h
   bitcoinunits.cpp
   bitcoinunits.h
+  blockview.cpp
+  blockview.h
   clientmodel.cpp
   clientmodel.h
   csvmodelwriter.cpp
@@ -98,7 +114,9 @@ add_library(bitcoinqt STATIC EXCLUDE_FROM_ALL
   $<$<PLATFORM_ID:Darwin>:macos_appnap.h>
   $<$<PLATFORM_ID:Darwin>:macos_appnap.mm>
   modaloverlay.cpp
+  mempoolstats.cpp
   modaloverlay.h
+  netwatch.cpp
   networkstyle.cpp
   networkstyle.h
   notificator.cpp
@@ -107,12 +125,16 @@ add_library(bitcoinqt STATIC EXCLUDE_FROM_ALL
   optionsdialog.h
   optionsmodel.cpp
   optionsmodel.h
+  pairingpage.cpp
+  pairingpage.h
   peertablemodel.cpp
   peertablemodel.h
   peertablesortproxy.cpp
   peertablesortproxy.h
   platformstyle.cpp
   platformstyle.h
+  qrimagewidget.cpp
+  qrimagewidget.h
   qvalidatedlineedit.cpp
   qvalidatedlineedit.h
   qvaluecombobox.cpp
@@ -121,6 +143,8 @@ add_library(bitcoinqt STATIC EXCLUDE_FROM_ALL
   rpcconsole.h
   splashscreen.cpp
   splashscreen.h
+  tonalutils.cpp
+  tonalutils.h
   trafficgraphwidget.cpp
   trafficgraphwidget.h
   utilitydialog.cpp
@@ -129,6 +153,7 @@ add_library(bitcoinqt STATIC EXCLUDE_FROM_ALL
   $<$<PLATFORM_ID:Windows>:winshutdownmonitor.h>
   ${BITCOIN_QRC}
   ${BITCOIN_LOCALE_QRC}
+  ${BITCOIN_FONT_QRC}
 )
 target_compile_definitions(bitcoinqt
   PUBLIC
