@@ -140,6 +140,8 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "sweepprivkeys", 0, "options" },
     { "sweepprivkeys", 0, "privkeys" },
     { "scantxoutset", 1, "scanobjects" },
+    { "dumptxoutset", 2, "format" },
+    { "dumptxoutset", 2, "show_header" },
     { "createmultisig", 0, "nrequired" },
     { "createmultisig", 1, "keys" },
     { "createmultisig", 2, "options" },
