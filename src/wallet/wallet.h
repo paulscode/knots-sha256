@@ -427,6 +427,13 @@ private:
      */
     int m_last_block_processed_height GUARDED_BY(cs_wallet) = -1;
 
+    /**
+     * The following is used to track whether a confirmed transaction is in
+     * a block that background validation hasn't checked yet, or above the
+     * assume utxo snapshot height when background validation hasn't completed.
+     */
+    int m_background_validation_height GUARDED_BY(cs_wallet) = -1;
+
     std::map<OutputType, ScriptPubKeyMan*> m_external_spk_managers;
     std::map<OutputType, ScriptPubKeyMan*> m_internal_spk_managers;
 
@@ -558,6 +565,7 @@ public:
      * referenced in transaction, and might cause assert failures.
      */
     int GetTxDepthInMainChain(const CWalletTx& wtx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    bool IsTxAssumed(const CWalletTx& wtx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     /**
      * @return number of blocks to maturity for this transaction:
@@ -769,7 +777,7 @@ public:
     int64_t m_keypool_size{DEFAULT_KEYPOOL_SIZE};
 
     /** Notify external script when a wallet transaction comes in or is updated (handled by -walletnotify) */
-    std::string m_notify_tx_changed_script;
+    std::vector<std::string> m_notify_tx_changed_scripts;
 
     size_t KeypoolCountExternalKeys() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     bool TopUpKeyPool(unsigned int kpSize = 0);
@@ -866,6 +874,8 @@ public:
      * @note called with lock cs_wallet held.
      */
     btcsignals::signal<void(const Txid& hashTx, ChangeType status)> NotifyTransactionChanged;
+
+    static btcsignals::signal<void(const CTransactionRef& ptxn, const uint256& blockHash)> TransactionAddedToWallet;
 
     /** Show progress e.g. for rescan */
     btcsignals::signal<void (const std::string &title, int nProgress)> ShowProgress;
@@ -1025,6 +1035,12 @@ public:
     void SetLastBlockProcessed(int block_height, uint256 block_hash) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     /** Write the current best block to database */
     void WriteBestBlock() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    /** Height of background validation. Returns -1 if there is no background validation. */
+    int GetBackgroundValidationHeight() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
+    {
+        AssertLockHeld(cs_wallet);
+        return m_background_validation_height;
+    };
 
     //! Connect the signals from ScriptPubKeyMans to the signals in CWallet
     void ConnectScriptPubKeyManNotifiers();

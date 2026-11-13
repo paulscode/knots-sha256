@@ -12,6 +12,7 @@
 #include <common/args.h>
 #include <common/settings.h>
 #include <consensus/amount.h>
+#include <common/pcp.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
 #include <external_signer.h>
@@ -201,7 +202,10 @@ public:
         });
         args().WriteSettingsFile();
     }
-    void mapPort(bool enable) override { StartMapPort(enable); }
+    void mapPort(bool enable) override {
+        g_pcp_warn_for_unauthorized = true;
+        StartMapPort(enable);
+    }
     std::optional<Proxy> getProxy(Network net) override { return GetProxy(net); }
     size_t getNodeCount(ConnectionDirection flags) override
     {
@@ -365,6 +369,7 @@ public:
         req.params = params;
         req.strMethod = command;
         req.URI = uri;
+        req.m_wallet_restriction.clear();
         return ::tableRPC.execute(req);
     }
     std::vector<std::string> listRpcCommands() override { return ::tableRPC.listCommands(); }
@@ -424,6 +429,9 @@ public:
     }
     std::unique_ptr<Handler> handleBannedListChanged(BannedListChangedFn fn) override
     {
+        if (m_context->banman) {
+            m_context->banman->EnsureSweepScheduled();
+        }
         return MakeSignalHandler(::uiInterface.BannedListChanged.connect(fn));
     }
     std::unique_ptr<Handler> handleNotifyBlockTip(NotifyBlockTipFn fn) override
@@ -1081,6 +1089,8 @@ public:
         req.context = &m_node;
         req.URI = std::move(uri);
         req.authUser = std::move(user);
+        // IPC clients (bitcoin -ipcconnect rpc) are trusted like the GUI console: no rpcauth wallet restriction applies
+        req.m_wallet_restriction.clear();
         HTTPStatusCode status;
         return ExecuteHTTPRPC(request, req, status);
     }
