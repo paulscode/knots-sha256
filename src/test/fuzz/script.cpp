@@ -94,6 +94,15 @@ FUZZ_TARGET(script, .init = initialize_script)
     (void)Solver(script, solutions);
 
     {
+        CScriptWitness witness;
+        while (fuzzed_data_provider.ConsumeBool()) {
+            witness.stack.push_back(ConsumeRandomLengthByteVector(fuzzed_data_provider));
+        }
+        (void)script.DatacarrierBytes(fuzzed_data_provider.ConsumeIntegralInRange<size_t>(0, 4),
+                                      witness.stack.empty() ? nullptr : &witness);
+    }
+
+    {
         const std::vector<uint8_t> bytes = ConsumeRandomLengthByteVector(fuzzed_data_provider);
         CompressedScript compressed_script;
         compressed_script.assign(bytes.begin(), bytes.end());
