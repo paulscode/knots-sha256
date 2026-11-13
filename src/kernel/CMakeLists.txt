@@ -53,6 +53,7 @@ add_library(bitcoinkernel
   ../script/sigcache.cpp
   ../script/solver.cpp
   ../signet.cpp
+  ../stats/stats.cpp
   ../streams.cpp
   ../sync.cpp
   ../txdb.cpp
@@ -68,6 +69,7 @@ add_library(bitcoinkernel
   ../util/fs_helpers.cpp
   ../util/hasher.cpp
   ../util/mempressure.cpp
+  ../util/ioprio.cpp
   ../util/moneystr.cpp
   ../util/rbf.cpp
   ../util/signalinterrupt.cpp
@@ -107,6 +109,7 @@ target_compile_definitions(bitcoinkernel
 target_link_libraries(bitcoinkernel
   PRIVATE
     core_interface
+    external_lib_interface
     kernel_warn_interface
     secp256k1_objs
     $<$<PLATFORM_ID:Windows>:bcrypt>
