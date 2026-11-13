@@ -53,6 +53,7 @@ add_library(bitcoinkernel
   ../script/sigcache.cpp
   ../script/solver.cpp
   ../signet.cpp
+  ../stats/stats.cpp
   ../streams.cpp
   ../sync.cpp
   ../txdb.cpp
@@ -67,6 +68,7 @@ add_library(bitcoinkernel
   ../util/fs.cpp
   ../util/fs_helpers.cpp
   ../util/hasher.cpp
+  ../util/mempressure.cpp
   ../util/moneystr.cpp
   ../util/rbf.cpp
   ../util/signalinterrupt.cpp

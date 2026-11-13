@@ -43,6 +43,7 @@
 #include <script/script.h>
 #include <script/sigcache.h>
 #include <signet.h>
+#include <stats/stats.h>
 #include <tinyformat.h>
 #include <txdb.h>
 #include <txmempool.h>
@@ -54,6 +55,7 @@
 #include <util/fs_helpers.h>
 #include <util/hasher.h>
 #include <util/log.h>
+#include <util/mempressure.h>
 #include <util/moneystr.h>
 #include <util/rbf.h>
 #include <util/result.h>
@@ -1421,6 +1423,10 @@ MempoolAcceptResult MemPoolAccept::AcceptSingleTransactionInternal(const CTransa
                  ws.m_vsize - static_cast<int>(m_subpackage.m_conflicting_size));
     }
 
+    // update mempool stats cache
+    const CFeeRate min_fee_rate = std::max(m_pool.GetMinFee(), m_pool.m_opts.min_relay_feerate);
+    CStats::DefaultStats()->addMempoolSample(m_pool.size(), m_pool.DynamicMemoryUsage(), min_fee_rate.GetFeePerK());
+
     return MempoolAcceptResult::Success(std::move(m_subpackage.m_replaced_transactions), ws.m_vsize, ws.m_base_fees,
                                         effective_feerate, single_wtxid);
 }
@@ -2759,8 +2765,15 @@ bool Chainstate::FlushStateToDisk(
         const auto nNow{NodeClock::now()};
         // The cache is large and we're within 10% and 10 MiB of the limit, but we have time now (not in the middle of a block processing).
         bool fCacheLarge = mode == FlushStateMode::PERIODIC && cache_state >= CoinsCacheSizeState::LARGE;
-        // The cache is over the limit, we have to write now.
-        bool fCacheCritical = mode == FlushStateMode::IF_NEEDED && cache_state >= CoinsCacheSizeState::CRITICAL;
+        bool fCacheCritical = false;
+        if (mode == FlushStateMode::IF_NEEDED) {
+            if (cache_state >= CoinsCacheSizeState::CRITICAL) {
+                // The cache is over the limit, we have to write now.
+                fCacheCritical = true;
+            } else if (SystemNeedsMemoryReleased()) {
+                fCacheCritical = true;
+            }
+        }
         // It's been a while since we wrote the block index and chain state to disk. Do this frequently, so we don't need to redownload or reindex after a crash.
         bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow >= m_next_write;
         const auto empty_cache{(mode == FlushStateMode::FORCE_FLUSH) || fCacheLarge || fCacheCritical};
@@ -2995,6 +3008,13 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     if (m_chainman.m_options.signals) {
         m_chainman.m_options.signals->BlockDisconnected(std::move(pblock), pindexDelete);
     }
+
+    if (m_mempool) {
+        // add mempool stats sample
+        const CFeeRate min_fee_rate = std::max(m_mempool->GetMinFee(), m_mempool->m_opts.min_relay_feerate);
+        CStats::DefaultStats()->addMempoolSample(m_mempool->size(), m_mempool->DynamicMemoryUsage(), min_fee_rate.GetFeePerK());
+    }
+
     return true;
 }
 
@@ -3090,6 +3110,12 @@ bool Chainstate::ConnectTip(
         m_chainman.m_options.signals->MempoolTransactionsRemovedForBlock(block_to_connect, std::move(txs_removed_for_block), pindexNew->nHeight);
     }
     UpdateTip(pindexNew);
+
+    if (m_mempool) {
+        // add mempool stats sample
+        const CFeeRate min_fee_rate = std::max(m_mempool->GetMinFee(), m_mempool->m_opts.min_relay_feerate);
+        CStats::DefaultStats()->addMempoolSample(m_mempool->size(), m_mempool->DynamicMemoryUsage(), min_fee_rate.GetFeePerK());
+    }
 
     const auto time_6{SteadyClock::now()};
     m_chainman.time_post_connect += time_6 - time_5;

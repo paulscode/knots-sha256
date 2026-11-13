@@ -17,6 +17,7 @@
 #include <clientversion.h>
 #include <common/args.h>
 #include <common/messages.h>
+#include <common/pcp.h>
 #include <common/system.h>
 #include <compat/compat.h>
 #include <consensus/params.h>
@@ -78,6 +79,7 @@
 #include <rpc/util.h>
 #include <scheduler.h>
 #include <script/sigcache.h>
+#include <stats/stats.h>
 #include <sync.h>
 #include <tinyformat.h>
 #include <torcontrol.h>
@@ -92,7 +94,9 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
+#include <util/mempressure.h>
 #include <util/moneystr.h>
+#include <util/overflow.h>
 #include <util/result.h>
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
@@ -172,6 +176,9 @@ static constexpr bool DEFAULT_PROXYRANDOMIZE{true};
 static constexpr bool DEFAULT_REST_ENABLE{false};
 static constexpr bool DEFAULT_I2P_ACCEPT_INCOMING{true};
 static constexpr bool DEFAULT_STOPAFTERBLOCKIMPORT{false};
+
+//! Check if initial sync is done with no change in block height or queued downloads every 30s
+static constexpr auto SYNC_CHECK_INTERVAL{30s};
 
 #ifdef WIN32
 // Win32 LevelDB doesn't use filedescriptors, and the ones used for
@@ -333,6 +340,14 @@ void Shutdown(NodeContext& node)
             client.reset();
         }
     }
+    for (auto& client : node.chain_clients) {
+        try {
+            client->stop();
+        } catch (const ipc::Exception& e) {
+            LogDebug(BCLog::IPC, "Chain client did not disconnect cleanly: %s", e.what());
+            client.reset();
+        }
+    }
     StopMapPort();
 
     // Because these depend on each-other, we make sure that neither can be
@@ -474,6 +489,8 @@ static void registerSignalHandler(int signal, void(*handler)(int))
 }
 #endif
 
+static constexpr std::string_view BIP14_EXAMPLE_UA{"/Name:Version/Name:Version/.../"};
+
 void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 {
     SetupHelpOptions(argsman);
@@ -522,9 +539,15 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-datadir=<dir>", "Specify data directory", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbbatchsize", strprintf("Maximum database write batch size in bytes (default: %u)", DEFAULT_DB_CACHE_BATCH), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbcache=<n>", strprintf("Maximum database cache size <n> MiB (minimum %d, default: %d). Make sure you have enough RAM. In addition, unused memory allocated to the mempool is shared with this cache (see -maxmempool).", MIN_DBCACHE_BYTES / 1_MiB, node::GetDefaultDBCache() / 1_MiB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-dbfilesize",
+                   strprintf("Target size of files within databases, in MiB (%u to %u, default: %u).",
+                             1, 1024,
+                             DEFAULT_DB_FILE_SIZE),
+                   ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
     argsman.AddArg("-includeconf=<file>", "Specify additional configuration file, relative to the -datadir path (only useable from configuration file, not command line)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-allowignoredconf", strprintf("For backwards compatibility, treat an unused %s file in the datadir as a warning, not an error.", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-loadblock=<file>", "Imports blocks from an external file on startup. Obfuscated blocks are not supported.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-lowmem=<n>", strprintf("If system available memory falls below <n> MiB, flush caches (0 to disable, default: %s)", g_low_memory_threshold / 1024 / 1024), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-maxmempool=<n>", strprintf("Keep the transaction memory pool below <n> megabytes (default: %u)", DEFAULT_MAX_MEMPOOL_SIZE_MB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mempoolexpiry=<n>", strprintf("Do not keep transactions in the mempool longer than <n> hours (default: %u)", DEFAULT_MEMPOOL_EXPIRY_HOURS), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-minimumchainwork=<hex>", strprintf("Minimum work assumed to exist on a valid chain in hex (default: %s, testnet3: %s, testnet4: %s, signet: %s)", defaultChainParams->GetConsensus().nMinimumChainWork.GetHex(), testnetChainParams->GetConsensus().nMinimumChainWork.GetHex(), testnet4ChainParams->GetConsensus().nMinimumChainWork.GetHex(), signetChainParams->GetConsensus().nMinimumChainWork.GetHex()), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
@@ -541,7 +564,10 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-prune=<n>", strprintf("Reduce storage requirements by enabling pruning (deleting) of old blocks. This allows the pruneblockchain RPC to be called to delete specific blocks and enables automatic pruning of old blocks if a target size in MiB is provided. This mode is incompatible with -txindex. "
             "Warning: Reverting this setting requires re-downloading the entire blockchain. Wallets and indexes should be loaded at startup and kept active while pruning is enabled so they stay synchronized before old block data is deleted; wallets or indexes that fall behind pruned data may require a reindex. "
             "(default: 0 = disable pruning blocks, 1 = allow manual pruning via RPC, >=%u = automatically prune block files to stay under the specified target size in MiB)", MIN_DISK_SPACE_FOR_BLOCK_FILES / 1_MiB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-reindex", "If enabled, wipe chain state and block index, and rebuild them from blk*.dat files on disk. Also wipe and rebuild other optional indexes that are active. If an assumeutxo snapshot was loaded, its chainstate will be wiped as well. The snapshot can then be reloaded via RPC.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-pruneduringinit=<n>", "Temporarily adjusts the -prune setting until initial sync completes."
+        " Ignored if pruning is disabled."
+        " (default: -1 = same value as -prune)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-reindex", "If enabled, wipe chain state and block index, and rebuild them from blk*.dat files on disk. Also wipe and rebuild other optional indexes that are active. If an assumeutxo snapshot was loaded, its chainstate will be wiped as well. The snapshot can then be reloaded via RPC. Setting this to auto automatically reindexes the block database if it is corrupted.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-reindex-chainstate", "If enabled, wipe chain state, and rebuild it from blk*.dat files on disk. If an assumeutxo snapshot was loaded, its chainstate will be wiped as well. The snapshot can then be reloaded via RPC.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-settings=<file>", strprintf("Specify path to dynamic settings data file. Can be disabled with -nosettings. File is written at runtime and not meant to be edited by users (use %s instead for custom settings). Relative paths will be prefixed by datadir location. (default: %s)", BITCOIN_CONF_FILENAME, BITCOIN_SETTINGS_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #if HAVE_SYSTEM
@@ -623,6 +649,11 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-timeout=<n>", strprintf("Specify socket connection timeout in milliseconds. If an initial attempt to connect is unsuccessful after this amount of time, drop it (minimum: 1, default: %d)", DEFAULT_CONNECT_TIMEOUT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-peertimeout=<n>", strprintf("Specify a p2p connection timeout delay in seconds. After connecting to a peer, wait this amount of time before considering disconnection based on inactivity (minimum: 1, default: %d)", DEFAULT_PEER_CONNECT_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-torcontrol=<ip>:<port>", strprintf("Tor control host and port to use if onion listening enabled (default: %s). If no port is specified, the default port of %i will be used.", DEFAULT_TOR_CONTROL, DEFAULT_TOR_CONTROL_PORT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+#ifdef ENABLE_TOR_SUBPROCESS
+    argsman.AddArg("-torexecute=<command>", strprintf("Tor command to use if not already running (default: %s)", DEFAULT_TOR_EXECUTE), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+#else
+    hidden_args.emplace_back("-torexecute=<command>");
+#endif
     argsman.AddArg("-torpassword=<pass>", "Tor control port password (default: empty)", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
     argsman.AddArg("-natpmp", strprintf("Use PCP or NAT-PMP to map the listening port (default: %u)", DEFAULT_NATPMP), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-whitebind=<[permissions@]addr>", "Bind to the given address and add permission flags to the peers connecting to it. "
@@ -632,7 +663,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-whitelist=<[permissions@]IP address or network>", "Add permission flags to the peers using the given IP address (e.g. 1.2.3.4) or "
         "CIDR-notated network (e.g. 1.2.3.0/24). Uses the same permissions as "
         "-whitebind. "
-        "Additional flags \"in\" and \"out\" control whether permissions apply to incoming connections and/or manual (default: incoming only). "
+        "Additional flags \"in\" and \"out\" control whether permissions apply to incoming connections and/or outgoing (default: incoming only). "
         "Can be specified multiple times.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
 
     g_wallet_init_interface.AddWalletOptions(argsman);
@@ -640,24 +671,32 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 #ifdef ENABLE_ZMQ
     argsman.AddArg("-zmqpubhashblock=<address>", "Enable publish hash block in <address>", ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubhashtx=<address>", "Enable publish hash transaction in <address>", ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
+    argsman.AddArg("-zmqpubhashwallettx=<address>", "Enable publish hash wallet transaction in <address>", ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubrawblock=<address>", "Enable publish raw block in <address>", ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubrawtx=<address>", "Enable publish raw transaction in <address>", ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
+    argsman.AddArg("-zmqpubrawwallettx=<address>", "Enable publish raw wallet transaction in <address>", ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubsequence=<address>", "Enable publish hash block and tx sequence in <address>", ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubhashblockhwm=<n>", strprintf("Set publish hash block outbound message high water mark (default: %d)", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM), ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubhashtxhwm=<n>", strprintf("Set publish hash transaction outbound message high water mark (default: %d)", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM), ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
+    argsman.AddArg("-zmqpubhashwallettxhwm=<n>", strprintf("Set publish hash wallet transaction outbound message high water mark (default: %d)", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM), ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubrawblockhwm=<n>", strprintf("Set publish raw block outbound message high water mark (default: %d)", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM), ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubrawtxhwm=<n>", strprintf("Set publish raw transaction outbound message high water mark (default: %d)", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM), ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
+    argsman.AddArg("-zmqpubrawwallettxhwm=<n>", strprintf("Set publish raw wallet transaction outbound message high water mark (default: %d)", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM), ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
     argsman.AddArg("-zmqpubsequencehwm=<n>", strprintf("Set publish hash sequence message high water mark (default: %d)", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM), ArgsManager::ALLOW_ANY, OptionsCategory::ZMQ);
 #else
     hidden_args.emplace_back("-zmqpubhashblock=<address>");
     hidden_args.emplace_back("-zmqpubhashtx=<address>");
+    hidden_args.emplace_back("-zmqpubhashwallettx=<address>");
     hidden_args.emplace_back("-zmqpubrawblock=<address>");
     hidden_args.emplace_back("-zmqpubrawtx=<address>");
+    hidden_args.emplace_back("-zmqpubrawwallettx=<address>");
     hidden_args.emplace_back("-zmqpubsequence=<n>");
     hidden_args.emplace_back("-zmqpubhashblockhwm=<n>");
     hidden_args.emplace_back("-zmqpubhashtxhwm=<n>");
+    hidden_args.emplace_back("-zmqpubhashwallettxhwm=<n>");
     hidden_args.emplace_back("-zmqpubrawblockhwm=<n>");
     hidden_args.emplace_back("-zmqpubrawtxhwm=<n>");
+    hidden_args.emplace_back("-zmqpubrawwallettxhwm=<n>");
     hidden_args.emplace_back("-zmqpubsequencehwm=<n>");
 #endif
 
@@ -689,7 +728,9 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                              Ticks<std::chrono::seconds>(DEFAULT_MAX_TIP_AGE)),
                    ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-printpriority", strprintf("Log transaction fee rate in %s/kvB when mining blocks (default: %u)", CURRENCY_UNIT, DEFAULT_PRINT_MODIFIED_FEE), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
-    argsman.AddArg("-uacomment=<cmt>", "Append comment to the user agent string", ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-uaappend=<uafragment>", "Append literal string to the user agent string (should only be used for software embedding)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-uacomment=<cmt>", "Append comment to the user agent string", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-uaspoof=<ua>", strprintf("Replace entire user agent string with custom identifier (should be formatted '%s' as specified in BIP 14)", BIP14_EXAMPLE_UA), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
 
     SetupChainParamsBaseOptions(argsman);
 
@@ -733,7 +774,15 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 
     argsman.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid values for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). RFC4193 is allowed only if -cjdnsreachable=0. This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
-    argsman.AddArg("-rpcauth=<userpw>", "Username and HMAC-SHA-256 hashed password for JSON-RPC connections. The field <userpw> comes in the format: <USERNAME>:<SALT>$<HASH>. A canonical python script is included in share/rpcauth. The client then connects normally using the rpcuser=<USERNAME>/rpcpassword=<PASSWORD> pair of arguments. This option can be specified multiple times", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::RPC);
+    argsman.AddArg("-rpcauth=<userpw>[:wallet]",
+                   "Username and HMAC-SHA-256 hashed password for JSON-RPC connections. "
+                   "The field <userpw> comes in the format: <USERNAME>:<SALT>$<HASH>. "
+                   "A canonical python script is included in share/rpcauth. "
+                   "The client then connects normally using the rpcuser=<USERNAME>/rpcpassword=<PASSWORD> pair of arguments. "
+                   "A single wallet name can also be specified to restrict access to only that wallet, or '-' to deny all wallet access. "
+                   "This option can be specified multiple times",
+                   ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::RPC);
+    argsman.AddArg("-rpcauthfile=<userpw>", "A file with a single lines with same format as rpcauth. This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcbind=<addr>[:port]", "Bind to given address to listen for JSON-RPC connections. Do not expose the RPC server to untrusted networks such as the public internet! This option is ignored unless -rpcallowip is also passed. Port is optional and overrides -rpcport. Use [host]:port notation for IPv6. This option can be specified multiple times (default: 127.0.0.1 and ::1 i.e., localhost)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::RPC);
     argsman.AddArg("-rpcdoccheck", strprintf("Throw a non-fatal error at runtime if the documentation for an RPC is incorrect (default: %u)", DEFAULT_RPC_DOC_CHECK), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::RPC);
     argsman.AddArg("-rpccookiefile=<loc>", "Location of the auth cookie. Relative paths will be prefixed by a net-specific datadir location. (default: data dir)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -760,6 +809,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     hidden_args.emplace_back("-daemonwait");
 #endif
 
+    CStats::AddStatsOptions();
+
     // Add the hidden options
     argsman.AddHiddenArgs(hidden_args);
 }
@@ -767,9 +818,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 #if HAVE_SYSTEM
 static void StartupNotify(const ArgsManager& args)
 {
-    std::string cmd = args.GetArg("-startupnotify", "");
-    if (!cmd.empty()) {
-        std::thread t(runCommand, cmd);
+    for (const std::string& command : args.GetArgs("-startupnotify")) {
+        std::thread t(runCommand, command);
         t.detach(); // thread runs free
     }
 }
@@ -793,6 +843,9 @@ static bool AppInitServers(NodeContext& node)
 // Parameter interaction based on rules
 void InitParameterInteraction(ArgsManager& args)
 {
+    // Before any SoftSetArg so we get the actual user-set value
+    g_pcp_warn_for_unauthorized = args.GetBoolArg("-natpmp", false);
+
     // when specifying an explicit binding address, you want to listen on it
     // even when -connect or -proxy is specified
     if (!args.GetArgs("-bind").empty()) {
@@ -1224,6 +1277,8 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         }
     }
 
+    if (!CStats::parameterInteraction()) return false;
+
     return true;
 }
 
@@ -1276,6 +1331,46 @@ bool AppInitLockDirectories()
     return true;
 }
 
+/**
+ * Once initial block sync is finished and no change in block height or queued downloads,
+ * sync utxo state to protect against data loss
+ */
+static void SyncCoinsTipAfterChainSync(const NodeContext& node)
+{
+    LOCK(node.chainman->GetMutex());
+    if (node.chainman->IsInitialBlockDownload()) {
+        LogDebug(BCLog::COINDB, "Node is still in IBD, rescheduling post-IBD chainstate disk sync...\n");
+        node.scheduler->scheduleFromNow([&node] {
+            SyncCoinsTipAfterChainSync(node);
+        }, SYNC_CHECK_INTERVAL);
+        return;
+    }
+
+    static auto last_chain_height{-1};
+    const auto current_height{node.chainman->ActiveHeight()};
+    if (last_chain_height != current_height) {
+        LogDebug(BCLog::COINDB, "Chain height updated since last check, rescheduling post-IBD chainstate disk sync...\n");
+        last_chain_height = current_height;
+        node.scheduler->scheduleFromNow([&node] {
+            SyncCoinsTipAfterChainSync(node);
+        }, SYNC_CHECK_INTERVAL);
+        return;
+    }
+
+    if (node.peerman->GetNumberOfPeersWithValidatedDownloads() > 0) {
+        LogDebug(BCLog::COINDB, "Still downloading blocks from peers, rescheduling post-IBD chainstate disk sync...\n");
+        node.scheduler->scheduleFromNow([&node] {
+            SyncCoinsTipAfterChainSync(node);
+        }, SYNC_CHECK_INTERVAL);
+        return;
+    }
+
+    LogDebug(BCLog::COINDB, "Finished syncing to tip, syncing chainstate to disk\n");
+    // Through FlushStateToDisk (FORCE_SYNC): writes the block index before the coins, so a crash right after
+    // cannot leave a chainstate whose best block is missing from the block index (ReplayBlocks: unknown block)
+    node.chainman->ActiveChainstate().ForceFlushStateToDisk(/*wipe_cache=*/false);
+}
+
 bool AppInitInterfaces(NodeContext& node)
 {
     node.chain = interfaces::MakeChain(node);
@@ -1312,6 +1407,8 @@ bool CheckHostPortOptions(const ArgsManager& args) {
         {"-zmqpubrawblock",  true,                false},
         {"-zmqpubrawtx",     true,                false},
         {"-zmqpubsequence",  true,                false},
+        {"-zmqpubhashwallettx", true,             false},
+        {"-zmqpubrawwallettx",  true,             false},
     }) {
         for (const std::string& param_value : args.GetArgs(param_name)) {
             const std::string param_value_hostport{
@@ -1401,6 +1498,14 @@ static ChainstateLoadResult InitAndLoadChainstate(
     LogInfo("* Using %.1f MiB for in-memory UTXO set (plus up to %.1f MiB of unused mempool space)",
             cache_sizes.coins / double(1_MiB),
             mempool_opts.max_size_bytes / double(1_MiB));
+
+    if (gArgs.IsArgSet("-lowmem")) {
+        g_low_memory_threshold = std::max(int64_t{0}, gArgs.GetIntArg("-lowmem", 0 /* not used */)) * 1024 * 1024;
+    }
+    if (g_low_memory_threshold > 0) {
+        LogInfo("* Flushing caches if available system memory drops below %s MiB", g_low_memory_threshold / 1024 / 1024);
+    }
+
     ChainstateManager::Options chainman_opts{
         .chainparams = chainparams,
         .datadir = args.GetDataDirNet(),
@@ -1736,6 +1841,27 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         uacomments.push_back(cmt);
     }
     strSubVersion = FormatSubVersion(UA_NAME, CLIENT_VERSION, uacomments);
+    if (gArgs.IsArgSet("-uaspoof")) {
+        std::string uaspoof_val = gArgs.GetArg("-uaspoof", "");
+        if (uaspoof_val == "0" || uaspoof_val.empty()) {
+            // explicitly disabled, do nothing
+        } else if (uaspoof_val == "1") {
+            // enabled, but not specified: just use base name for now
+            // TODO
+        } else {
+            if (uaspoof_val.at(0) != '/') {
+                InitWarning(strprintf(_("Specified %s option is not in BIP 14 format. User-agent strings should look like '%s'."), "uaspoof", BIP14_EXAMPLE_UA));
+            }
+            if (!uacomments.empty()) {
+                InitWarning(_("Both uaspoof and uacomment(s) are specified, but uacomment(s) are ignored when uaspoof is in use."));
+            }
+            strSubVersion = uaspoof_val;
+        }
+    }
+    for (auto append : gArgs.GetArgs("-uaappend")) {
+        if (append.back() != '/') append += '/';
+        strSubVersion += append;
+    }
     if (strSubVersion.size() > MAX_SUBVERSION_LENGTH) {
         return InitError(strprintf(_("Total length of network version string (%i) exceeds maximum length (%i). Reduce the number or size of uacomments."),
             strSubVersion.size(), MAX_SUBVERSION_LENGTH));
@@ -1916,12 +2042,20 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         kernel_cache_sizes,
         args);
     if (status == ChainstateLoadStatus::FAILURE && !do_reindex && !ShutdownRequested(node)) {
+        // If reindex=auto, directly start the reindex
+        bool fAutoReindex = (args.GetArg("-reindex", "0") == "auto");
+        bool do_retry;
+        if (!fAutoReindex) {
         // suggest a reindex
-        bool do_retry{HasTestOption(args, "reindex_after_failure_noninteractive_yes") ||
+            do_retry = HasTestOption(args, "reindex_after_failure_noninteractive_yes") ||
             uiInterface.ThreadSafeQuestion(
             error + Untranslated(".\n\n") + _("Do you want to rebuild the databases now?"),
             error.original + ".\nPlease restart with -reindex or -reindex-chainstate to recover.",
-            CClientUIInterface::MSG_ERROR | CClientUIInterface::BTN_ABORT)};
+            CClientUIInterface::MSG_ERROR | CClientUIInterface::BTN_ABORT);
+        } else {
+            LogInfo("Automatically running a reindex.");
+            do_retry = true;
+        }
         if (!do_retry) {
             return false;
         }
@@ -1954,9 +2088,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // as they would never get updated.
     if (!peerman_opts.ignore_incoming_txs) {
         bool read_stale_estimates = args.GetBoolArg("-acceptstalefeeestimates", DEFAULT_ACCEPT_STALE_FEE_ESTIMATES);
-        if (read_stale_estimates && (chainparams.GetChainType() != ChainType::REGTEST)) {
-            return InitError(strprintf(_("acceptstalefeeestimates is not supported on %s chain."), chainparams.GetChainTypeString()));
-        }
         MaybeMigrateLegacyFeeEstimates(args);
         node.fee_estimator_man = std::make_unique<FeeRateEstimatorManager>(BlockPolicyFeeEstPath(args), read_stale_estimates, MempoolPolicyEstimatorPath(args), *Assert(node.mempool), chainman);
 
@@ -2044,7 +2175,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     // On first startup, warn on low block storage space
     if (!do_reindex && !do_reindex_chainstate && chain_active_height <= 1) {
-        uint64_t assumed_chain_bytes{chainparams.AssumedBlockchainSize() * 1_GiB};
+        uint64_t assumed_chain_bytes{chainparams.AssumedBlockchainSize() * 1'000'000'000};
         uint64_t additional_bytes_needed{
             chainman.m_blockman.IsPruneMode() ?
                 std::min(chainman.m_blockman.GetPruneTarget(), assumed_chain_bytes) :
@@ -2056,7 +2187,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                     "Approximately %u GB of data will be stored in this directory."
                 ),
                 fs::quoted(fs::PathToString(args.GetBlocksDirPath())),
-                chainparams.AssumedBlockchainSize()
+                CeilDiv(additional_bytes_needed, uint64_t{1'000'000'000})
             ));
         }
     }
@@ -2082,14 +2213,17 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 #endif
 
 #if HAVE_SYSTEM
-    const std::string block_notify = args.GetArg("-blocknotify", "");
-    if (!block_notify.empty()) {
-        uiInterface.NotifyBlockTip.connect([block_notify](SynchronizationState sync_state, const CBlockIndex& block, double /* verification_progress */) {
+    if (args.IsArgSet("-blocknotify")) {
+        auto blocknotify_commands = args.GetArgs("-blocknotify");
+        uiInterface.NotifyBlockTip.connect([blocknotify_commands](SynchronizationState sync_state, const CBlockIndex& block, double /* verification_progress */) {
             if (sync_state != SynchronizationState::POST_INIT) return;
-            std::string command = block_notify;
-            ReplaceAll(command, "%s", block.GetBlockHash().GetHex());
-            std::thread t(runCommand, command);
-            t.detach(); // thread runs free
+            const std::string blockhash_hex = block.GetBlockHash().GetHex();
+            for (std::string command : blocknotify_commands) {
+                ReplaceAll(command, "%s", blockhash_hex);
+
+                std::thread t(runCommand, command);
+                t.detach(); // thread runs free
+            }
         });
     }
 #endif
@@ -2248,10 +2382,13 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         return InitError(ResolveErrMsg("bind", bind_arg));
     }
 
+    NetPermissionFlags all_permission_flags{NetPermissionFlags::None};
+
     for (const std::string& strBind : args.GetArgs("-whitebind")) {
         NetWhitebindPermissions whitebind;
         bilingual_str error;
         if (!NetWhitebindPermissions::TryParse(strBind, whitebind, error)) return InitError(error);
+        NetPermissions::AddFlag(all_permission_flags, whitebind.m_flags);
         connOptions.vWhiteBinds.push_back(whitebind);
     }
 
@@ -2268,23 +2405,47 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         }
     }
 
+    connOptions.listenonion = args.GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION);
+
     CService onion_service_target;
     if (!connOptions.onion_binds.empty()) {
         onion_service_target = connOptions.onion_binds.front();
     } else if (!connOptions.vBinds.empty()) {
         onion_service_target = connOptions.vBinds.front();
+        if (connOptions.listenonion) {
+            std::string alternate_connections{"clearnet"}, only_from_localhost;
+            if (onion_service_target.IsBindAny()) {
+                only_from_localhost = " from localhost";
+            } else if (onion_service_target.IsLocal()) {
+                alternate_connections = "local";
+            }
+            InitWarning(strprintf(_("You are using a common listening port (%s) for both Tor and %s connections. All connections to this port%s will be assumed to be Tor connections, and will be denied any whitelist permissions. If this is not your intent, setup a separate -bind=<addr>[:<port>]=onion configuration, or set -listenonion=0."),
+                                  onion_service_target.ToStringAddrPort(),
+                                  alternate_connections,
+                                  only_from_localhost));
+        }
     } else {
         onion_service_target = DefaultOnionServiceTarget(default_bind_port_onion);
         connOptions.onion_binds.push_back(onion_service_target);
     }
 
-    if (listenonion) {
+    if (connOptions.listenonion) {
         if (connOptions.onion_binds.size() > 1) {
             InitWarning(strprintf(_("More than one onion bind address is provided. Using %s "
                                     "for the automatically created Tor onion service."),
                                   onion_service_target.ToStringAddrPort()));
         }
-        node.tor_controller = std::make_unique<TorController>(gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target);
+        if (onion_service_target.IsBindAny()) {
+            CNetAddr loopback_addr = onion_service_target;
+            // NOTE: GetNetwork is not_publicly_routable here
+            if (onion_service_target.ToStringAddr() == "0.0.0.0") {
+                loopback_addr = LookupHost("127.0.0.1", /*fAllowLookup=*/false).value();
+            } else {
+                loopback_addr = LookupHost("[::1]", /*fAllowLookup=*/false).value();
+            }
+            onion_service_target.SetIP(loopback_addr);
+        }
+        node.tor_controller = std::make_unique<TorController>(gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target, TorExecuteCommand(gArgs));
     }
 
     bool should_discover = connOptions.bind_on_any;
@@ -2317,11 +2478,18 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         ConnectionDirection connection_direction;
         bilingual_str error;
         if (!NetWhitelistPermissions::TryParse(net, subnet, connection_direction, error)) return InitError(error);
+        NetPermissions::AddFlag(all_permission_flags, subnet.m_flags);
         if (connection_direction & ConnectionDirection::In) {
             connOptions.vWhitelistedRangeIncoming.push_back(subnet);
         }
         if (connection_direction & ConnectionDirection::Out) {
             connOptions.vWhitelistedRangeOutgoing.push_back(subnet);
+        }
+    }
+
+    if (NetPermissions::HasFlag(all_permission_flags, NetPermissionFlags::BlockFilters_Explicit)) {
+        if (g_enabled_filter_types.count(BlockFilterType::BASIC) != 1) {
+            return InitError(_("Cannot grant blockfilters permission without -blockfilterindex."));
         }
     }
 
@@ -2419,11 +2587,19 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         banman->DumpBanlist();
     }, DUMP_BANS_INTERVAL);
 
+    banman->SetScheduler(scheduler);
+
     if (node.peerman) node.peerman->StartScheduledTasks(scheduler);
 
 #if HAVE_SYSTEM
     StartupNotify(args);
 #endif
+
+    if (node.chainman->IsInitialBlockDownload()) {
+        node.scheduler->scheduleFromNow([&node] {
+            SyncCoinsTipAfterChainSync(node);
+        }, SYNC_CHECK_INTERVAL);
+    }
 
     return true;
 }
