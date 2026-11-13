@@ -12,6 +12,7 @@
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <common/args.h>
 #include <common/bloom.h>
 #include <consensus/amount.h>
 #include <consensus/params.h>
@@ -613,6 +614,7 @@ public:
     void UnitTestMisbehaving(NodeId peer_id) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex) { Misbehaving(*Assert(GetPeerRef(peer_id)), ""); };
     void UpdateLastBlockAnnounceTime(NodeId node, int64_t time_in_seconds) override;
     ServiceFlags GetDesirableServiceFlags(ServiceFlags services) const override;
+    int GetNumberOfPeersWithValidatedDownloads() const override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 private:
     void ProcessMessage(Peer& peer, CNode& pfrom, const std::string& msg_type, DataStream& vRecv, NodeClock::time_point time_received,
@@ -1713,6 +1715,9 @@ void PeerManagerImpl::InitializeNode(const CNode& node, ServiceFlags our_service
     if (NetPermissions::HasFlag(node.m_permission_flags, NetPermissionFlags::BloomFilter)) {
         our_services = static_cast<ServiceFlags>(our_services | NODE_BLOOM);
     }
+    if (NetPermissions::HasFlag(node.m_permission_flags, NetPermissionFlags::BlockFilters)) {
+        our_services = static_cast<ServiceFlags>(our_services | NODE_COMPACT_FILTERS);
+    }
 
     PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn());
     {
@@ -2002,6 +2007,12 @@ std::vector<CTransactionRef> PeerManagerImpl::AbortPrivateBroadcast(const uint25
     m_connman.m_private_broadcast.NumToOpenSub(connections_cancelled);
 
     return removed_txs;
+}
+
+int PeerManagerImpl::GetNumberOfPeersWithValidatedDownloads() const
+{
+    AssertLockHeld(m_chainman.GetMutex());
+    return m_peers_downloading_from;
 }
 
 void PeerManagerImpl::AddToCompactExtraTransactions(const CTransactionRef& tx)
@@ -3901,6 +3912,13 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (pfrom.IsInboundConn() && !m_connman.CheckIncomingNonce(nNonce))
         {
             LogInfo("connected to self at %s, disconnecting\n", pfrom.addr.ToStringAddrPort());
+            pfrom.fDisconnect = true;
+            return;
+        }
+
+        const bool is_v1transport = pfrom.m_transport->GetInfo().transport_type == TransportProtocolType::V1;
+        if (pfrom.IsInboundConn() && is_v1transport && m_connman.RequiresV2Peer(pfrom.ConnectedThroughNetwork())) {
+            LogDebug(BCLog::NET, "v1 connection from a clearnet peer not allowed (-v2onlyclearnet), %s", pfrom.DisconnectMsg(fLogIPs));
             pfrom.fDisconnect = true;
             return;
         }
@@ -5839,6 +5857,7 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
 {
     if (m_opts.ignore_incoming_txs) return;
     if (pto.GetCommonVersion() < FEEFILTER_VERSION) return;
+    if (!gArgs.GetBoolArg("-feefilter", DEFAULT_FEEFILTER)) return;
     // peers with the forcerelay permission should not filter txs to us
     if (pto.HasPermission(NetPermissionFlags::ForceRelay)) return;
     // Don't send feefilter messages to outbound block-relay-only peers since they should never announce

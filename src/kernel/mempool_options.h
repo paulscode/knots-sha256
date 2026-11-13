@@ -26,6 +26,10 @@ inline constexpr unsigned int DEFAULT_MAX_MEMPOOL_SIZE_MB{300};
 inline constexpr unsigned int DEFAULT_BLOCKSONLY_MAX_MEMPOOL_SIZE_MB{5};
 /** Default for -mempoolexpiry, expiration time for mempool transactions in hours */
 inline constexpr unsigned int DEFAULT_MEMPOOL_EXPIRY_HOURS{336};
+/** Default for -minrelaycoinblocks */
+inline constexpr uint64_t DEFAULT_MINRELAYCOINBLOCKS{0};
+/** Default for -minrelaymaturity */
+inline constexpr int DEFAULT_MINRELAYMATURITY{0};
 /** Default for -mempoolreplacement; must update docs in init.cpp manually */
 inline constexpr RBFPolicy DEFAULT_MEMPOOL_RBF_POLICY{RBFPolicy::Always};
 /** Default for -mempooltruc; must update docs in init.cpp manually */
@@ -56,6 +60,8 @@ struct MemPoolOptions {
     int check_ratio{0};
     int64_t max_size_bytes{DEFAULT_MAX_MEMPOOL_SIZE_MB * 1'000'000};
     std::chrono::seconds expiry{std::chrono::hours{DEFAULT_MEMPOOL_EXPIRY_HOURS}};
+    uint64_t minrelaycoinblocks{DEFAULT_MINRELAYCOINBLOCKS};
+    int minrelaymaturity{DEFAULT_MINRELAYMATURITY};
     CFeeRate incremental_relay_feerate{DEFAULT_INCREMENTAL_RELAY_FEE};
     /** A fee rate smaller than this is considered zero fee (for relaying, mining and transaction creation) */
     CFeeRate min_relay_feerate{DEFAULT_MIN_RELAY_TX_FEE};
@@ -75,13 +81,21 @@ struct MemPoolOptions {
      */
     std::optional<unsigned> max_datacarrier_bytes{DEFAULT_ACCEPT_DATACARRIER ? std::optional{MAX_OP_RETURN_RELAY} : std::nullopt};
     bool datacarrier_fullcount{DEFAULT_DATACARRIER_FULLCOUNT};
+    bool permitbaredatacarrier{DEFAULT_PERMITBAREDATACARRIER};
+    bool datacarrier_multiple{DEFAULT_DATACARRIER_MULTIPLE};
+    bool permitbareanchor{DEFAULT_PERMITBAREANCHOR};
     bool permit_bare_pubkey{DEFAULT_PERMIT_BAREPUBKEY};
     bool permit_bare_multisig{DEFAULT_PERMIT_BAREMULTISIG};
+    bool reject_parasites{DEFAULT_REJECT_PARASITES};
+    bool reject_tokens{DEFAULT_REJECT_TOKENS};
     bool accept_non_std_datacarrier{DEFAULT_ACCEPT_NON_STD_DATACARRIER};
     bool require_standard{true};
     bool acceptunknownwitness{DEFAULT_ACCEPTUNKNOWNWITNESS};
     RBFPolicy rbf_policy{DEFAULT_MEMPOOL_RBF_POLICY};
     TRUCPolicy truc_policy{DEFAULT_MEMPOOL_TRUC_POLICY};
+    bool permitephemeral_anchor{DEFAULT_PERMITEPHEMERAL_ANCHOR};
+    bool permitephemeral_send{DEFAULT_PERMITEPHEMERAL_SEND};
+    bool permitephemeral_dust{DEFAULT_PERMITEPHEMERAL_DUST};
     bool persist_v1_dat{DEFAULT_PERSIST_V1_DAT};
     MemPoolLimits limits{};
 

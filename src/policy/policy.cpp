@@ -13,6 +13,7 @@
 #include <consensus/validation.h>
 #include <kernel/mempool_options.h>
 #include <policy/feerate.h>
+#include <policy/settings.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
 #include <script/script.h>
@@ -26,6 +27,8 @@
 #include <limits>
 #include <utility>
 #include <vector>
+
+unsigned int g_script_size_policy_limit{DEFAULT_SCRIPT_SIZE_POLICY_LIMIT};
 
 CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
 {
@@ -136,6 +139,10 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
         MaybeReject("tx-size");
     }
 
+    if (tx.nLockTime == 21 && opts.reject_parasites) {
+        MaybeReject("parasite-cat21");
+    }
+
     for (const CTxIn& txin : tx.vin)
     {
         // Biggest 'standard' txin involving only keys is a 15-of-15 P2SH
@@ -146,7 +153,7 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
         // some minor future-proofing. That's also enough to spend a
         // 20-of-20 CHECKMULTISIG scriptPubKey, though such a scriptPubKey
         // is not considered standard.
-        if (txin.scriptSig.size() > MAX_STANDARD_SCRIPTSIG_SIZE) {
+        if (txin.scriptSig.size() > std::min(MAX_STANDARD_SCRIPTSIG_SIZE, g_script_size_policy_limit)) {
             MaybeReject("scriptsig-size");
         }
         if (!txin.scriptSig.IsPushOnly()) {
@@ -155,8 +162,17 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
     }
 
     unsigned int datacarrier_bytes_left = opts.max_datacarrier_bytes.value_or(0);
+    unsigned int nDataOut = 0;
+    unsigned int n_dust{0};
+    unsigned int n_monetary{0};
     TxoutType whichType;
-    for (const CTxOut& txout : tx.vout) {
+    for (size_t i{tx.vout.size()}; i; ) {
+        const CTxOut& txout = tx.vout[--i];
+
+        if (txout.scriptPubKey.size() > g_script_size_policy_limit) {
+            MaybeReject("scriptpubkey-size");
+        }
+
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
             MaybeReject("scriptpubkey");
         }
@@ -165,7 +181,27 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
             MaybeReject("scriptpubkey-unknown-witnessversion");
         }
 
+        if (whichType == TxoutType::ANCHOR && !opts.permitephemeral_anchor) {
+            MaybeReject("anchor");
+        }
+
+        if (IsDust(txout, opts.dust_relay_feerate)) {
+            if (whichType != TxoutType::ANCHOR && !opts.permitephemeral_send) {
+                MaybeReject("dust-nonanchor");
+            }
+            if (txout.nValue && !opts.permitephemeral_dust) {
+                MaybeReject("dust-nonzero");
+            }
+            ++n_dust;
+        } else if (whichType != TxoutType::NULL_DATA) {
+            ++n_monetary;
+        }
+
         if (whichType == TxoutType::NULL_DATA) {
+            if (txout.scriptPubKey.size() > 2 && txout.scriptPubKey[1] == OP_13 && opts.reject_tokens) {
+                MaybeReject("tokens-runes");
+            }
+            nDataOut++;
             unsigned int size = txout.scriptPubKey.size();
             if (size > datacarrier_bytes_left) {
                 MaybeReject("datacarrier");
@@ -178,11 +214,29 @@ bool IsStandardTx(const CTransaction& tx, const kernel::MemPoolOptions& opts, st
         } else if ((whichType == TxoutType::MULTISIG) && (!opts.permit_bare_multisig)) {
             MaybeReject("bare-multisig");
         }
+        else if (whichType == TxoutType::WITNESS_V0_SCRIPTHASH && opts.reject_tokens && txout.scriptPubKey.IsOLGA(tx.vout.size() - i))  {
+            MaybeReject("tokens-olga");
+        }
     }
 
     // Only MAX_DUST_OUTPUTS_PER_TX dust is permitted(on otherwise valid ephemeral dust)
-    if (GetDust(tx, opts.dust_relay_feerate).size() > MAX_DUST_OUTPUTS_PER_TX) {
+    if (n_dust > MAX_DUST_OUTPUTS_PER_TX) {
         MaybeReject("dust");
+    }
+
+    // only one OP_RETURN txout is permitted unless -datacarriermultiple is set (Core 31 allows several within the
+    // aggregate -datacarriersize; Bitcoin Knots SHA256 keeps the single-output rule by default, decisions/0013)
+    if (nDataOut > 1 && !opts.datacarrier_multiple) {
+        MaybeReject("multi-op-return");
+    }
+
+    if (!n_monetary) {
+        if (nDataOut && !opts.permitbaredatacarrier) {
+            MaybeReject("bare-datacarrier");
+        }
+        if ((!nDataOut) && !opts.permitbareanchor) {
+            MaybeReject("bare-anchor");
+        }
     }
 
     return true;
@@ -255,6 +309,10 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
         const CTxOut& prev = mapInputs.AccessCoin(tx.vin[i].prevout).out;
 
+        if (prev.scriptPubKey.size() > g_script_size_policy_limit) {
+            if (maybe_reject("bad-txns-input-script-size", strprintf("input %u script size exceeds limit (%u > %u)", i, prev.scriptPubKey.size(), g_script_size_policy_limit))) return state;
+        }
+
         std::vector<std::vector<unsigned char> > vSolutions;
         TxoutType whichType = Solver(prev.scriptPubKey, vSolutions);
         if (whichType == TxoutType::NONSTANDARD) {
@@ -286,6 +344,9 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
                 return state;
             }
             CScript subscript(stack.back().begin(), stack.back().end());
+            if (subscript.size() > g_script_size_policy_limit) {
+                if (maybe_reject("bad-txns-input-scriptcheck-size", strprintf("p2sh redeemscript size exceeds limit (input %u: %u > %u)", i, subscript.size(), g_script_size_policy_limit))) return state;
+            }
             unsigned int sigop_count = subscript.GetSigOpCount(true);
             if (sigop_count > MAX_P2SH_SIGOPS) {
                 if (maybe_reject("bad-txns-input-scriptcheck-sigops", strprintf("p2sh redeemscript sigops exceed limit (input %u: %u > %u)", i, sigop_count, MAX_P2SH_SIGOPS))) return state;
@@ -346,6 +407,10 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs,
         {
             out_reason = reason_prefix + "nonwitness-input";
             return false;
+        }
+
+        if (GetSerializeSize(tx.vin[i].scriptWitness.stack) > g_script_size_policy_limit) {
+            MaybeReject("witness-size");
         }
 
         // Check P2WSH standard limits

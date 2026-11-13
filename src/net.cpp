@@ -285,7 +285,8 @@ bool AddLocal(const CService& addr_, int nScore, bool add_even_if_unreachable)
     if (!fDiscover && nScore < LOCAL_MANUAL)
         return false;
 
-    if (!g_reachable_nets.Contains(addr) && !add_even_if_unreachable)
+    // IPv4 and IPv6 cannot be connected to unless their networks are reachable, but Tor is not necessarily bidirectional
+    if (!g_reachable_nets.Contains(addr) && !add_even_if_unreachable && !addr.IsTor())
         return false;
 
     if (fLogIPs) {
@@ -446,6 +447,12 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
     std::unique_ptr<i2p::sam::Session> i2p_transient_session;
 
     for (auto& target_addr : connect_to) {
+        const std::string_view dest_name{pszDest ? pszDest : ""};
+        if (RequiresV2Dest(target_addr, dest_name) && !use_v2transport) {
+            LogDebug(BCLog::NET, "skipping v1 connection to %s (-v2onlyclearnet)",
+                     target_addr.IsValid() ? target_addr.ToStringAddrPort() : std::string{dest_name});
+            continue;
+        }
         if (target_addr.IsValid()) {
             const std::optional<Proxy> use_proxy{
                 proxy_override.has_value() ? proxy_override : GetProxy(target_addr.GetNetwork()),
@@ -515,8 +522,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
         }
 
         NetPermissionFlags permission_flags = NetPermissionFlags::None;
-        std::vector<NetWhitelistPermissions> whitelist_permissions = conn_type == ConnectionType::MANUAL ? vWhitelistedRangeOutgoing : std::vector<NetWhitelistPermissions>{};
-        AddWhitelistPermissionFlags(permission_flags, target_addr, whitelist_permissions);
+        AddWhitelistPermissionFlags(permission_flags, target_addr, vWhitelistedRangeOutgoing);
 
         // Add node
         NodeId id = GetNewNodeId();
@@ -1792,7 +1798,26 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
 
     int nInbound = 0;
 
-    const bool inbound_onion = std::find(m_onion_binds.begin(), m_onion_binds.end(), addr_bind) != m_onion_binds.end();
+    const bool inbound_onion = [this, &addr, &addr_bind]{
+        if (m_onion_binds.empty()) {
+            if (!m_listenonion) {
+                // If -listenonion=0, assume we do not have inbound Tor connections on non-onion listeners
+                return false;
+            }
+            // Tor connections are coming in on the first -bind
+            if ((!m_normal_binds.empty()) && addr_bind == m_normal_binds.front()) {
+                if (addr_bind.IsBindAny()) {
+                    // Tor connections should have a source IP that is local
+                    return addr.IsLocal();
+                }
+                // Otherwise, the source IP is unpredictable, so assume anything could be onion
+                return true;
+            }
+            return false;
+        } else {
+            return std::find(m_onion_binds.begin(), m_onion_binds.end(), addr_bind) != m_onion_binds.end();
+        }
+    }();
 
     // Tor inbound connections do not reveal the peer's actual network address.
     // Therefore do not apply address-based whitelist permissions to them.
@@ -1976,14 +2001,18 @@ void CConnman::DisconnectNodes()
                 // the creation of a connection is a blocking operation (up to several seconds),
                 // and we don't want to hold up the socket handler thread for that long.
                 if (network_active && pnode->m_transport->ShouldReconnectV1()) {
-                    reconnections_to_add.push_back({
-                        .proxy_override = pnode->m_proxy_override,
+                    if (RequiresV2Dest(pnode->addr, pnode->m_dest)) {
+                        LogDebug(BCLog::NET, "not retrying with v1 transport protocol for peer=%d (-v2onlyclearnet)\n", pnode->GetId());
+                    } else {
+                        reconnections_to_add.push_back({
+                            .proxy_override = pnode->m_proxy_override,
                         .addr_connect = pnode->addr,
-                        .grant = std::move(pnode->grantOutbound),
-                        .destination = pnode->m_dest,
-                        .conn_type = pnode->m_conn_type,
-                        .use_v2transport = false});
-                    LogDebug(BCLog::NET, "retrying with v1 transport protocol for peer=%d\n", pnode->GetId());
+                            .grant = std::move(pnode->grantOutbound),
+                            .destination = pnode->m_dest,
+                            .conn_type = pnode->m_conn_type,
+                            .use_v2transport = false});
+                        LogDebug(BCLog::NET, "retrying with v1 transport protocol for peer=%d\n", pnode->GetId());
+                    }
                 }
 
                 // release outbound grant (if any)
@@ -2585,6 +2614,19 @@ bool CConnman::MultipleManualOrFullOutboundConns(Network net) const
 {
     AssertLockHeld(m_nodes_mutex);
     return m_network_conn_counts[net] > 1;
+}
+
+bool CConnman::RequiresV2Peer(Network net) const
+{
+    return m_v2only_clearnet && IsClearnet(net);
+}
+
+bool CConnman::RequiresV2Dest(const CNetAddr& addr, std::string_view dest_name) const
+{
+    // A name proxy resolves the destination for us, so we can't tell locally which
+    // network it belongs to. Assume clearnet, the worst case.
+    if (!addr.IsValid() && !dest_name.empty()) return m_v2only_clearnet;
+    return RequiresV2Peer(addr.GetNetClass());
 }
 
 bool CConnman::MaybePickPreferredNetwork(std::optional<Network>& network)

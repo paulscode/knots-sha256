@@ -9,6 +9,7 @@
 
 #include <common/args.h>
 #include <common/messages.h>
+#include <common/settings.h>
 #include <consensus/amount.h>
 #include <kernel/chainparams.h>
 #include <node/interface_ui.h>
@@ -19,6 +20,7 @@
 #include <tinyformat.h>
 #include <txgraph.h>
 #include <util/log.h>
+#include <univalue.h>
 #include <util/moneystr.h>
 #include <util/result.h>
 #include <util/strencodings.h>
@@ -93,6 +95,44 @@ util::Result<std::pair<int32_t, int>> ParseDustDynamicOpt(std::string_view optst
     }
 }
 
+void ApplyPermitEphemeralOption(const common::SettingsValue& value, MemPoolOptions& mempool_opts)
+{
+    std::optional<bool> flag_anchor, flag_send, flag_dust;
+    if (SettingToBool(value, false)) {
+        flag_anchor = flag_send = flag_dust = true;
+    }
+    for (auto& opt : util::SplitString(SettingToString(value).value_or(""), ",+")) {
+        bool v{true};
+        if (opt.size() && opt[0] == '-') {
+            opt.erase(opt.begin());
+            v = false;
+        }
+        if (opt == "anchor") {
+            flag_anchor = v;
+        } else if (opt == "dust") {
+            flag_dust = v;
+        } else if (opt == "send") {
+            flag_send = v;
+        } else if (opt == "reject" || opt == "0") {
+            flag_anchor = flag_send = flag_dust = !v;
+        }
+    }
+
+    if (!flag_send) {
+        flag_send = flag_dust.value_or(false) && !flag_anchor.value_or(false);
+    }
+    if (!flag_dust) {
+        flag_dust = flag_send;
+    }
+    if (!flag_anchor) {
+        flag_anchor = true;
+    }
+
+    mempool_opts.permitephemeral_dust = *flag_dust;
+    mempool_opts.permitephemeral_anchor = *flag_anchor;
+    mempool_opts.permitephemeral_send = *flag_send;
+}
+
 util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainParams& chainparams, MemPoolOptions& mempool_opts)
 {
     mempool_opts.check_ratio = argsman.GetIntArg("-checkmempool", mempool_opts.check_ratio);
@@ -106,6 +146,9 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
     }
 
     if (auto hours = argsman.GetIntArg("-mempoolexpiry")) mempool_opts.expiry = std::chrono::hours{*hours};
+
+    mempool_opts.minrelaycoinblocks = argsman.GetIntArg("-minrelaycoinblocks", mempool_opts.minrelaycoinblocks);
+    mempool_opts.minrelaymaturity = argsman.GetIntArg("-minrelaymaturity", mempool_opts.minrelaymaturity);
 
     // incremental relay fee sets the minimum feerate increase necessary for replacement in the mempool
     // and the amount the mempool min fee increases above the feerate of txs evicted due to mempool limiting.
@@ -152,9 +195,15 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
         mempool_opts.dust_relay_multiplier = parsed->second;
     }
 
+    mempool_opts.permitbareanchor = argsman.GetBoolArg("-permitbareanchor", mempool_opts.permitbareanchor);
+
     mempool_opts.permit_bare_pubkey = argsman.GetBoolArg("-permitbarepubkey", DEFAULT_PERMIT_BAREPUBKEY);
 
     mempool_opts.permit_bare_multisig = argsman.GetBoolArg("-permitbaremultisig", DEFAULT_PERMIT_BAREMULTISIG);
+
+    mempool_opts.reject_parasites = argsman.GetBoolArg("-rejectparasites", DEFAULT_REJECT_PARASITES);
+
+    mempool_opts.reject_tokens = argsman.GetBoolArg("-rejecttokens", DEFAULT_REJECT_TOKENS);
 
     if (argsman.GetBoolArg("-datacarrier", DEFAULT_ACCEPT_DATACARRIER)) {
         mempool_opts.max_datacarrier_bytes = argsman.GetIntArg("-datacarriersize", MAX_OP_RETURN_RELAY);
@@ -163,6 +212,9 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
     }
     mempool_opts.datacarrier_fullcount = argsman.GetBoolArg("-datacarrierfullcount", DEFAULT_DATACARRIER_FULLCOUNT);
     mempool_opts.accept_non_std_datacarrier = argsman.GetBoolArg("-acceptnonstddatacarrier", DEFAULT_ACCEPT_NON_STD_DATACARRIER);
+
+    mempool_opts.permitbaredatacarrier = argsman.GetBoolArg("-permitbaredatacarrier", mempool_opts.permitbaredatacarrier);
+    mempool_opts.datacarrier_multiple = argsman.GetBoolArg("-datacarriermultiple", mempool_opts.datacarrier_multiple);
 
     mempool_opts.require_standard = !argsman.GetBoolArg("-acceptnonstdtxn", DEFAULT_ACCEPT_NON_STD_TXN);
 
@@ -248,6 +300,10 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
         } else {  // accept or -enforce
             mempool_opts.truc_policy = TRUCPolicy::Accept;
         }
+    }
+
+    if (argsman.IsArgSet("-permitephemeral")) {
+        ApplyPermitEphemeralOption(argsman.GetSetting("-permitephemeral"), mempool_opts);
     }
 
     mempool_opts.persist_v1_dat = argsman.GetBoolArg("-persistmempoolv1", mempool_opts.persist_v1_dat);
