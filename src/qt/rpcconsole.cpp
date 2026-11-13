@@ -45,6 +45,7 @@
 #include <QScreen>
 #include <QScrollBar>
 #include <QSettings>
+#include <QShortcut>
 #include <QString>
 #include <QStringList>
 #include <QStyledItemDelegate>
@@ -566,6 +567,8 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
     clear();
 
     GUIUtil::handleCloseWindowShortcut(this);
+
+    QObject::connect(new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), ui->tab_console), &QShortcut::activated, this, &QWidget::close);
 
     updateWindowTitle();
 }
