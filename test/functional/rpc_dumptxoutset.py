@@ -99,6 +99,19 @@ class DumptxoutsetTest(BitcoinTestFramework):
         assert_equal(rb_lines[0], f"#(blockhash {node.getblockhash(target_height)} ) txid,vout")
         assert_equal(len(rb_lines) - 1, out['coins_written'])
 
+        self.log.info("Test the Knots 0.20-28 positional form (path, format, show_header, separator)")
+        def compat(name, *a, **ka):
+            out = node.dumptxoutset(f"{name}_txoutset.txt", *a, **ka)
+            with open(node.chain_path / f"{name}_txoutset.txt", 'r', encoding='utf-8') as f:
+                return out, [line.rstrip('\n') for line in f]
+        expected = [line.replace(',', ':') for line in lines[1:]]
+        for name, a, ka in [('compat_positional', ([], False, ':'), {}),
+                            ('compat_named_separator', ([], False), {'separator': ':'}),
+                            ('compat_named_both', ([],), {'show_header': False, 'separator': ':'})]:
+            out, clines = compat(name, *a, **ka)
+            assert_equal(clines, expected)
+            assert_equal(out['base_hash'], tip_hash)
+
         assert_raises_rpc_error(
             -8, 'unable to find item \'sample\'', node.dumptxoutset, path='xxx', type='latest', format=['sample'])
 
