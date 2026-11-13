@@ -705,6 +705,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-dustrelayfee=<amt>", strprintf("Fee rate (in %s/kvB) used to define dust, the value of an output such that it will cost more than its value in fees at this fee rate to spend it. (default: %s)", CURRENCY_UNIT, FormatMoney(DUST_RELAY_TX_FEE)), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-acceptstalefeeestimates", strprintf("Read fee estimates even if they are stale (%sdefault: %u) fee estimates are considered stale if they are %s hours old", "regtest only; ", DEFAULT_ACCEPT_STALE_FEE_ESTIMATES, Ticks<std::chrono::hours>(MAX_FILE_AGE)), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-bytespersigop", strprintf("Equivalent bytes per sigop in transactions for relay and mining (default: %u)", DEFAULT_BYTES_PER_SIGOP), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-bytespersigopstrict", strprintf("Minimum bytes per sigop in transactions we relay and mine (default: %u)", DEFAULT_BYTES_PER_SIGOP_STRICT), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarrier", strprintf("Relay and mine data carrier transactions (default: %u)", DEFAULT_ACCEPT_DATACARRIER), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-datacarriersize",
                    strprintf("Relay and mine transactions whose data-carrying raw scriptPubKeys in aggregate "
@@ -714,6 +715,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-mempoolfullrbf", strprintf("Accept transaction replace-by-fee without requiring replaceability signaling (default: %u)", (DEFAULT_MEMPOOL_RBF_POLICY == RBFPolicy::Always)), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-mempoolreplacement", strprintf("Set to 0 to disable RBF entirely, \"fee,optin\" to honour RBF opt-out signal, or \"fee,-optin\" to always RBF aka full RBF (default: %s)", "fee,-optin"), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-mempooltruc", strprintf("Behaviour for transactions requesting TRUC limits: \"reject\" the transactions entirely, \"accept\" them just like any other, or \"enforce\" to impose their requested restrictions (default: %s)", "enforce"), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
+    argsman.AddArg("-permitbarepubkey", strprintf("Relay legacy pubkey outputs (default: %u)", DEFAULT_PERMIT_BAREPUBKEY), ArgsManager::ALLOW_ANY,
+                   OptionsCategory::NODE_RELAY);
     argsman.AddArg("-permitbaremultisig", strprintf("Relay transactions creating non-P2SH multisig outputs (default: %u)", DEFAULT_PERMIT_BAREMULTISIG), ArgsManager::ALLOW_ANY,
                    OptionsCategory::NODE_RELAY);
     argsman.AddArg("-minrelaytxfee=<amt>", strprintf("Fees (in %s/kvB) smaller than this are considered zero fee for relaying, mining and transaction creation (default: %s)",
@@ -1167,6 +1170,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     }
 
     nBytesPerSigOp = args.GetIntArg("-bytespersigop", nBytesPerSigOp);
+    nBytesPerSigOpStrict = args.GetIntArg("-bytespersigopstrict", nBytesPerSigOpStrict);
 
     if (!g_wallet_init_interface.ParameterInteraction()) return false;
 

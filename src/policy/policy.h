@@ -52,6 +52,10 @@ inline constexpr unsigned int MAX_TX_LEGACY_SIGOPS{2'500};
 inline constexpr unsigned int DEFAULT_INCREMENTAL_RELAY_FEE{100};
 /** Default for -bytespersigop */
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
+/** Default for -bytespersigopstrict */
+inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
+/** Default for -permitbarepubkey */
+inline constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
 /** Default for -permitbaremultisig */
 inline constexpr bool DEFAULT_PERMIT_BAREMULTISIG{true};
 /** The maximum number of witness stack items in a standard P2WSH script */
