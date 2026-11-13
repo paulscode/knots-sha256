@@ -8,6 +8,7 @@
 #include <qt/forms/ui_debugwindow.h>
 
 #include <chainparams.h>
+#include <clientversion.h>
 #include <common/system.h>
 #include <interfaces/node.h>
 #include <node/connection_types.h>
@@ -31,6 +32,7 @@
 
 #include <univalue.h>
 
+#include <Qt>
 #include <QAbstractButton>
 #include <QAbstractItemModel>
 #include <QColor>
@@ -40,6 +42,7 @@
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QLabel>
 #include <QLatin1String>
 #include <QLocale>
 #include <QMenu>
@@ -429,7 +432,10 @@ void RPCExecutor::request(const QString &command, const QString& wallet_name)
                 "   example:    getblock(getblockhash(0) 1)[tx]\n\n"
 
                 "Results without keys can be queried with an integer in brackets using the parenthesized syntax.\n"
-                "   example:    getblock(getblockhash(0),1)[tx][0]\n\n")));
+                "   example:    getblock(getblockhash(0),1)[tx][0]\n\n"
+
+                "Console Commands:\n"
+                "   /clearhistory    Clears the command history and console output.\n\n")));
             return;
         }
         if (!RPCConsole::RPCExecuteCommandLine(m_node, result, executableCommand, nullptr, wallet_name)) {
@@ -480,17 +486,40 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
             // Restore failed (perhaps missing setting), center the window
             move(QGuiApplication::primaryScreen()->availableGeometry().center() - frameGeometry().center());
         }
-        ui->splitter->restoreState(settings.value("RPCConsoleWindowPeersTabSplitterSizes").toByteArray());
+        ui->splitter->restoreState(settings.value("RPCConsoleWindowPeersTabSplitterSizes_Knots23").toByteArray());
     } else
 #endif // ENABLE_WALLET
     {
         // RPCConsole is a child widget.
-        ui->splitter->restoreState(settings.value("RPCConsoleWidgetPeersTabSplitterSizes").toByteArray());
+        ui->splitter->restoreState(settings.value("RPCConsoleWidgetPeersTabSplitterSizes_Knots23").toByteArray());
     }
 
-    m_peer_widget_header_state = settings.value("PeersTabPeerHeaderState").toByteArray();
+    m_peer_widget_header_state = settings.value("PeersTabPeerHeaderState_Knots23").toByteArray();
     m_banlist_widget_header_state = settings.value("PeersTabBanlistHeaderState").toByteArray();
     m_alternating_row_colors = settings.value("PeersTabAlternatingRowColors").toBool();
+
+    {
+        // Move everything down a row to make room
+        const int colCount = ui->gridLayout->columnCount();
+        for (int row{ui->gridLayout->rowCount()}; row > 6; --row) {
+            for (int col{0}; col < colCount; ++col) {
+                QLayoutItem* const layout_item = ui->gridLayout->itemAtPosition(row - 1, col);
+                if (!layout_item) continue;
+                const int index = ui->gridLayout->indexOf(layout_item);
+                int row_rb, col_rb, rowspan, colspan;
+                ui->gridLayout->getItemPosition(index, &row_rb, &col_rb, &rowspan, &colspan);
+                if (row_rb != row - 1 || col_rb != col) continue;
+                ui->gridLayout->takeAt(index);
+                ui->gridLayout->addItem(layout_item, row, col, rowspan, colspan);
+            }
+        }
+        ui->gridLayout->addWidget(new QLabel(tr("Expiry time"), this), 6, 0);
+        m_label_softwareexpiry = new QLabel(this);
+        m_label_softwareexpiry->setCursor(Qt::IBeamCursor);
+        m_label_softwareexpiry->setTextFormat(Qt::PlainText);
+        m_label_softwareexpiry->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::TextSelectableByKeyboard | Qt::TextSelectableByMouse);
+        ui->gridLayout->addWidget(m_label_softwareexpiry, 6, 1);
+    }
 
     constexpr QChar nonbreaking_hyphen(8209);
     const std::vector<QString> CONNECTION_TYPE_DOC{
@@ -580,11 +609,101 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
     consoleFontSize = settings.value(fontSizeSettingsKey, QFont().pointSize()).toInt();
     clear();
 
+    // load history
+    QMap<size_t, QString> rewrite_replace;
+    int size = settings.beginReadArray("nRPCConsoleWindowHistory");
+    history.clear();
+    for (int i = 0; i < size; ++i) {
+        settings.setArrayIndex(i);
+        QString cmd = settings.value("cmd").toString();
+        QString filtered_cmd;
+        {
+            std::string strFilteredCmd, dummy;
+            if (RPCParseCommandLine(nullptr, dummy, cmd.toStdString(), false, &strFilteredCmd)) {
+                filtered_cmd = QString::fromStdString(strFilteredCmd);
+            } else {
+                // Failed to parse command, so we cannot even filter it for the history
+                filtered_cmd = cmd;
+            }
+        }
+        if (cmd != filtered_cmd) {
+            // Overwrite this line, and trigger an immediate rewrite of history to purge it
+            cmd = QString(cmd.size(), 'x');
+            rewrite_replace[history.size()] = filtered_cmd;
+        }
+        history.append(cmd);
+    }
+    historyPtr = history.size();
+    settings.endArray();
+    if (!rewrite_replace.empty()) {
+        WriteCommandHistory();
+        for (QMapIterator<size_t, QString> i(rewrite_replace); i.hasNext(); ) {
+            i.next();
+            history[i.key()] = i.value();
+        }
+        WriteCommandHistory();
+    }
+
     GUIUtil::handleCloseWindowShortcut(this);
 
     QObject::connect(new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), ui->tab_console), &QShortcut::activated, this, &QWidget::close);
 
     updateWindowTitle();
+}
+
+void RPCConsole::WriteCommandHistory()
+{
+    // persist history
+    QSettings settings;
+    settings.beginWriteArray("nRPCConsoleWindowHistory");
+    for (int i = 0; i < history.size(); ++i) {
+        settings.setArrayIndex(i);
+        settings.setValue("cmd", history.at(i));
+    }
+    settings.endArray();
+}
+
+void RPCConsole::ClearCommandHistory()
+{
+    // First pass: read existing commands and overwrite with dummy data of same length
+    QSettings settings;
+    int size = settings.beginReadArray("nRPCConsoleWindowHistory");
+#if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
+    history.resize(size);
+#else
+    if (history.size() > size) {
+        history.erase(history.begin() + size, history.end());
+    } else {
+        history.reserve(size);
+        for (int i = history.size(); i < size; ++i) {
+            history.append(QString());
+        }
+    }
+#endif
+    for (int i = 0; i < size; ++i) {
+        settings.setArrayIndex(i);
+        QString cmd = settings.value("cmd").toString();
+        // Store dummy command with same length as original (don't leak length info)
+        history[i].fill('x', cmd.size());
+    }
+    settings.endArray();
+
+    // Write dummy data to overwrite the original commands
+    WriteCommandHistory();
+
+    // Clear the dummy data (leaves it intact on disk)
+    for (QStringList::size_type i = history.size(); i; ) {
+        --i;
+        history[i].clear();
+    }
+    WriteCommandHistory();
+
+    // Clear the history list
+    history.clear();
+    WriteCommandHistory();
+
+    historyPtr = 0;
+    cmdBeforeBrowsing.clear();
 }
 
 RPCConsole::~RPCConsole()
@@ -594,16 +713,18 @@ RPCConsole::~RPCConsole()
     if (WalletModel::isWalletEnabled()) {
         // RPCConsole widget is a window.
         settings.setValue("RPCConsoleWindowGeometry", saveGeometry());
-        settings.setValue("RPCConsoleWindowPeersTabSplitterSizes", ui->splitter->saveState());
+        settings.setValue("RPCConsoleWindowPeersTabSplitterSizes_Knots23", ui->splitter->saveState());
     } else
 #endif // ENABLE_WALLET
     {
         // RPCConsole is a child widget.
-        settings.setValue("RPCConsoleWidgetPeersTabSplitterSizes", ui->splitter->saveState());
+        settings.setValue("RPCConsoleWidgetPeersTabSplitterSizes_Knots23", ui->splitter->saveState());
     }
 
-    settings.setValue("PeersTabPeerHeaderState", m_peer_widget_header_state);
+    settings.setValue("PeersTabPeerHeaderState_Knots23", m_peer_widget_header_state);
     settings.setValue("PeersTabBanlistHeaderState", m_banlist_widget_header_state);
+
+    WriteCommandHistory();
 
     delete ui;
 }
@@ -706,7 +827,6 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
             ui->peerWidget->setColumnWidth(PeerTableModel::Address, ADDRESS_COLUMN_WIDTH);
             ui->peerWidget->setColumnWidth(PeerTableModel::ConnectionType, GUIUtil::TextWidth(fm, GUIUtil::ConnectionTypeToQString(ConnectionType::ADDR_FETCH /* TODO: Find the WIDEST string? */, /*prepend_direction=*/false)));
             const auto bytesize_width = GUIUtil::TextWidth(fm, GUIUtil::formatBytes(999'000'000'000) + QStringLiteral("xx"));
-            ui->peerWidget->setColumnWidth(PeerTableModel::Network, GUIUtil::TextWidth(fm, qvariant_cast<QString>(model->peerTableSortProxy()->headerData(PeerTableModel::ColumnIndex::Network, Qt::Horizontal, Qt::DisplayRole)) /* TODO: Find the WIDEST string? */ + QStringLiteral("x")));
             ui->peerWidget->setColumnWidth(PeerTableModel::Subversion, SUBVERSION_COLUMN_WIDTH);
             ui->peerWidget->setColumnWidth(PeerTableModel::Ping, PING_COLUMN_WIDTH);
             ui->peerWidget->setColumnWidth(PeerTableModel::Sent, bytesize_width);
@@ -775,6 +895,12 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         ui->dataDir->setText(model->dataDir());
         ui->blocksDir->setText(model->blocksDir());
         ui->startupTime->setText(model->formatClientStartupTime());
+        if (g_software_expiry > 0) {
+            m_label_softwareexpiry->setText(QDateTime::fromSecsSinceEpoch(g_software_expiry).toString());
+        } else {
+            //: Software expiry, if it never expires
+            m_label_softwareexpiry->setText(tr("Never"));
+        }
         ui->networkName->setText(QString::fromStdString(Params().GetChainTypeString()));
 
         //Setup autocomplete and attach it
@@ -787,6 +913,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         }
 
         wordList << "help-console";
+        wordList << "/clearhistory";
         wordList.sort();
         autoCompleter = new QCompleter(wordList, this);
         autoCompleter->setModelSorting(QCompleter::CaseSensitivelySortedModel);
@@ -1026,7 +1153,7 @@ void RPCConsole::setNumBlocks(int count, const QDateTime& blockDate, double nVer
 {
     if (synctype == SyncType::BLOCK_SYNC) {
         ui->numberOfBlocks->setText(QString::number(count));
-        ui->lastBlockTime->setText(blockDate.toString());
+        ui->lastBlockTime->setText(GUIUtil::dateTimeStr(blockDate));
     }
 }
 
@@ -1066,6 +1193,26 @@ void RPCConsole::on_lineEdit_returnPressed()
     if (cmd == QLatin1String("stop")) {
         std::string dummy;
         RPCExecuteCommandLine(m_node, dummy, cmd.toStdString());
+        return;
+    }
+
+    // Special command to clear command history
+    if (cmd == QLatin1String("/clearhistory")) {
+        QMessageBox::StandardButton reply = QMessageBox::question(this,
+            tr("Clear Command History"),
+            tr("This will permanently clear your command history and console output.<br><br>"
+               "While this action is irreversible, complete removal from memory and disk "
+               "cannot be guaranteed.<br><br>"
+               "Are you sure you want to proceed?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+
+        if (reply == QMessageBox::Yes) {
+            ClearCommandHistory();
+            clear(/*keep_prompt=*/false);  // Clear console output too
+            message(CMD_REPLY, tr("Command history and console output cleared."));
+        }
+        ui->lineEdit->clear();
         return;
     }
 

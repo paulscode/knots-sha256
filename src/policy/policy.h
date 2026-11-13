@@ -22,8 +22,12 @@ class CCoinsViewCache;
 class CFeeRate;
 class CScript;
 
+/** Default for -blockmaxsize, which controls the maximum size of block the mining code will create **/
+inline constexpr unsigned int DEFAULT_BLOCK_MAX_SIZE{MAX_BLOCK_SERIALIZED_SIZE};
 /** Default for -blockmaxweight, which controls the range of block weights the mining code will create **/
 inline constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{MAX_BLOCK_WEIGHT};
+/** Default for BlockCreateOptions.block_reserved_size **/
+inline constexpr unsigned int DEFAULT_BLOCK_RESERVED_SIZE{1000};
 /** Default for -blockreservedweight **/
 inline constexpr unsigned int DEFAULT_BLOCK_RESERVED_WEIGHT{8000};
 /** Default sigops cost to reserve for coinbase transaction outputs when creating block templates. */
