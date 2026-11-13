@@ -5,6 +5,8 @@
 #ifndef BITCOIN_QT_QRIMAGEWIDGET_H
 #define BITCOIN_QT_QRIMAGEWIDGET_H
 
+#include <qt/optionsmodel.h>
+
 #include <QImage>
 #include <QLabel>
 
@@ -12,9 +14,9 @@
 inline constexpr int MAX_URI_LENGTH = 255;
 
 /* Size of exported QR Code image */
-inline constexpr int QR_IMAGE_SIZE = 300;
-inline constexpr int QR_IMAGE_TEXT_MARGIN = 10;
-inline constexpr int QR_IMAGE_MARGIN = 2 * QR_IMAGE_TEXT_MARGIN;
+inline constexpr int QR_IMAGE_SIZE = 252;
+inline constexpr int QR_IMAGE_TEXT_MARGIN = 8;
+inline constexpr int QR_IMAGE_MARGIN = 24;
 
 QT_BEGIN_NAMESPACE
 class QMenu;
@@ -29,7 +31,8 @@ class QRImageWidget : public QLabel
 
 public:
     explicit QRImageWidget(QWidget *parent = nullptr);
-    bool setQR(const QString& data, const QString& text = "");
+    bool setQR(const QString& data);
+    bool setQR(const QString& data, const QString& text, const OptionsModel::FontChoice& fontchoice);
     QImage exportImage();
 
 public Q_SLOTS:
