@@ -146,6 +146,8 @@ BOOST_AUTO_TEST_CASE(MempoolSizeLimitTest)
 {
     auto& pool = static_cast<MemPoolTest&>(*Assert(m_node.mempool));
     LOCK2(cs_main, pool.cs);
+    pool.m_opts.min_relay_feerate = CFeeRate{CORE_INCREMENTAL_RELAY_FEE};
+    pool.m_opts.incremental_relay_feerate = CFeeRate{CORE_INCREMENTAL_RELAY_FEE};
     TestMemPoolEntryHelper entry;
 
     CMutableTransaction tx1 = CMutableTransaction();
@@ -193,7 +195,7 @@ BOOST_AUTO_TEST_CASE(MempoolSizeLimitTest)
     BOOST_CHECK(!pool.exists(tx3.GetHash()));
 
     CFeeRate maxFeeRateRemoved(2500, GetVirtualTransactionSize(CTransaction(tx3)) + GetVirtualTransactionSize(CTransaction(tx2)));
-    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), maxFeeRateRemoved.GetFeePerK() + DEFAULT_INCREMENTAL_RELAY_FEE);
+    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), maxFeeRateRemoved.GetFeePerK() + pool.m_opts.incremental_relay_feerate.GetFeePerK());
 
     CMutableTransaction tx4 = CMutableTransaction();
     tx4.vin.resize(2);
@@ -281,23 +283,23 @@ BOOST_AUTO_TEST_CASE(MempoolSizeLimitTest)
     FakeNodeClock clock{42s};
     constexpr std::chrono::seconds HALFLIFE{CTxMemPool::ROLLING_FEE_HALFLIFE};
     clock += HALFLIFE;
-    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), maxFeeRateRemoved.GetFeePerK() + DEFAULT_INCREMENTAL_RELAY_FEE);
+    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), maxFeeRateRemoved.GetFeePerK() + pool.m_opts.incremental_relay_feerate.GetFeePerK());
     // ... we should keep the same min fee until we get a block
     pool.removeForBlock(vtx);
     clock += HALFLIFE;
-    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), llround((maxFeeRateRemoved.GetFeePerK() + DEFAULT_INCREMENTAL_RELAY_FEE)/2.0));
+    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), llround((maxFeeRateRemoved.GetFeePerK() + pool.m_opts.incremental_relay_feerate.GetFeePerK())/2.0));
     // ... then feerate should drop 1/2 each halflife
 
     clock += HALFLIFE / 2;
-    BOOST_CHECK_EQUAL(pool.GetMinFee(pool.DynamicMemoryUsage() * 5 / 2).GetFeePerK(), llround((maxFeeRateRemoved.GetFeePerK() + DEFAULT_INCREMENTAL_RELAY_FEE)/4.0));
+    BOOST_CHECK_EQUAL(pool.GetMinFee(pool.DynamicMemoryUsage() * 5 / 2).GetFeePerK(), llround((maxFeeRateRemoved.GetFeePerK() + pool.m_opts.incremental_relay_feerate.GetFeePerK())/4.0));
     // ... with a 1/2 halflife when mempool is < 1/2 its target size
 
     clock += HALFLIFE / 4;
-    BOOST_CHECK_EQUAL(pool.GetMinFee(pool.DynamicMemoryUsage() * 9 / 2).GetFeePerK(), llround((maxFeeRateRemoved.GetFeePerK() + DEFAULT_INCREMENTAL_RELAY_FEE)/8.0));
+    BOOST_CHECK_EQUAL(pool.GetMinFee(pool.DynamicMemoryUsage() * 9 / 2).GetFeePerK(), llround((maxFeeRateRemoved.GetFeePerK() + pool.m_opts.incremental_relay_feerate.GetFeePerK())/8.0));
     // ... with a 1/4 halflife when mempool is < 1/4 its target size
 
     clock += 5 * HALFLIFE;
-    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), DEFAULT_INCREMENTAL_RELAY_FEE);
+    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(), pool.m_opts.incremental_relay_feerate.GetFeePerK());
     // ... but feerate should never drop below DEFAULT_INCREMENTAL_RELAY_FEE
 
     clock += HALFLIFE;
