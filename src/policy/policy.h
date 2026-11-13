@@ -64,6 +64,8 @@ inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 /** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
 inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{4};
+/** Default for -rejectdeadbranches */
+inline constexpr bool DEFAULT_REJECT_DEAD_BRANCHES{true};
 /** Default for -rejecttokens */
 inline constexpr bool DEFAULT_REJECT_TOKENS{false};
 /** Default for -subdustfeepenalty */
@@ -245,6 +247,12 @@ static inline int64_t GetVirtualTransactionInputSize(const CTxIn& tx)
 int64_t GetSigOpsAdjustedWeight(int64_t weight, int64_t sigop_cost, unsigned int bytes_per_sigop);
 
 static inline FeePerVSize ToFeePerVSize(FeePerWeight feerate) { return {feerate.fee, (feerate.size + WITNESS_SCALE_FACTOR - 1) / WITNESS_SCALE_FACTOR}; }
+
+/** Default for -rejectbpub */
+static constexpr bool DEFAULT_REJECT_BPUB{true};
+extern bool g_reject_bpub;
+/** Witness script bytes of the inputs that carry a BPUB stream. */
+size_t BPUBBytes(const CTransaction& tx);
 
 std::pair<CScript, unsigned int> GetScriptForTransactionInput(CScript prevScript, const CTxIn&);
 
