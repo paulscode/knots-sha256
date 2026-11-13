@@ -18,6 +18,14 @@ git archive --prefix="${DISTNAME}/" HEAD |
  tar -xp \
   --exclude '*minisketch*' \
  # end of tar options
+
+# Generate correct build info file from git, before we lose git
+# Core 32 GenerateBuildInfo.cmake reads git only when given GIT_EXECUTABLE (src/CMakeLists.txt passes it); without it
+# the output is the placeholder itself, whose slashes break the sed below. A missing git stops here (set -e).
+GIT_EXECUTABLE="$(command -v git)"
+GIT_BUILD_INFO="$(cmake -D GIT_EXECUTABLE="${GIT_EXECUTABLE}" -P cmake/script/GenerateBuildInfo.cmake)"
+sed 's/\/\/ No build information available/'"${GIT_BUILD_INFO}"'/' -i "${DISTNAME}/cmake/script/GenerateBuildInfo.cmake"
+
 tar \
   --format=ustar \
   --sort=name \
