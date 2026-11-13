@@ -3,12 +3,17 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+from copy import deepcopy
 from decimal import Decimal
 
 from test_framework.messages import (
     COIN,
+    COutPoint,
+    CTxIn,
+    CTxInWitness,
     CTxOut,
 )
+from test_framework.script_util import PAY_TO_ANCHOR
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.mempool_util import assert_mempool_contents
 from test_framework.util import (
@@ -88,6 +93,65 @@ class EphemeralDustTest(BitcoinTestFramework):
         self.test_unspent_ephemeral()
         self.test_reorgs()
         self.test_no_minrelay_fee()
+        self.test_negative_modified_fee(3)
+        self.test_negative_modified_fee(6)
+        self.test_negative_modified_fee(3, penalty_enabled=False)
+
+    def test_negative_modified_fee(self, dust_rate, penalty_enabled=True):
+        self.log.info("Test ephemeral anchor package fees with the native sub-dust penalty")
+        # Retain native dust/anchor policy. Only enable TRUC; pin fee rates to
+        # check the exact package boundary. No policy defaults are changed.
+        self.restart_node(0, extra_args=["-acceptnonstdtxn=0", "-persistmempool=0",
+                                        "-mempooltruc=enforce", "-minrelaytxfee=0.00001000",
+                                        f"-dustrelayfee={Decimal(dust_rate) / 100000:.8f}",
+                                        f"-subdustfeepenalty={int(penalty_enabled)}"])
+        node = self.nodes[0]
+        self.wallet.rescan_utxos()
+        parent = self.wallet.create_self_transfer(version=3, fee_rate=0, confirmed_only=True)["tx"]
+        parent.vout.append(CTxOut(0, PAY_TO_ANCHOR))
+        child = self.wallet.create_self_transfer_multi(version=3, fee_per_output=1000, confirmed_only=True)["tx"]
+        child.vin.append(CTxIn(COutPoint(parent.txid_int, 1)))
+        child.wit.vtxinwit.append(CTxInWitness())
+        penalty = (len(parent.vout[1].serialize()) + 67) * dust_rate
+        assert_equal(penalty, 80 * dust_rate)
+        if not penalty_enabled:
+            penalty = 0
+        assert_equal(node.testmempoolaccept([parent.serialize().hex()])[0]["reject-reason"], "min relay fee not met")
+
+        # Reject manual fee deltas independently of the automatic penalty,
+        # including when the penalty is disabled. The child has ample fees.
+        for delta in [-1, 1]:
+            node.prioritisetransaction(txid=parent.txid_hex, fee_delta=delta)
+            assert node.submitpackage([parent.serialize().hex(), child.serialize().hex()])["package_msg"] != "success"
+            assert_equal(node.getrawmempool(), [])
+            node.prioritisetransaction(txid=parent.txid_hex, fee_delta=-delta)
+
+        required = parent.get_vsize() + child.get_vsize() + penalty
+        low = deepcopy(child)
+        low.vout[0].nValue += 1000 - (required - 1)
+        assert node.submitpackage([parent.serialize().hex(), low.serialize().hex()])["package_msg"] != "success"
+        assert_equal(node.getrawmempool(), [])
+
+        child.vout[0].nValue += 1000 - required
+        assert_equal(node.submitpackage([parent.serialize().hex(), child.serialize().hex()])["package_msg"], "success")
+        fees = node.getmempoolentry(parent.txid_hex)["fees"]
+        assert_equal(fees["base"], 0)
+        assert_equal(fees["modified"], -Decimal(penalty) / COIN)
+
+        # Once accepted, existing RPC policy also forbids manual fee changes.
+        assert_raises_rpc_error(-8, "Priority is not supported for transactions with dust outputs.",
+                               node.prioritisetransaction, parent.txid_hex, 0, -1)
+
+        # A higher-fee child remains replaceable and the package is mineable.
+        replacement = deepcopy(child)
+        replacement.vout[0].nValue -= 2000
+        node.sendrawtransaction(replacement.serialize().hex())
+        assert_equal(set(node.getrawmempool()), {parent.txid_hex, replacement.txid_hex})
+        template = node.getblocktemplate({"rules": ["segwit"]})
+        assert {parent.txid_hex, replacement.txid_hex}.issubset({tx["txid"] for tx in template["transactions"]})
+        block = node.getblock(self.generate(node, 1, sync_fun=self.no_op)[0])
+        assert {parent.txid_hex, replacement.txid_hex}.issubset(set(block["tx"]))
+        assert_equal(node.gettxout(parent.txid_hex, 1), None)
 
     def test_normal_dust(self):
         self.log.info("Create 0-value dusty output, show that it works inside truc when spent in package")
