@@ -166,7 +166,7 @@ void CompareBalance(WalletModel& walletModel, CAmount expected_balance, QLabel* 
     if (privacy) {
         balanceComparison = BitcoinUnits::formatWithPrivacy(unit, expected_balance, BitcoinUnits::SeparatorStyle::ALWAYS, false);
     } else {
-        const QFont font_for_money = walletModel.getOptionsModel()->getFontForMoney();
+        const QFont font_for_money = walletModel.getOptionsModel()->getFontForMoney(unit);
         balanceComparison = BitcoinUnits::formatHtmlWithUnit(font_for_money, unit, expected_balance, false, BitcoinUnits::SeparatorStyle::ALWAYS);
     }
     QCOMPARE(balance_label_to_check->text().trimmed(), balanceComparison);
@@ -263,7 +263,7 @@ public:
     MiniGUI(interfaces::Node& node, const PlatformStyle* platformStyle) : sendCoinsDialog(platformStyle), transactionView(platformStyle), optionsModel(node) {
         bilingual_str error;
         QVERIFY(optionsModel.Init(error));
-        clientModel = std::make_unique<ClientModel>(node, &optionsModel);
+        clientModel = std::make_unique<ClientModel>(node, &optionsModel, *platformStyle);
     }
 
     void initModelForWallet(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet, const PlatformStyle* platformStyle)

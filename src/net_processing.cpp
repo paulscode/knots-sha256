@@ -3929,15 +3929,15 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // Change version
         const int greatest_common_version = std::min(nVersion, pfrom.AdvertisedVersion());
         pfrom.SetCommonVersion(greatest_common_version);
+        {
+            LOCK(pfrom.m_subver_mutex);
+            pfrom.cleanSubVer = cleanSubVer;
+        }
         pfrom.nVersion = nVersion;
 
         pfrom.m_has_all_wanted_services = HasAllDesirableServiceFlags(nServices);
         peer.m_their_services = nServices;
         pfrom.SetAddrLocal(addrMe);
-        {
-            LOCK(pfrom.m_subver_mutex);
-            pfrom.cleanSubVer = cleanSubVer;
-        }
 
         // Only initialize the Peer::TxRelay m_relay_txs data structure if:
         // - this isn't an outbound block-relay-only connection, and
