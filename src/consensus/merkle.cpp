@@ -58,7 +58,10 @@ uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated) {
             // not propagate through the network anyway, and the total number of
             // comparisons is the same as for an unmutated input of the same length.
             for (size_t pos = 0; pos + 1 < hashes.size(); pos += 2) {
-                if (hashes[pos] == hashes[pos + 1]) mutation = true;
+                if (hashes[pos] == hashes[pos + 1]) {
+                    mutation = true;
+                    break;
+                }
             }
         }
         if (hashes.size() & 1) {
