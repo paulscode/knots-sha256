@@ -14,6 +14,7 @@
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
+#include <qt/psbtoperationsdialog.h>
 #include <qt/sendcoinsentry.h>
 
 #include <chainparams.h>
@@ -383,6 +384,10 @@ bool SendCoinsDialog::PrepareSendText(QString& question_string, QString& informa
 
 void SendCoinsDialog::presentPSBT(PartiallySignedTransaction& psbtx)
 {
+    auto dlg = new PSBTOperationsDialog(this, model, clientModel);
+    dlg->openWithPSBT(psbtx);
+    GUIUtil::ShowModalDialogAsynchronously(dlg, Qt::NonModal);
+#if 0
     // Serialize the PSBT
     DataStream ssTx{};
     ssTx << psbtx;
@@ -428,6 +433,7 @@ void SendCoinsDialog::presentPSBT(PartiallySignedTransaction& psbtx)
     default:
         assert(false);
     } // msgBox.exec()
+#endif
 }
 
 bool SendCoinsDialog::signWithExternalSigner(PartiallySignedTransaction& psbtx, CMutableTransaction& mtx, bool& complete) {
