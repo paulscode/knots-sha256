@@ -10,6 +10,7 @@
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 
+#include <chainparams.h>
 #include <common/args.h>
 #include <interfaces/node.h>
 #include <mapport.h>
@@ -247,6 +248,12 @@ bool OptionsModel::Init(bilingual_str& error)
     m_sub_fee_from_amount = settings.value("SubFeeFromAmount", false).toBool();
 #endif
 
+    // Network
+    if (!settings.contains("nNetworkPort"))
+        settings.setValue("nNetworkPort", (quint16)Params().GetDefaultPort());
+    if (!gArgs.SoftSetArg("-port", settings.value("nNetworkPort").toString().toStdString()))
+        addOverriddenOption("-port");
+
     // Display
     if (settings.contains("FontForMoney")) {
         m_font_money = FontChoiceFromString(settings.value("FontForMoney").toString());
@@ -426,6 +433,8 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return m_show_tray_icon;
     case MinimizeToTray:
         return fMinimizeToTray;
+    case NetworkPort:
+        return settings.value("nNetworkPort");
     case MapPortNatpmp:
         return SettingToBool(setting(), DEFAULT_NATPMP);
     case MinimizeOnClose:
@@ -541,6 +550,18 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
     case MinimizeToTray:
         fMinimizeToTray = value.toBool();
         settings.setValue("fMinimizeToTray", fMinimizeToTray);
+        break;
+    case NetworkPort:
+        if (settings.value("nNetworkPort") != value) {
+            // If the port input box is empty, set to default port
+            if (value.toString().isEmpty()) {
+                settings.setValue("nNetworkPort", (quint16)Params().GetDefaultPort());
+            }
+            else {
+                settings.setValue("nNetworkPort", (quint16)value.toInt());
+            }
+            setRestartRequired(true);
+        }
         break;
     case MapPortNatpmp: // core option - can be changed on-the-fly
         if (changed()) {
