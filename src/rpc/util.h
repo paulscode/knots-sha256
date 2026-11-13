@@ -8,6 +8,7 @@
 #include <addresstype.h>
 #include <consensus/amount.h>
 #include <policy/feerate.h>
+#include <primitives/transaction.h>
 #include <pubkey.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
@@ -155,6 +156,8 @@ std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, Fl
 
 //! Parse BIP32 path
 std::vector<uint32_t> ParsePathBIP32(const std::string& path);
+/** Parses a vector of transactions from a univalue array. */
+std::vector<CTransactionRef> ParseTransactionVector(const UniValue txns_param);
 
 /**
  * Serializing JSON objects depends on the outer type. Only arrays and
@@ -571,6 +574,9 @@ private:
  */
 void PushWarnings(const UniValue& warnings, UniValue& obj);
 void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj);
+
+bool GetWalletRestrictionFromJSONRPCRequest(const JSONRPCRequest& request, std::string& out_wallet_allowed);
+void EnsureNotWalletRestricted(const JSONRPCRequest& request);
 
 std::vector<RPCResult> ScriptPubKeyDoc();
 

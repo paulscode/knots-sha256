@@ -61,10 +61,27 @@ inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 /** Default for -datacarriercost (multiplied by WITNESS_SCALE_FACTOR) */
 inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{1};
+/** Default for -rejecttokens */
+inline constexpr bool DEFAULT_REJECT_TOKENS{false};
+/** Default for -subdustfeepenalty */
+inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{false};
+
+// NOTE: Changes to these three require manually adjusting doc in init.cpp
+/** Default for -permitephemeral=send */
+inline constexpr bool DEFAULT_PERMITEPHEMERAL_SEND{true};
+/** Default for -permitephemeral=dust */
+inline constexpr bool DEFAULT_PERMITEPHEMERAL_DUST{true};
+/** Default for -permitephemeral=anchor */
+inline constexpr bool DEFAULT_PERMITEPHEMERAL_ANCHOR{true};
+
+/** Default for -permitbareanchor */
+inline constexpr bool DEFAULT_PERMITBAREANCHOR{true};
 /** Default for -permitbarepubkey */
 inline constexpr bool DEFAULT_PERMIT_BAREPUBKEY{true};
 /** Default for -permitbaremultisig */
 inline constexpr bool DEFAULT_PERMIT_BAREMULTISIG{true};
+/** Default for -rejectparasites */
+inline constexpr bool DEFAULT_REJECT_PARASITES{false};
 /** The maximum number of witness stack items in a standard P2WSH script */
 inline constexpr unsigned int MAX_STANDARD_P2WSH_STACK_ITEMS{100};
 /** The maximum size in bytes of each witness stack item in a standard P2WSH script */
@@ -99,6 +116,10 @@ inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
  * Default setting for -datacarriersize in vbytes.
  */
+/** Default for -permitbaredatacarrier */
+inline constexpr bool DEFAULT_PERMITBAREDATACARRIER{true};
+/** Default for -datacarriermultiple (more than one OP_RETURN output per transaction) */
+inline constexpr bool DEFAULT_DATACARRIER_MULTIPLE{false};
 inline constexpr unsigned int MAX_OP_RETURN_RELAY = MAX_STANDARD_TX_WEIGHT / WITNESS_SCALE_FACTOR;
 /** Default for -datacarrierfullcount */
 inline constexpr bool DEFAULT_DATACARRIER_FULLCOUNT{false};

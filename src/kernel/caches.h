@@ -18,7 +18,7 @@ inline constexpr uint64_t MAX_DBCACHE_BYTES{sizeof(void*) == 4 ? 1_GiB : std::nu
 //! Suggested default amount of cache reserved for the kernel (bytes)
 inline constexpr uint64_t DEFAULT_KERNEL_CACHE{450_MiB};
 //! Default LevelDB write batch size
-inline constexpr uint64_t DEFAULT_DB_CACHE_BATCH{32_MiB};
+inline constexpr uint64_t DEFAULT_DB_CACHE_BATCH{64_MiB};
 
 //! Max memory allocated to block tree DB specific cache (bytes)
 inline constexpr uint64_t MAX_BLOCK_DB_CACHE{2_MiB};

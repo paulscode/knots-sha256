@@ -52,6 +52,10 @@ Result<void> CheckMiningOptions(BlockCreateOptions options, bool use_argnames)
                                             use_argnames ? "-blockmaxweight" : "block_max_weight",
                                             *options.block_max_weight))};
     }
+    if (options.block_reserved_size > MAX_BLOCK_SERIALIZED_SIZE) {
+        return Error{Untranslated(strprintf("%s (%zu) exceeds consensus maximum block size (%d)",
+                                            "block_reserved_size", options.block_reserved_size, MAX_BLOCK_SERIALIZED_SIZE))};
+    }
     if (options.coinbase_output_max_additional_sigops > MAX_BLOCK_SIGOPS_COST) {
         return Error{Untranslated(strprintf("%s (%zu) exceeds consensus maximum block sigops cost (%d)",
                                             "coinbase_output_max_additional_sigops",

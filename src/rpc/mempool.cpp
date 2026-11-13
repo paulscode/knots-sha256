@@ -29,6 +29,7 @@
 #include <rpc/protocol.h>
 #include <rpc/request.h>
 #include <rpc/mempool.h>
+#include <rpc/rawtransaction_util.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
@@ -376,7 +377,7 @@ static RPCMethod testmempoolaccept()
             {
                 {RPCResult::Type::OBJ, "", "",
                 {
-                    {RPCResult::Type::STR_HEX, "txid", "The transaction hash in hex"},
+                    {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
                     {RPCResult::Type::STR_HEX, "wtxid", "The transaction witness hash in hex"},
                     {RPCResult::Type::STR, "package-error", /*optional=*/true, "Package validation error, if any (only possible if rawtxs had more than 1 transaction)."},
                     {RPCResult::Type::BOOL, "allowed", /*optional=*/true, "Whether this tx would be accepted to the mempool and pass client-specified maxfeerate. "
@@ -551,6 +552,7 @@ static std::vector<RPCResult> MempoolEntryDescription()
         RPCResult{RPCResult::Type::NUM, "ancestorcount", "number of in-mempool ancestor transactions (including this one)"},
         RPCResult{RPCResult::Type::NUM, "ancestorsize", "virtual transaction size of in-mempool ancestors (including this one)"},
         RPCResult{RPCResult::Type::NUM, "chunkweight", "sigops-adjusted weight (as defined in BIP 141 and modified by '-bytespersigop') of this transaction's chunk"},
+        RPCResult{RPCResult::Type::STR_HEX, "hash", "hash of entire serialized transaction"},
         RPCResult{RPCResult::Type::STR_HEX, "wtxid", "hash of serialized transaction, including witness data"},
         RPCResult{RPCResult::Type::OBJ, "fees", "",
             {
@@ -637,6 +639,7 @@ static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPool
     info.pushKV("wtxid", e.GetTx().GetWitnessHash().ToString());
     auto feerate = pool.GetMainChunkFeerate(e);
     info.pushKV("chunkweight", feerate.size);
+    info.pushKV("hash", info["wtxid"]);
 
     UniValue fees(UniValue::VOBJ);
     fees.pushKV("base", ValueFromAmount(e.GetFee()));
@@ -796,6 +799,100 @@ static RPCMethod maxmempool()
     return NullUniValue;
 }
     };
+}
+
+static RPCMethod listmempooltransactions()
+{
+    return RPCMethod{"listmempooltransactions",
+        "Returns all transactions in the mempool. Can be filtered by mempool_sequence\n"
+        "\nAllows for syncing with current mempool entries via polling (not zmq).",
+        {
+            {"start_sequence", RPCArg::Type::NUM, RPCArg::Default{0}, "The mempool_sequence to start the results to. Defaults to 0 (zero, all transactions)."},
+            {"verbose", RPCArg::Type::BOOL, RPCArg::Default{false}, "True for a json object, false for array of transaction ids"},
+        },
+        {
+            RPCResult{"for verbose = false",
+                RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "mempool_sequence", "The current max mempool sequence value."},
+                    {RPCResult::Type::ARR, "txs", "",
+                    {
+                        {RPCResult::Type::OBJ, "", "",
+                        {
+                            {RPCResult::Type::NUM, "entry_sequence", "The mempool sequence value for this transaction entry."},
+                            {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
+                        }},
+                    }},
+                }},
+            RPCResult{"for verbose = true",
+                RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "mempool_sequence", "The current max mempool sequence value."},
+                    {RPCResult::Type::ARR, "txs", "",
+                    {
+                        {RPCResult::Type::OBJ, "", "",
+                        {
+                         Cat<std::vector<RPCResult>>(
+                            {
+                                {RPCResult::Type::NUM, "entry_sequence", "The mempool sequence value for this transaction entry."},
+                            },
+                            TxDoc({.txid_field_doc="The transaction id of the mempool transaction"})),
+                        }},
+                    }},
+                }},
+        },
+        RPCExamples{
+            HelpExampleCli("listmempooltransactions", "true")
+            + HelpExampleRpc("listmempooltransactions", "true")
+        },
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+        {
+            uint64_t start_mempool_sequence = 0;
+            if (!request.params[0].isNull()) {
+                start_mempool_sequence = request.params[0].getInt<uint64_t>();
+            }
+
+            bool fVerbose = false;
+            if (!request.params[1].isNull())
+                fVerbose = request.params[1].get_bool();
+
+            return MempoolTxsToJSON(EnsureAnyMemPool(request.context), fVerbose, start_mempool_sequence);
+        },
+    };
+}
+
+UniValue MempoolTxsToJSON(const CTxMemPool& pool, bool verbose, uint64_t sequence_start)
+{
+    uint64_t mempool_sequence;
+
+    LOCK(pool.cs);
+    mempool_sequence = pool.GetSequence();
+
+    UniValue o(UniValue::VOBJ);
+    o.pushKV("mempool_sequence", mempool_sequence);
+
+    UniValue a(UniValue::VARR);
+    for (const CTxMemPoolEntry& e : pool.mapTx) {
+        UniValue txentry(UniValue::VOBJ);
+
+        // We skip anything not requested.
+        if (e.GetSequence() < sequence_start)
+            continue;
+
+        txentry.pushKV("entry_sequence", e.GetSequence());
+
+        if (verbose) {
+            // We could also calculate fees etc for this transaction, but yolo.
+            TxToUniv(e.GetTx(), /*block_hash=*/uint256::ZERO, /*entry=*/txentry, /*include_hex=*/false);
+        } else {
+            txentry.pushKV("txid", e.GetTx().GetHash().ToString());
+        }
+
+        a.push_back(txentry);
+    }
+
+    o.pushKV("txs", a);
+    return o;
 }
 
 static RPCMethod getrawmempool()
@@ -1080,7 +1177,7 @@ static RPCMethod gettxspendingprevout()
         },
         RPCExamples{
             HelpExampleCli("gettxspendingprevout", "\"[{\\\"txid\\\":\\\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\\\",\\\"vout\\\":3}]\"")
-            + HelpExampleRpc("gettxspendingprevout", "\"[{\\\"txid\\\":\\\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\\\",\\\"vout\\\":3}]\"")
+            + HelpExampleRpc("gettxspendingprevout", "[{\"txid\":\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\",\"vout\":3}]")
             + HelpExampleCliNamed("gettxspendingprevout", {{"outputs", "[{\"txid\":\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\",\"vout\":3}]"}, {"return_spending_tx", true}})
         },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -1418,6 +1515,8 @@ static RPCMethod importmempool()
         RPCResult{RPCResult::Type::OBJ, "", "", std::vector<RPCResult>{}},
         RPCExamples{HelpExampleCli("importmempool", "/path/to/mempool.dat") + HelpExampleRpc("importmempool", R"("/path/to/mempool.dat")")},
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
+            EnsureNotWalletRestricted(request);
+
             const NodeContext& node{EnsureAnyNodeContext(request.context)};
 
             CTxMemPool& mempool{EnsureMemPool(node)};
@@ -1492,8 +1591,8 @@ static std::vector<RPCResult> OrphanDescription()
         RPCResult{RPCResult::Type::STR_HEX, "txid", "The transaction hash in hex"},
         RPCResult{RPCResult::Type::STR_HEX, "wtxid", "The transaction witness hash in hex"},
         RPCResult{RPCResult::Type::NUM, "bytes", "The serialized transaction size in bytes"},
-        RPCResult{RPCResult::Type::NUM, "vsize", "(DEPRECATED) use vsize_bip141 instead. The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
-        RPCResult{RPCResult::Type::NUM, "vsize_bip141", "The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
+        RPCResult{RPCResult::Type::NUM, "vsize", "(DEPRECATED) use vsize_bip141 instead. The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted. CAUTION: Since orphan transactions are missing input data, this can be incorrect!"},
+        RPCResult{RPCResult::Type::NUM, "vsize_bip141", "The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted. CAUTION: Since orphan transactions are missing input data, this can be incorrect!"},
         RPCResult{RPCResult::Type::NUM, "weight", "The transaction weight as defined in BIP 141."},
         RPCResult{RPCResult::Type::ARR, "from", "",
         {
@@ -1622,7 +1721,7 @@ static RPCMethod submitpackage()
                 {RPCResult::Type::OBJ_DYN, "tx-results", "The transaction results keyed by wtxid. An entry is returned for every submitted wtxid.",
                 {
                     {RPCResult::Type::OBJ, "wtxid", "transaction wtxid", {
-                        {RPCResult::Type::STR_HEX, "txid", "The transaction hash in hex"},
+                        {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
                         {RPCResult::Type::STR_HEX, "other-wtxid", /*optional=*/true, "The wtxid of a different transaction with the same txid but different witness found in the mempool. This means the submitted transaction was ignored."},
                         {RPCResult::Type::NUM, "vsize_adjusted", /*optional=*/true, "Maximum of sigop-adjusted size (-bytespersigop) and virtual transaction size as defined in BIP 141."},
                         {RPCResult::Type::NUM, "vsize", /*optional=*/true, "(DEPRECATED) Was previously erroneously described as the BIP 141 vsize, but is actually sigops-adjusted vsize.\n"
@@ -1828,6 +1927,7 @@ void RegisterMempoolRPCCommands(CRPCTable& t)
         {"blockchain", &maxmempool},
         {"hidden", &getorphantxs},
         {"rawtransactions", &submitpackage},
+        {"rawtransactions", &listmempooltransactions},
     };
     for (const auto& c : commands) {
         t.appendCommand(c.name, &c);
