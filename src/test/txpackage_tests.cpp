@@ -633,6 +633,14 @@ BOOST_AUTO_TEST_CASE(package_single_tx)
 // the mempool.
 BOOST_AUTO_TEST_CASE(package_witness_swap_tests)
 {
+    // Knots SHA256: these packages spend OP_DROP witness scripts, whose dropped items -datacarrierdroppeditems (on by
+    // default, decisions/0028) counts as data. The test is about witness swaps, so it runs with the rule off, as under
+    // -corepolicy; the guard restores it even if a check fails.
+    struct DroppedItemsOff {
+        const bool prev{g_datacarrier_dropped_items};
+        DroppedItemsOff() { g_datacarrier_dropped_items = false; }
+        ~DroppedItemsOff() { g_datacarrier_dropped_items = prev; }
+    } dropped_items_off;
     // Mine blocks to mature coinbases.
     mineBlocks(5);
     MockMempoolMinFee(CFeeRate(5000), *m_node.mempool);
