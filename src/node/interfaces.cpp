@@ -12,6 +12,7 @@
 #include <common/args.h>
 #include <common/settings.h>
 #include <consensus/amount.h>
+#include <common/pcp.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
 #include <external_signer.h>
@@ -201,7 +202,10 @@ public:
         });
         args().WriteSettingsFile();
     }
-    void mapPort(bool enable) override { StartMapPort(enable); }
+    void mapPort(bool enable) override {
+        g_pcp_warn_for_unauthorized = true;
+        StartMapPort(enable);
+    }
     std::optional<Proxy> getProxy(Network net) override { return GetProxy(net); }
     size_t getNodeCount(ConnectionDirection flags) override
     {
@@ -425,6 +429,9 @@ public:
     }
     std::unique_ptr<Handler> handleBannedListChanged(BannedListChangedFn fn) override
     {
+        if (m_context->banman) {
+            m_context->banman->EnsureSweepScheduled();
+        }
         return MakeSignalHandler(::uiInterface.BannedListChanged.connect(fn));
     }
     std::unique_ptr<Handler> handleNotifyBlockTip(NotifyBlockTipFn fn) override
@@ -810,6 +817,9 @@ public:
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }
     void initWarning(const bilingual_str& message) override { InitWarning(message); }
     void initError(const bilingual_str& message) override { InitError(message); }
+    bool initQuestion(const bilingual_str& message, const bilingual_str& non_interactive_message, unsigned int style) override {
+        return uiInterface.ThreadSafeQuestion(message, non_interactive_message.translated, style);
+    }
     void showProgress(const std::string& title, int progress, bool resume_possible) override
     {
         ::uiInterface.ShowProgress(title, progress, resume_possible);

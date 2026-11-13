@@ -30,6 +30,7 @@
 #include <util/check.h>
 #include <util/expected.h>
 #include <util/fs.h>
+#include <util/ioprio.h>
 #include <util/log.h>
 #include <util/obfuscation.h>
 #include <util/overflow.h>
@@ -207,21 +208,19 @@ namespace node {
 bool CBlockIndexWorkComparator::operator()(const CBlockIndex* pa, const CBlockIndex* pb) const
 {
     // First sort by most total work, ...
-    if (pa->nChainWork > pb->nChainWork) return false;
-    if (pa->nChainWork < pb->nChainWork) return true;
+    if (pa->nChainWork != pb->nChainWork) {
+        return pa->nChainWork < pb->nChainWork;
+    }
 
     // ... then by earliest activatable time, ...
-    if (pa->nSequenceId < pb->nSequenceId) return false;
-    if (pa->nSequenceId > pb->nSequenceId) return true;
+    if (pa->nSequenceId != pb->nSequenceId) {
+        return pa->nSequenceId > pb->nSequenceId;
+    }
 
     // Use pointer address as tie breaker (should only happen with blocks
     // loaded from disk, as those share the same id: 0 for blocks on the
     // best chain, 1 for all others).
-    if (pa < pb) return false;
-    if (pa > pb) return true;
-
-    // Identical blocks.
-    return false;
+    return pa > pb;
 }
 
 bool CBlockIndexHeightOnlyComparator::operator()(const CBlockIndex* pa, const CBlockIndex* pb) const
@@ -389,6 +388,26 @@ void BlockManager::FindFilesToPruneManual(
         chain.GetRole(), last_block_can_prune, count);
 }
 
+uint64_t BlockManager::GetPruneTargetForChainstate(const Chainstate& chain, ChainstateManager& chainman) const
+{
+    const size_t number_of_chainstates{chainman.HistoricalChainstate() ? 2u : 1u};
+    const uint64_t min_overall_target{MIN_DISK_SPACE_FOR_BLOCK_FILES * number_of_chainstates};
+    auto target = std::max(min_overall_target, GetPruneTarget());
+    uint64_t target_boost{0};
+    if (m_opts.prune_target_during_init > -1 && chainman.IsInitialBlockDownload()) {
+        if ((uint64_t)m_opts.prune_target_during_init <= target) {
+            target = std::max(min_overall_target, (uint64_t)m_opts.prune_target_during_init);
+        } else if (chain.GetRole().validated) {
+            // Only the background/normal gets the benefit
+            // NOTE: This assumes only one such chainstate exists
+            target_boost = m_opts.prune_target_during_init - target;
+        }
+    }
+    // Distribute our -prune budget over all chainstates.
+    target = (target / number_of_chainstates) + target_boost;
+    return target;
+}
+
 void BlockManager::FindFilesToPrune(
     std::set<int>& setFilesToPrune,
     int last_prune,
@@ -396,16 +415,7 @@ void BlockManager::FindFilesToPrune(
     ChainstateManager& chainman)
 {
     LOCK(::cs_main);
-    // Compute `target` value with maximum size (in bytes) of blocks below the
-    // `last_prune` height which should be preserved and not pruned. The
-    // `target` value will be derived from the -prune preference provided by the
-    // user. If there is a historical chainstate being used to populate indexes
-    // and validate the snapshot, the target is divided by two so half of the
-    // block storage will be reserved for the historical chainstate, and the
-    // other half will be reserved for the most-work chainstate.
-    const int num_chainstates{chainman.HistoricalChainstate() ? 2 : 1};
-    const auto target = std::max(
-        MIN_DISK_SPACE_FOR_BLOCK_FILES, GetPruneTarget() / num_chainstates);
+    const auto target{GetPruneTargetForChainstate(chain, chainman)};
     const uint64_t target_sync_height = chainman.m_best_header->nHeight;
 
     if (chain.m_chain.Height() < 0 || target == 0) {
@@ -1129,12 +1139,12 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
     return true;
 }
 
-bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
+bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash, const bool lowprio) const
 {
     block.SetNull();
 
     // Open history file to read
-    const auto block_data{ReadRawBlock(pos)};
+    const auto block_data{ReadRawBlock(pos, /*block_part=*/std::nullopt, lowprio)};
     if (!block_data) {
         return false;
     }
@@ -1170,13 +1180,13 @@ bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::o
     return true;
 }
 
-bool BlockManager::ReadBlock(CBlock& block, const CBlockIndex& index) const
+bool BlockManager::ReadBlock(CBlock& block, const CBlockIndex& index, const bool lowprio) const
 {
     const FlatFilePos block_pos{WITH_LOCK(cs_main, return index.GetBlockPos())};
-    return ReadBlock(block, block_pos, index.GetBlockHash());
+    return ReadBlock(block, block_pos, index.GetBlockHash(), /*lowprio=*/ lowprio);
 }
 
-BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part) const
+BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part, const bool lowprio) const
 {
     if (pos.nPos < STORAGE_HEADER_BYTES) {
         // If nPos is less than STORAGE_HEADER_BYTES, we can't read the header that precedes the block data
@@ -1185,11 +1195,16 @@ BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& p
         LogError("Failed for %s while reading raw block storage header", pos.ToString());
         return util::Unexpected{ReadRawError::IO};
     }
+
+    IOPRIO_IDLER(lowprio);
+
     AutoFile filein{OpenBlockFile({pos.nFile, pos.nPos - STORAGE_HEADER_BYTES}, /*fReadOnly=*/true)};
     if (filein.IsNull()) {
         LogError("OpenBlockFile failed for %s while reading raw block", pos.ToString());
         return util::Unexpected{ReadRawError::IO};
     }
+
+    if (lowprio) filein.SetIdlePriority();
 
     try {
         MessageStartChars blk_start;
@@ -1293,7 +1308,7 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
     } else {
         // Create initial or missing xor key file
         AutoFile xor_key_file{fsbridge::fopen(xor_key_path,
-#ifdef __MINGW64__
+#if 0
             "wb" // Temporary workaround for https://github.com/bitcoin/bitcoin/issues/30210
 #else
             "wbx"

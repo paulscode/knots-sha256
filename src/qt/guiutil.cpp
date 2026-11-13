@@ -224,6 +224,39 @@ void AddButtonShortcut(QAbstractButton* button, const QKeySequence& shortcut)
     QObject::connect(new QShortcut(shortcut, button), &QShortcut::activated, [button]() { button->animateClick(); });
 }
 
+qint64 URIParseAmount(std::string amount_str, bool * const ok)
+{
+    bool is_hex = false;
+    if (amount_str[0] == 'x' || amount_str[0] == 'X') {
+        is_hex = true;
+        amount_str = amount_str.substr(1);
+    }
+    size_t exponent_sep_pos = amount_str.find_first_of("Xx", 1);
+    int exponent;
+    if (exponent_sep_pos != std::string::npos) {
+        exponent = QString::fromStdString(amount_str.substr(exponent_sep_pos + 1)).toInt(ok, is_hex ? 0x10 : 10);
+        if (!*ok) return -1;
+    } else {
+        exponent = is_hex ? 4 : 8;
+        exponent_sep_pos = amount_str.size();
+    }
+    size_t fractional_sep_pos = amount_str.find('.');
+    size_t fractional_digits = 0;
+    if (fractional_sep_pos == std::string::npos)
+        fractional_sep_pos = exponent_sep_pos;
+    else
+        fractional_digits = (exponent_sep_pos - fractional_sep_pos) - 1;
+    exponent -= fractional_digits;
+    amount_str = amount_str.substr(0, fractional_sep_pos) + (fractional_digits ? amount_str.substr(fractional_sep_pos + 1, fractional_digits) : "");
+    if (exponent > 0) {
+        amount_str.append(exponent, '0');
+    } else if (exponent < 0) {
+        // Sub-satoshi amount? Truncate
+        amount_str = amount_str.substr(0, amount_str.size() + exponent);
+    }
+    return QString::fromStdString(amount_str).toLongLong(ok, is_hex ? 0x10 : 10);
+}
+
 bool parseBitcoinURI(const QUrl &uri, SendCoinsRecipient *out)
 {
     // return if URI is not valid or is no bitcoin: URI
@@ -263,9 +296,9 @@ bool parseBitcoinURI(const QUrl &uri, SendCoinsRecipient *out)
         {
             if(!i->second.isEmpty())
             {
-                if (!BitcoinUnits::parse(BitcoinUnit::BTC, i->second, &rv.amount)) {
-                    return false;
-                }
+                bool ok;
+                rv.amount = URIParseAmount((i->second).toStdString(), &ok);
+                if (!ok) return false;
             }
             fShouldReturnFalse = false;
         }
@@ -490,14 +523,26 @@ void bringToFront(QWidget* w)
 #endif
 
     if (w) {
-        // activateWindow() (sometimes) helps with keyboard focus on Windows
-        if (w->isMinimized()) {
-            w->showNormal();
-        } else {
+#if (QT_VERSION < QT_VERSION_CHECK(6, 3, 2))
+        if (QGuiApplication::platformName() == "wayland") {
+            // Workaround for bug fixed in https://codereview.qt-project.org/c/qt/qtwayland/+/421125
+            auto flags = w->windowFlags();
+            w->setWindowFlags(flags|Qt::WindowStaysOnTopHint);
             w->show();
+            w->setWindowFlags(flags);
+            w->show();
+        } else
+#endif
+        {
+            // activateWindow() (sometimes) helps with keyboard focus on Windows
+            if (w->isMinimized()) {
+                w->showNormal();
+            } else {
+                w->show();
+            }
+            w->activateWindow();
+            w->raise();
         }
-        w->activateWindow();
-        w->raise();
     }
 }
 
@@ -699,8 +744,14 @@ bool GetStartOnSystemStartup()
 
 bool SetStartOnSystemStartup(bool fAutoStart)
 {
-    if (!fAutoStart)
-        fs::remove(GetAutostartFilePath());
+    if (!fAutoStart) {
+        try {
+            fs::remove(GetAutostartFilePath());
+        } catch(const fs::filesystem_error& e) {
+            LogWarning("Failed to remove autostart file: %s\n", e.what());
+            return false;
+        }
+    }
     else
     {
         char pszExePath[MAX_PATH+1];
@@ -710,7 +761,12 @@ bool SetStartOnSystemStartup(bool fAutoStart)
         }
         pszExePath[r] = '\0';
 
-        fs::create_directories(GetAutostartDir());
+        try {
+            fs::create_directories(GetAutostartDir());
+        } catch(const fs::filesystem_error& e) {
+            LogWarning("Failed to create autostart directory: %s\n", e.what());
+            return false;
+        }
 
         std::ofstream optionFile{GetAutostartFilePath().std_path(), std::ios_base::out | std::ios_base::trunc};
         if (!optionFile.good())
@@ -1113,6 +1169,9 @@ void ShowModalDialogAsynchronously(QDialog* dialog, const Qt::WindowModality mod
 
 QString WalletDisplayName(const QString& name)
 {
+    if (name.endsWith(".dat")) {
+        return name.chopped(4);
+    }
     return name.isEmpty() ? "[" + QObject::tr("default wallet") + "]" : name;
 }
 

@@ -158,6 +158,7 @@ inline constexpr uint64_t KNOWN_WALLET_FLAGS =
     |   WALLET_FLAG_EXTERNAL_SIGNER;
 
 inline constexpr uint64_t MUTABLE_WALLET_FLAGS =
+        WALLET_FLAG_EXTERNAL_SIGNER |
         WALLET_FLAG_AVOID_REUSE;
 
 static const std::map<WalletFlags, std::string> WALLET_FLAG_TO_STRING{
@@ -689,8 +690,8 @@ public:
     /** Fetch the inputs and sign with SIGHASH_ALL. */
     bool SignTransaction(CMutableTransaction& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     /** Sign the tx given the input coins and sighash. */
-    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const;
-    SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const;
+    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, std::optional<CAmount>* inputs_amount_sum = nullptr) const;
+    SigningResult SignMessage(const MessageSignatureFormat format, const std::string& message, const CTxDestination& address, std::string& str_sig) const;
 
     /**
      * Fills out a PSBT with information from the wallet. Fills in UTXOs if we have
@@ -777,7 +778,7 @@ public:
     int64_t m_keypool_size{DEFAULT_KEYPOOL_SIZE};
 
     /** Notify external script when a wallet transaction comes in or is updated (handled by -walletnotify) */
-    std::string m_notify_tx_changed_script;
+    std::vector<std::string> m_notify_tx_changed_scripts;
 
     size_t KeypoolCountExternalKeys() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     bool TopUpKeyPool(unsigned int kpSize = 0);
@@ -879,6 +880,8 @@ public:
      * @note called with lock cs_wallet held.
      */
     btcsignals::signal<void(const Txid& hashTx, ChangeType status)> NotifyTransactionChanged;
+
+    static btcsignals::signal<void(const CTransactionRef& ptxn, const uint256& blockHash)> TransactionAddedToWallet;
 
     /** Show progress e.g. for rescan */
     btcsignals::signal<void (const std::string &title, int nProgress)> ShowProgress;

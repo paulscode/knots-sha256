@@ -429,6 +429,7 @@ public:
 
     /** Attempt to stay below this number of bytes of block files. */
     [[nodiscard]] uint64_t GetPruneTarget() const { return m_opts.prune_target; }
+    [[nodiscard]] uint64_t GetPruneTargetForChainstate(const Chainstate& chain, ChainstateManager& chainman) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     static constexpr auto PRUNE_TARGET_MANUAL{std::numeric_limits<uint64_t>::max()};
 
     [[nodiscard]] bool LoadingBlocks() const { return m_importing || !m_blockfiles_indexed; }
@@ -495,9 +496,9 @@ public:
     void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const;
 
     /** Functions for disk access for blocks */
-    bool ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
-    bool ReadBlock(CBlock& block, const CBlockIndex& index) const;
-    ReadRawBlockResult ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part = std::nullopt) const;
+    bool ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash, bool lowprio = false) const;
+    bool ReadBlock(CBlock& block, const CBlockIndex& index, bool lowprio = false) const;
+    ReadRawBlockResult ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part = std::nullopt, bool lowprio = false) const;
 
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
 

@@ -60,6 +60,13 @@ void FeeRateEstimatorManager::IntervalFlush()
     m_mempool_estimator->FlushMinedBlockStats();
 }
 
+bool FeeRateEstimatorManager::FlushNow()
+{
+    const bool written{m_block_policy_estimator->FlushFeeEstimates()};
+    m_mempool_estimator->FlushMinedBlockStats();
+    return written;
+}
+
 void FeeRateEstimatorManager::ShutdownFlush()
 {
     m_block_policy_estimator->Flush();

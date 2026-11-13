@@ -552,6 +552,7 @@ static std::vector<RPCResult> MempoolEntryDescription()
         RPCResult{RPCResult::Type::NUM, "ancestorcount", "number of in-mempool ancestor transactions (including this one)"},
         RPCResult{RPCResult::Type::NUM, "ancestorsize", "virtual transaction size of in-mempool ancestors (including this one)"},
         RPCResult{RPCResult::Type::NUM, "chunkweight", "sigops-adjusted weight (as defined in BIP 141 and modified by '-bytespersigop') of this transaction's chunk"},
+        RPCResult{RPCResult::Type::STR_HEX, "hash", "hash of entire serialized transaction"},
         RPCResult{RPCResult::Type::STR_HEX, "wtxid", "hash of serialized transaction, including witness data"},
         RPCResult{RPCResult::Type::OBJ, "fees", "",
             {
@@ -565,11 +566,9 @@ static std::vector<RPCResult> MempoolEntryDescription()
             {RPCResult{RPCResult::Type::STR_HEX, "transactionid", "parent transaction id"}}},
         RPCResult{RPCResult::Type::ARR, "spentby", "unconfirmed transactions spending outputs from this transaction",
             {RPCResult{RPCResult::Type::STR_HEX, "transactionid", "child transaction id"}}},
+        RPCResult{RPCResult::Type::BOOL, "bip125-replaceable", "Whether this transaction signals BIP125 replaceability or has an unconfirmed ancestor signaling BIP125 replaceability.\n"},
         RPCResult{RPCResult::Type::BOOL, "unbroadcast", "Whether this transaction is currently unbroadcast (initial broadcast not yet acknowledged by any peers)"},
     };
-    if (IsDeprecatedRPCEnabled("bip125")) {
-        list.emplace_back(RPCResult::Type::BOOL, "bip125-replaceable", "Whether this transaction signals BIP125 replaceability or has an unconfirmed ancestor signaling BIP125 replaceability. (DEPRECATED)\n");
-    }
     return list;
 }
 
@@ -640,6 +639,7 @@ static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPool
     info.pushKV("wtxid", e.GetTx().GetWitnessHash().ToString());
     auto feerate = pool.GetMainChunkFeerate(e);
     info.pushKV("chunkweight", feerate.size);
+    info.pushKV("hash", info["wtxid"]);
 
     UniValue fees(UniValue::VOBJ);
     fees.pushKV("base", ValueFromAmount(e.GetFee()));
@@ -674,16 +674,14 @@ static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPool
     info.pushKV("unbroadcast", pool.IsUnbroadcastTx(tx.GetHash()));
 
     // Add opt-in RBF status
-    if (IsDeprecatedRPCEnabled("bip125")) {
-        bool rbfStatus = false;
-        RBFTransactionState rbfState = IsRBFOptIn(tx, pool);
-        if (rbfState == RBFTransactionState::UNKNOWN) {
-            throw JSONRPCError(RPC_MISC_ERROR, "Transaction is not in mempool");
-        } else if (rbfState == RBFTransactionState::REPLACEABLE_BIP125) {
-            rbfStatus = true;
-        }
-        info.pushKV("bip125-replaceable", rbfStatus);
+    bool rbfStatus = false;
+    RBFTransactionState rbfState = IsRBFOptIn(tx, pool);
+    if (rbfState == RBFTransactionState::UNKNOWN) {
+        throw JSONRPCError(RPC_MISC_ERROR, "Transaction is not in mempool");
+    } else if (rbfState == RBFTransactionState::REPLACEABLE_BIP125) {
+        rbfStatus = true;
     }
+    info.pushKV("bip125-replaceable", rbfStatus);
 }
 
 UniValue MempoolToJSON(const CTxMemPool& pool, bool verbose, bool include_mempool_sequence)
@@ -1299,15 +1297,39 @@ UniValue MempoolInfoToJSON(const CTxMemPool& pool, const std::optional<MempoolHi
     ret.pushKV("mempoolminfee", ValueFromAmount(std::max(pool.GetMinFee(), pool.m_opts.min_relay_feerate).GetFeePerK()));
     ret.pushKV("minrelaytxfee", ValueFromAmount(pool.m_opts.min_relay_feerate.GetFeePerK()));
     ret.pushKV("incrementalrelayfee", ValueFromAmount(pool.m_opts.incremental_relay_feerate.GetFeePerK()));
+    ret.pushKV("dustrelayfee", ValueFromAmount(pool.m_opts.dust_relay_feerate.GetFeePerK()));
+    ret.pushKV("dustrelayfeefloor", ValueFromAmount(pool.m_opts.dust_relay_feerate_floor.GetFeePerK()));
+    if (pool.m_opts.dust_relay_target == 0) {
+        ret.pushKV("dustdynamic", "off");
+    } else {
+        std::string multiplier_str = strprintf("%u", pool.m_opts.dust_relay_multiplier / 1000);
+        if (pool.m_opts.dust_relay_multiplier % 1000) {
+            multiplier_str += strprintf(".%03u", pool.m_opts.dust_relay_multiplier % 1000);
+            while (multiplier_str.back() == '0') multiplier_str.pop_back();
+        }
+        if (pool.m_opts.dust_relay_target < 0) {
+            ret.pushKV("dustdynamic", strprintf("%s*target:%u", multiplier_str, -pool.m_opts.dust_relay_target));
+        } else { // pool.m_opts.dust_relay_target > 0
+            ret.pushKV("dustdynamic", strprintf("%s*mempool:%u", multiplier_str, pool.m_opts.dust_relay_target));
+        }
+    }
     ret.pushKV("unbroadcastcount", pool.GetUnbroadcastTxs().size());
+    ret.pushKV("fullrbf", (pool.m_opts.rbf_policy == RBFPolicy::Always));
+    switch (pool.m_opts.rbf_policy) {
+    case RBFPolicy::Never : ret.pushKV("rbf_policy", "never"); break;
+    case RBFPolicy::OptIn : ret.pushKV("rbf_policy", "optin"); break;
+    case RBFPolicy::Always: ret.pushKV("rbf_policy", "always"); break;
+    }
+    switch (pool.m_opts.truc_policy) {
+    case TRUCPolicy::Reject : ret.pushKV("truc_policy", "reject"); break;
+    case TRUCPolicy::Accept : ret.pushKV("truc_policy", "accept"); break;
+    case TRUCPolicy::Enforce: ret.pushKV("truc_policy", "enforce"); break;
+    }
     ret.pushKV("permitbaremultisig", pool.m_opts.permit_bare_multisig);
     ret.pushKV("maxdatacarriersize", pool.m_opts.max_datacarrier_bytes.value_or(0));
     ret.pushKV("limitclustercount", pool.m_opts.limits.cluster_count);
     ret.pushKV("limitclustersize", pool.m_opts.limits.cluster_size_vbytes);
     ret.pushKV("optimal", pool.m_txgraph->DoWork(0)); // 0 work is a quick check for known optimality
-    if (IsDeprecatedRPCEnabled("fullrbf")) {
-        ret.pushKV("fullrbf", true);
-    }
 
     if (histogram_floors) {
         const MempoolHistogramFeeRates& floors{histogram_floors.value()};
@@ -1393,16 +1415,19 @@ static RPCMethod getmempoolinfo()
                     {RPCResult::Type::STR_AMOUNT, "mempoolminfee", "Minimum fee rate in " + CURRENCY_UNIT + "/kvB for tx to be accepted. Is the maximum of minrelaytxfee and minimum mempool fee"},
                     {RPCResult::Type::STR_AMOUNT, "minrelaytxfee", "Current minimum relay fee for transactions"},
                     {RPCResult::Type::STR_AMOUNT, "incrementalrelayfee", "minimum fee rate increment for mempool limiting or replacement in " + CURRENCY_UNIT + "/kvB"},
+                    {RPCResult::Type::NUM, "dustrelayfee", "Current fee rate used to define dust, the value of an output so small it will cost more to spend than its value, in " + CURRENCY_UNIT + "/kvB"},
+                    {RPCResult::Type::NUM, "dustrelayfeefloor", "Minimum fee rate used to define dust in " + CURRENCY_UNIT + "/kvB"},
+                    {RPCResult::Type::STR, "dustdynamic", "Method for automatic adjustments to dustrelayfee (one of: off, target:<blocks>, or mempool:<kB>)"},
                     {RPCResult::Type::NUM, "unbroadcastcount", "Current number of transactions that haven't passed initial broadcast yet"},
+                    {RPCResult::Type::BOOL, "fullrbf", "True if the mempool accepts RBF without replaceability signaling inspection"},
+                    {RPCResult::Type::STR, "rbf_policy", "Policy used for replacing conflicting transactions by fee (one of: never, optin, always)"},
+                    {RPCResult::Type::STR, "truc_policy", "Behaviour for transactions requesting limits (one of: reject, accept, enforce)"},
                     {RPCResult::Type::BOOL, "permitbaremultisig", "True if the mempool accepts transactions with bare multisig outputs"},
                     {RPCResult::Type::NUM, "maxdatacarriersize", "Maximum number of bytes that can be used by OP_RETURN outputs in the mempool"},
                     {RPCResult::Type::NUM, "limitclustercount", "Maximum number of transactions that can be in a cluster (configured by -limitclustercount)"},
                     {RPCResult::Type::NUM, "limitclustersize", "Maximum size of a cluster in virtual bytes (configured by -limitclustersize)"},
                     {RPCResult::Type::BOOL, "optimal", "If the mempool is in a known-optimal transaction ordering"},
                 };
-                if (IsDeprecatedRPCEnabled("fullrbf")) {
-                    list.emplace_back(RPCResult::Type::BOOL, "fullrbf", "True if the mempool accepts RBF without replaceability signaling inspection (DEPRECATED)");
-                }
                 list.push_back(RPCResult{RPCResult::Type::OBJ_DYN, "fee_histogram", /*optional=*/true, "",
                     {
                         {RPCResult::Type::OBJ, "<fee_rate_group>", "Fee rate group named by its lower bound (in " + CURRENCY_ATOM + "/vB), identical to the \"from_feerate\" field below",

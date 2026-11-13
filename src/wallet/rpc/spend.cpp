@@ -13,6 +13,7 @@
 #include <rpc/util.h>
 #include <script/script.h>
 #include <util/rbf.h>
+#include <util/strencodings.h>
 #include <util/translation.h>
 #include <util/vector.h>
 #include <wallet/coincontrol.h>
@@ -60,8 +61,12 @@ static void InterpretFeeEstimationInstructions(const UniValue& conf_target, cons
     } else {
         options.pushKV("fee_rate", fee_rate);
     }
-    if (!options["conf_target"].isNull() && (options["estimate_mode"].isNull() || (options["estimate_mode"].get_str() == "unset"))) {
+    auto estimate_mode_set = !options["estimate_mode"].isNull() && (ToLower(options["estimate_mode"].get_str()) != "unset");
+    if (!options["conf_target"].isNull() && !estimate_mode_set) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Specify estimate_mode");
+    }
+    if (options["conf_target"].isNull() && estimate_mode_set) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "estimate_mode should be passed with conf_target");
     }
 }
 
@@ -95,17 +100,8 @@ std::set<int> InterpretSubtractFeeFromOutputInstructions(const UniValue& sffo_in
 
 static UniValue FinishTransaction(const std::shared_ptr<CWallet> pwallet, const UniValue& options, CMutableTransaction& rawTx)
 {
-    bool can_anti_fee_snipe = !options.exists("locktime");
-
-    for (const CTxIn& tx_in : rawTx.vin) {
-        // Checks sequence values consistent with DiscourageFeeSniping
-        can_anti_fee_snipe = can_anti_fee_snipe && (tx_in.nSequence == CTxIn::MAX_SEQUENCE_NONFINAL || tx_in.nSequence == MAX_BIP125_RBF_SEQUENCE);
-    }
-
-    if (can_anti_fee_snipe) {
-        LOCK(pwallet->cs_wallet);
-        FastRandomContext rng_fast;
-        DiscourageFeeSniping(rawTx, rng_fast, pwallet->chain(), pwallet->GetLastBlockHash(), pwallet->GetLastBlockHeight());
+    if (!options.exists("locktime")) {
+        MaybeDiscourageFeeSniping2(*pwallet, rawTx);
     }
 
     // Make a blank psbt
@@ -221,7 +217,7 @@ static void SetFeeEstimateMode(const CWallet& wallet, CCoinControl& cc, const Un
         if (!conf_target.isNull()) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Cannot specify both conf_target and fee_rate. Please provide either a confirmation target in blocks for automatic fee estimation, or an explicit fee rate.");
         }
-        if (!estimate_mode.isNull() && estimate_mode.get_str() != "unset") {
+        if (!estimate_mode.isNull() && ToLower(estimate_mode.get_str()) != "unset") {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Cannot specify both estimate_mode and fee_rate");
         }
         // Fee rates in sat/vB cannot represent more than 3 significant digits.
@@ -884,6 +880,8 @@ RPCMethod signrawtransactionwithwallet()
                     {
                         {RPCResult::Type::STR_HEX, "hex", "The hex-encoded raw transaction with signature(s)"},
                         {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
+                        {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The fee (input amounts minus output amounts), if known"},
+                        {RPCResult::Type::STR_AMOUNT, "feerate", /*optional=*/true, "The fee rate (in " + CURRENCY_UNIT + "/kB), if fee is known"},
                         {RPCResult::Type::ARR, "errors", /*optional=*/true, "Script verification errors (if there are any)",
                         {
                             {RPCResult::Type::OBJ, "", "",
@@ -936,10 +934,11 @@ RPCMethod signrawtransactionwithwallet()
 
     // Script verification errors
     std::map<int, bilingual_str> input_errors;
+    std::optional<CAmount> inputs_amount_sum;
 
-    bool complete = pwallet->SignTransaction(mtx, coins, *nHashType, input_errors);
+    bool complete = pwallet->SignTransaction(mtx, coins, *nHashType, input_errors, &inputs_amount_sum);
     UniValue result(UniValue::VOBJ);
-    SignTransactionResultToJSON(mtx, complete, coins, input_errors, result);
+    SignTransactionResultToJSON(mtx, complete, coins, input_errors, result, inputs_amount_sum);
     return result;
 },
     };
@@ -1762,7 +1761,7 @@ RPCMethod walletcreatefundedpsbt()
                             "accepted as second parameter.",
                         OutputsDoc(),
                         RPCArgOptions{.skip_type_check = true}},
-                    {"locktime", RPCArg::Type::NUM, RPCArg::Default{0}, "Raw locktime. Non-0 value also locktime-activates inputs"},
+                    {"locktime", RPCArg::Type::NUM, RPCArg::DefaultHint{"locktime close to block height to prevent fee sniping"}, "Raw locktime. Non-0 value also locktime-activates inputs"},
                     {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
                         Cat<std::vector<RPCArg>>(
                         {
@@ -1842,6 +1841,11 @@ RPCMethod walletcreatefundedpsbt()
     // This sets us up for a future PR to completely remove tx from the function signature in favor of passing inputs directly
     rawTx.vout.clear();
     auto txr = FundTransaction(wallet, rawTx, recipients, options, coin_control, /*override_min_fee=*/true);
+    rawTx = CMutableTransaction(*txr.tx);
+
+    if (request.params[2].isNull()) {
+        MaybeDiscourageFeeSniping2(*pwallet, rawTx);
+    }
 
     // Make a blank psbt
     uint32_t psbt_version = 2;
@@ -1852,7 +1856,7 @@ RPCMethod walletcreatefundedpsbt()
         throw JSONRPCError(RPC_INVALID_PARAMETER, "The PSBT version can only be 2 or 0");
     }
 
-    PartiallySignedTransaction psbtx(CMutableTransaction(*txr.tx), psbt_version);
+    PartiallySignedTransaction psbtx(rawTx, psbt_version);
 
     // Fill transaction with out data but don't sign
     bool bip32derivs = request.params[4].isNull() ? true : request.params[4].get_bool();

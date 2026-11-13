@@ -2,18 +2,22 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <bitcoin-build-config.h> // IWYU pragma: keep
+
 #include <dbwrapper.h>
 
+#include <leveldb/c.h>
 #include <leveldb/cache.h>
 #include <leveldb/db.h>
 #include <leveldb/env.h>
 #include <leveldb/filter_policy.h>
-#include <leveldb/helpers/memenv/memenv.h>
+#include <memenv.h>
 #include <leveldb/iterator.h>
 #include <leveldb/options.h>
 #include <leveldb/slice.h>
 #include <leveldb/status.h>
 #include <leveldb/write_batch.h>
+#include <node/interface_ui.h>
 #include <random.h>
 #include <serialize.h>
 #include <span.h>
@@ -23,7 +27,9 @@
 #include <util/fs_helpers.h>
 #include <util/log.h>
 #include <util/obfuscation.h>
+#include <util/result.h>
 #include <util/strencodings.h>
+#include <util/translation.h>
 
 #include <algorithm>
 #include <cassert>
@@ -52,6 +58,43 @@ static void HandleError(const leveldb::Status& status)
     LogInfo("You can use -debug=leveldb to get more complete diagnostic messages");
     throw dbwrapper_error(errmsg);
 }
+
+util::Result<void> dbwrapper_SanityCheck()
+{
+#ifndef EMBEDDED_LEVELDB
+    unsigned long header_version = (leveldb::kMajorVersion << 16) | leveldb::kMinorVersion;
+    unsigned long library_version = (leveldb_major_version() << 16) | leveldb_minor_version();
+
+    if (header_version != library_version) {
+        return util::Error{Untranslated(strprintf("Compiled with LevelDB %d.%d, but linked with LevelDB %d.%d (incompatible).",
+            leveldb::kMajorVersion, leveldb::kMinorVersion,
+            leveldb_major_version(), leveldb_minor_version()
+        ))};
+    }
+#endif
+
+    return {};
+}
+
+#ifndef WIN32
+namespace leveldb {
+class EnvPosixTestHelper {
+    static void SetReadOnlyMMapLimit(int limit);
+public:
+    static inline void SetReadOnlyMMapLimitForBitcoin(int limit) { SetReadOnlyMMapLimit(limit); }
+};
+}
+
+class BitcoinLevelDBInit {
+public:
+    BitcoinLevelDBInit() {
+        if (sizeof(void*) >= 8) {
+            leveldb::EnvPosixTestHelper::SetReadOnlyMMapLimitForBitcoin(4096);
+        }
+    }
+};
+static BitcoinLevelDBInit g_bitcoin_leveldb_init;
+#endif
 
 class CBitcoinLevelDBLogger : public leveldb::Logger {
 public:
@@ -252,6 +295,8 @@ CDBWrapper::CDBWrapper(const DBParams& params)
     DBContext().options = GetOptions(params.cache_bytes, params.bloom_filter);
     DBContext().options.create_if_missing = true;
     DBContext().options.max_file_size = params.max_file_size;
+    // -dbfilesize (DBOptions) replaces Core's default; a DBParams value set explicitly (tests, fuzzing) is kept
+    if (params.max_file_size == DBWRAPPER_MAX_FILE_SIZE) DBContext().options.max_file_size = params.options.max_file_size;
     assert(!(params.testing_env && params.memory_only));
     if (params.testing_env) {
         DBContext().options.env = params.testing_env;

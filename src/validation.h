@@ -72,6 +72,8 @@ namespace util {
 class SignalInterrupt;
 } // namespace util
 
+/** Default for using fee filter */
+static const bool DEFAULT_FEEFILTER = true;
 /** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of ActiveChain().Tip() will not be pruned. */
 inline constexpr unsigned int MIN_BLOCKS_TO_KEEP = 288;
 inline constexpr signed int DEFAULT_CHECKBLOCKS = 6;
@@ -98,6 +100,13 @@ enum class SynchronizationState {
     INIT_DOWNLOAD,
     POST_INIT
 };
+
+enum SpkReuseModes {
+    SRM_ALLOW,
+    SRM_REJECT,
+};
+
+extern SpkReuseModes SpkReuseMode;
 
 /** Documentation for argument 'checklevel'. */
 extern const std::vector<std::string> CHECKLEVEL_DOC;

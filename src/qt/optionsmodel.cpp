@@ -11,6 +11,7 @@
 #include <qt/guiutil.h>
 #include <qt/tonalutils.h>
 
+#include <chainparams.h>
 #include <common/args.h>
 #include <interfaces/node.h>
 #include <mapport.h>
@@ -211,6 +212,10 @@ bool OptionsModel::Init(bilingual_str& error)
         }
     }
 
+    if (!settings.contains("bDisplayAddresses"))
+        settings.setValue("bDisplayAddresses", false);
+    bDisplayAddresses = settings.value("bDisplayAddresses", false).toBool();
+
     if (!settings.contains("strThirdPartyTxUrls"))
         settings.setValue("strThirdPartyTxUrls", "");
     strThirdPartyTxUrls = settings.value("strThirdPartyTxUrls", "").toString();
@@ -254,6 +259,12 @@ bool OptionsModel::Init(bilingual_str& error)
     }
     m_sub_fee_from_amount = settings.value("SubFeeFromAmount", false).toBool();
 #endif
+
+    // Network
+    if (!settings.contains("nNetworkPort"))
+        settings.setValue("nNetworkPort", (quint16)Params().GetDefaultPort());
+    if (!gArgs.SoftSetArg("-port", settings.value("nNetworkPort").toString().toStdString()))
+        addOverriddenOption("-port");
 
     // Display
     if (settings.contains("FontForMoney")) {
@@ -303,7 +314,7 @@ static void BackupSettings(const fs::path& filename, const QSettings& src)
     CopySettings(dst, src);
 }
 
-void OptionsModel::Reset()
+bool OptionsModel::Reset()
 {
     // Backup and reset settings.json
     node().resetSettings();
@@ -317,6 +328,9 @@ void OptionsModel::Reset()
     QString dataDir = GUIUtil::getDefaultDataDirectory();
     dataDir = settings.value("strDataDir", dataDir).toString();
 
+    // Remove rw config file
+    const bool rwconf_reset{gArgs.EraseRWConfigFile()};
+
     // Remove all entries from our QSettings object
     settings.clear();
 
@@ -329,6 +343,8 @@ void OptionsModel::Reset()
     // default setting for OptionsModel::StartAtStartup - disabled
     if (GUIUtil::GetStartOnSystemStartup())
         GUIUtil::SetStartOnSystemStartup(false);
+
+    return rwconf_reset;
 }
 
 int OptionsModel::rowCount(const QModelIndex & parent) const
@@ -435,6 +451,8 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return m_show_tray_icon;
     case MinimizeToTray:
         return fMinimizeToTray;
+    case NetworkPort:
+        return settings.value("nNetworkPort");
     case MapPortNatpmp:
         return SettingToBool(setting(), DEFAULT_NATPMP);
     case MinimizeOnClose:
@@ -477,6 +495,8 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
 #endif
     case DisplayUnit:
         return QVariant::fromValue(m_display_bitcoin_unit);
+    case DisplayAddresses:
+        return bDisplayAddresses;
     case ThirdPartyTxUrls:
         return strThirdPartyTxUrls;
     case Language:
@@ -553,6 +573,18 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
     case MinimizeToTray:
         fMinimizeToTray = value.toBool();
         settings.setValue("fMinimizeToTray", fMinimizeToTray);
+        break;
+    case NetworkPort:
+        if (settings.value("nNetworkPort") != value) {
+            // If the port input box is empty, set to default port
+            if (value.toString().isEmpty()) {
+                settings.setValue("nNetworkPort", (quint16)Params().GetDefaultPort());
+            }
+            else {
+                settings.setValue("nNetworkPort", (quint16)value.toInt());
+            }
+            setRestartRequired(true);
+        }
         break;
     case MapPortNatpmp: // core option - can be changed on-the-fly
         if (changed()) {
@@ -645,6 +677,10 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
 #endif
     case DisplayUnit:
         setDisplayUnit(value);
+        break;
+    case DisplayAddresses:
+        bDisplayAddresses = value.toBool();
+        settings.setValue("bDisplayAddresses", bDisplayAddresses);
         break;
     case ThirdPartyTxUrls:
         if (strThirdPartyTxUrls != value.toString()) {

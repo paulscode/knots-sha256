@@ -69,6 +69,7 @@ struct CNodeStateStats {
     ServiceFlags their_services;
     int64_t presync_height{-1};
     std::chrono::seconds time_offset{0};
+    NodeSeconds m_last_block_announcement;
 };
 
 struct PeerManagerInfo {
@@ -207,6 +208,9 @@ public:
      * we do not have a confirmed set of service flags.
     */
     virtual ServiceFlags GetDesirableServiceFlags(ServiceFlags services) const = 0;
+
+    /** Get number of peers from which we're downloading blocks */
+    virtual int GetNumberOfPeersWithValidatedDownloads() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
 };
 
 #endif // BITCOIN_NET_PROCESSING_H

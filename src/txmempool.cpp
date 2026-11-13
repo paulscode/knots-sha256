@@ -11,10 +11,15 @@
 #include <consensus/consensus.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
+#include <crypto/ripemd160.h>
+#include <policy/fees/block_policy_estimator.h>
+#include <policy/fees/estimator_man.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <random.h>
+#include <scheduler.h>
 #include <tinyformat.h>
+#include <script/script.h>
 #include <util/check.h>
 #include <util/feefrac.h>
 #include <util/log.h>
@@ -52,6 +57,13 @@ bool TestLockPointValidity(CChain& active_chain, const LockPoints& lp)
 
     // LockPoints still valid
     return true;
+}
+
+uint160 ScriptHashkey(const CScript& script)
+{
+    uint160 hash;
+    CRIPEMD160().Write(script.data(), script.size()).Finalize(hash.begin());
+    return hash;
 }
 
 std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> CTxMemPool::GetChildren(const CTxMemPoolEntry& entry) const
@@ -185,6 +197,17 @@ CTxMemPool::CTxMemPool(Options opts, bilingual_str& error)
             const Txid& txid_b = static_cast<const CTxMemPoolEntry&>(b).GetTx().GetHash();
             return txid_a <=> txid_b;
         });
+    Assert(m_opts.scheduler || !m_opts.dust_relay_target);
+    m_opts.dust_relay_feerate_floor = m_opts.dust_relay_feerate;
+#ifdef BUILDING_FOR_LIBBITCOINKERNEL
+    assert(!m_opts.scheduler);
+#else
+    if (m_opts.scheduler) {
+        m_opts.scheduler->scheduleEvery([this]{
+            UpdateDynamicDustFeerate();
+        }, DYNAMIC_DUST_FEERATE_UPDATE_INTERVAL);
+    }
+#endif
 }
 
 bool CTxMemPool::isSpent(const COutPoint& outpoint) const
@@ -213,11 +236,20 @@ void CTxMemPool::Apply(ChangeSet* changeset)
     for (size_t i=0; i<changeset->m_entry_vec.size(); ++i) {
         auto tx_entry = changeset->m_entry_vec[i];
         // First splice this entry into mapTx.
+#if BOOST_VERSION >= 107400
         auto node_handle = changeset->m_to_add.extract(tx_entry);
         auto result = mapTx.insert(std::move(node_handle));
 
         Assume(result.inserted);
         txiter it = result.position;
+#else
+        // Boost 1.73 didn't support node extraction, so we have to copy
+        auto result = mapTx.emplace(CTxMemPoolEntry::ExplicitCopy, *tx_entry);
+        changeset->m_to_add.erase(tx_entry);
+
+        Assume(result.second);
+        txiter it = result.first;
+#endif
 
         addNewTransaction(it);
     }
@@ -253,6 +285,17 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
     txns_randomized.emplace_back(tx.GetWitnessHash(), newit);
     newit->idx_randomized = txns_randomized.size() - 1;
 
+    for (auto& vSPK : entry.mapSPK) {
+        const uint160& SPKKey = vSPK.first;
+        const MemPool_SPK_State& claims = vSPK.second;
+        if (claims & MSS_CREATED) {
+            mapUsedSPK[SPKKey].first = &tx;
+        }
+        if (claims & MSS_SPENT) {
+            mapUsedSPK[SPKKey].second = &tx;
+        }
+    }
+
     TRACEPOINT(mempool, added,
         entry.GetTx().GetHash().data(),
         entry.GetTxSize(),
@@ -281,6 +324,7 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
         std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(it->GetTime()).count()
     );
 
+    const CTransaction& tx = it->GetTx();
     for (const CTxIn& txin : it->GetTx().vin)
         mapNextTx.erase(txin.prevout);
 
@@ -296,6 +340,19 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
         }
     } else {
         txns_randomized.clear();
+    }
+
+    for (auto& vSPK : it->mapSPK) {
+        const uint160& SPKKey = vSPK.first;
+        if (mapUsedSPK[SPKKey].first == &tx) {
+            mapUsedSPK[SPKKey].first = NULL;
+        }
+        if (mapUsedSPK[SPKKey].second == &tx) {
+            mapUsedSPK[SPKKey].second = NULL;
+        }
+        if (!(mapUsedSPK[SPKKey].first || mapUsedSPK[SPKKey].second)) {
+            mapUsedSPK.erase(SPKKey);
+        }
     }
 
     totalTxSize -= it->GetTxSize();
@@ -427,6 +484,43 @@ std::vector<RemovedMempoolTransactionInfo> CTxMemPool::removeForBlock(const std:
     }
     return txs_removed_for_block;
 }
+
+#ifndef BUILDING_FOR_LIBBITCOINKERNEL
+void CTxMemPool::UpdateDynamicDustFeerate()
+{
+    CFeeRate est_feerate{0};
+    if (m_opts.dust_relay_target < 0 && m_opts.estimator) {
+        static constexpr double target_success_threshold{0.8};
+        est_feerate = m_opts.estimator->BlockPolicyEstimateRawFee(-m_opts.dust_relay_target, target_success_threshold, FeeEstimateHorizon::LONG_HALFLIFE, nullptr);
+    } else if (m_opts.dust_relay_target > 0) {
+        auto bytes_remaining = int64_t{m_opts.dust_relay_target} * 1'000;
+        LOCK(cs);
+        // Walk the mempool in block-building order (cluster linearisation chunks) until the
+        // requested position is reached; the feerate at that point is the estimate.
+        auto builder = m_txgraph->GetBlockBuilder();
+        while (auto chunk = builder->GetCurrentChunk()) {
+            const FeePerVSize chunk_feerate{ToFeePerVSize(chunk->second)};
+            bytes_remaining -= chunk_feerate.size;
+            if (bytes_remaining <= 0) {
+                est_feerate = CFeeRate(chunk_feerate.fee, chunk_feerate.size);
+                break;
+            }
+            builder->Include();
+        }
+    }
+
+    est_feerate = (est_feerate * m_opts.dust_relay_multiplier) / 1'000;
+
+    if (est_feerate < m_opts.dust_relay_feerate_floor) {
+        est_feerate = m_opts.dust_relay_feerate_floor;
+    }
+
+    if (m_opts.dust_relay_feerate != est_feerate) {
+        LogDebug(BCLog::MEMPOOL, "Updating dust feerate to %s\n", est_feerate.ToString(FeeRateFormat::SAT_VB));
+        m_opts.dust_relay_feerate = est_feerate;
+    }
+}
+#endif
 
 void CTxMemPool::check(const CCoinsViewCache& active_coins_tip, int64_t spendheight) const
 {
@@ -867,7 +961,7 @@ bool CTxMemPool::CheckPolicyLimits(const CTransactionRef& tx)
     // limits would be violated. Note that the changeset will be destroyed
     // when it goes out of scope.
     auto changeset = GetChangeSet();
-    (void) changeset->StageAddition(tx, /*fee=*/0, /*time=*/0, /*entry_height=*/0, /*entry_sequence=*/0, /*spends_coinbase=*/false, /*sigops_cost=*/0, LockPoints{});
+    (void) changeset->StageAddition(tx, /*fee=*/0, /*time=*/0, /*entry_height=*/0, /*entry_sequence=*/0, /*spends_coinbase=*/false, /*extra_weight=*/0, /*sigops_cost=*/0, LockPoints{});
     return changeset->CheckMemPoolPolicyLimits();
 }
 
@@ -1065,7 +1159,7 @@ util::Result<std::pair<std::vector<FeeFrac>, std::vector<FeeFrac>>> CTxMemPool::
     return m_pool->m_txgraph->GetMainStagingDiagrams();
 }
 
-CTxMemPool::ChangeSet::TxHandle CTxMemPool::ChangeSet::StageAddition(const CTransactionRef& tx, const CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int64_t sigops_cost, LockPoints lp)
+CTxMemPool::ChangeSet::TxHandle CTxMemPool::ChangeSet::StageAddition(const CTransactionRef& tx, const CAmount fee, int64_t time, unsigned int entry_height, uint64_t entry_sequence, bool spends_coinbase, int32_t extra_weight, int64_t sigops_cost, LockPoints lp)
 {
     LOCK(m_pool->cs);
     Assume(m_to_add.find(tx->GetHash()) == m_to_add.end());
@@ -1078,7 +1172,7 @@ CTxMemPool::ChangeSet::TxHandle CTxMemPool::ChangeSet::StageAddition(const CTran
     m_pool->ApplyDelta(tx->GetHash(), delta);
 
     FeePerWeight feerate(fee, GetSigOpsAdjustedWeight(GetTransactionWeight(*tx), sigops_cost, ::nBytesPerSigOp));
-    auto newit = m_to_add.emplace(tx, fee, time, entry_height, entry_sequence, spends_coinbase, sigops_cost, lp).first;
+    auto newit = m_to_add.emplace(tx, fee, time, entry_height, entry_sequence, spends_coinbase, /*extra_weight=*/ extra_weight, /*sigops_cost=*/ sigops_cost, lp).first;
     m_pool->m_txgraph->AddTransaction(const_cast<CTxMemPoolEntry&>(*newit), feerate);
     if (delta) {
         newit->UpdateModifiedFee(delta);

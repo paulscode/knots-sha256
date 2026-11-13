@@ -593,6 +593,20 @@ class PSBTTest(BitcoinTestFramework):
 
         wallet.unloadwallet()
 
+    def test_addresstype_legacy_with_no_legacy_change(self):
+        self.generate(self.nodes[2], 1)
+        self.log.info("Test walletcreatefundedpsbt with addresstype=legacy but no legacy change descriptors")
+        self.restart_node(2, extra_args=["-addresstype=legacy"])
+        self.connect_nodes(0, 2)
+        self.connect_nodes(1, 2)
+        self.nodes[2].createwallet(wallet_name='no_legacy_change', blank=True)
+        w = self.nodes[2].get_wallet_rpc('no_legacy_change')
+        xprv = 'tprv8ZgxMBicQKsPevADjDCWsa6DfhkVXicu8NQUzfibwX2MexVwW4tCec5mXdCW8kJwkzBRRmAay1KZya4WsehVvjTGVW6JLqiqd8DdZ4xSg52'
+        assert w.importdescriptors([{"desc": descsum_create(f'tr({xprv}/*)'), "internal": True, "timestamp":"now", 'active': True, 'range': (0,100)}])[0]['success']
+        self.nodes[0].sendtoaddress(w.getrawchangeaddress(address_type='bech32m'), 20)
+        self.generate(self.nodes[0], 6)
+        w.walletcreatefundedpsbt([], {self.nodes[0].getnewaddress():10})['psbt']
+
     def assert_change_type(self, psbtx, expected_type):
         """Assert that the given PSBT has a change output with the given type."""
 
@@ -1122,7 +1136,18 @@ class PSBTTest(BitcoinTestFramework):
         for psbt_in in decoded_psbt["inputs"]:
             assert_equal(psbt_in["sequence"], MAX_BIP125_RBF_SEQUENCE)
             assert "bip32_derivs" in psbt_in
-        assert_equal(decoded_psbt["fallback_locktime"], 0)
+        # Anti fee sniping (PSBTv2 carries the locktime as fallback_locktime)
+        assert 0 < decoded_psbt["fallback_locktime"] <= block_height
+
+        # Same construction for a non-signalling wallet (Core 32 dropped -walletrbf=0 from this test's node 1, the
+        # option being deprecated): replaceable=false gives the same inputs
+        unspent1 = self.nodes[1].listunspent()[0]
+        psbtx_info = self.nodes[1].walletcreatefundedpsbt([{"txid":unspent1["txid"], "vout":unspent1["vout"]}], [{self.nodes[2].getnewaddress():unspent1["amount"]+1}], block_height, {"add_inputs": True, "replaceable": False})
+        decoded_psbt = self.nodes[1].decodepsbt(psbtx_info["psbt"])
+        for psbt_in in decoded_psbt["inputs"]:
+            assert_greater_than(psbt_in["sequence"], MAX_BIP125_RBF_SEQUENCE)
+            assert "bip32_derivs" in psbt_in
+        assert_equal(decoded_psbt["fallback_locktime"], block_height)
 
         # Make sure change address wallet does not have P2SH innerscript access to results in success
         # when attempting BnB coin selection
@@ -1718,6 +1743,7 @@ class PSBTTest(BitcoinTestFramework):
         self.test_decodepsbt_long_sighash_type()
         self.test_combinepsbt_sighash_type()
         self.test_psbt_named_parameter_handling()
+        self.test_addresstype_legacy_with_no_legacy_change()
         self.test_psbt_roundtrip()
         self.test_psbt_version()
         self.test_psbt_with_invalid_signature()

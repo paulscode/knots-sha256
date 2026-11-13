@@ -32,6 +32,7 @@
 #include <util/check.h>
 #include <util/sock.h>
 #include <util/threadinterrupt.h>
+#include <util/time.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -232,6 +233,10 @@ public:
     TransportProtocolType m_transport_type;
     /** BIP324 session id string in hex, if any. */
     std::string m_session_id;
+    /** whether this peer forced its connection by evicting another */
+    bool m_forced_inbound;
+    /** CPU time spent processing messages to/from the peer. */
+    std::chrono::nanoseconds m_cpu_time;
 };
 
 
@@ -678,6 +683,8 @@ struct CNodeOptions
     std::optional<Proxy> proxy_override = {};
     std::unique_ptr<i2p::sam::Session> i2p_sam_session = nullptr;
     bool prefer_evict = false;
+    // True if ForceInbound connection required evicting a peer
+    bool forced_inbound{false};
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
 };
@@ -739,6 +746,7 @@ public:
      */
     std::string cleanSubVer GUARDED_BY(m_subver_mutex){};
     const bool m_prefer_evict{false}; // This peer is preferred for eviction.
+    const bool m_forced_inbound{false}; // This peer forced an inbound connection
     bool HasPermission(NetPermissionFlags permission) const {
         return NetPermissions::HasFlag(m_permission_flags, permission);
     }
@@ -985,6 +993,26 @@ public:
 
     void CopyStats(CNodeStats& stats) EXCLUSIVE_LOCKS_REQUIRED(!m_subver_mutex, !m_addr_local_mutex, !cs_vSend, !cs_vRecv);
 
+    bool PunishInvalidBlocks() const
+    {
+        if (HasPermission(NetPermissionFlags::NoBan)) {
+            return false;
+        }
+        switch (m_conn_type) {
+            case ConnectionType::INBOUND:
+            case ConnectionType::MANUAL:
+            case ConnectionType::FEELER:
+            case ConnectionType::PRIVATE_BROADCAST:
+                return false;
+            case ConnectionType::OUTBOUND_FULL_RELAY:
+            case ConnectionType::BLOCK_RELAY:
+            case ConnectionType::ADDR_FETCH:
+                return true;
+        } // no default case, so the compiler can warn about missing cases
+
+        assert(false);
+    }
+
     std::string ConnectionTypeAsString() const { return ::ConnectionTypeAsString(m_conn_type); }
 
     /**
@@ -1007,6 +1035,9 @@ public:
         m_last_ping_time = ping_time;
         m_min_ping_time = std::min(m_min_ping_time.load(), ping_time);
     }
+
+    /** CPU time spent processing messages to/from the peer. */
+    std::atomic<std::chrono::nanoseconds> m_cpu_time;
 
 private:
     const NodeId id;
@@ -1109,6 +1140,7 @@ public:
         std::vector<NetWhitebindPermissions> vWhiteBinds;
         std::vector<CService> vBinds;
         std::vector<CService> onion_binds;
+        bool listenonion{false};
         /// True if the user did not specify -bind= or -whitebind= and thus
         /// we should bind on `0.0.0.0` (IPv4) and `::` (IPv6).
         bool bind_on_any;
@@ -1155,7 +1187,9 @@ public:
                 m_added_node_params.push_back({added_node, use_v2transport});
             }
         }
+        m_normal_binds = connOptions.vBinds;
         m_onion_binds = connOptions.onion_binds;
+        m_listenonion = connOptions.listenonion;
         whitelist_forcerelay = connOptions.whitelist_forcerelay;
         whitelist_relay = connOptions.whitelist_relay;
         m_capture_messages = connOptions.m_capture_messages;
@@ -1594,9 +1628,11 @@ private:
      * Try to find an inbound connection to evict.
      * @param[in] evict_tx_relay_peer_only  Whether to only select full relay peers for eviction
      * @param[in] protect_peer              Protect peer with node id
+     * @param[in] force                     Try to evict a random inbound ban-able peer if
+     *                                      all connections are otherwise protected (ForceInbound)
      * @return                              True if a node was marked for disconnect
      */
-    bool AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::optional<NodeId> protect_peer = std::nullopt) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    bool AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::optional<NodeId> protect_peer = std::nullopt, bool force = false) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
     /**
      * Open a new P2P connection.
@@ -1825,11 +1861,14 @@ private:
      */
     std::atomic_bool m_start_extra_block_relay_peers{false};
 
+    std::vector<CService> m_normal_binds;
+
     /**
      * A vector of -bind=<address>:<port>=onion arguments each of which is
      * an address and port that are designated for incoming Tor connections.
      */
     std::vector<CService> m_onion_binds;
+    bool m_listenonion;
 
     /**
      * flag for adding 'forcerelay' permission to whitelisted inbound

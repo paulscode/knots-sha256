@@ -9,9 +9,12 @@
 
 #include <common/args.h>
 #include <common/system.h>
+#include <httprpc.h>
 #include <logging.h>
 #include <node/context.h>
 #include <rpc/protocol.h>
+#include <node/kernel_notifications.h>
+#include <rpc/request.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
 #include <sync.h>
@@ -19,9 +22,16 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/overloaded.h>
+#include <util/any.h>
+#include <util/signalinterrupt.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
+
+#ifdef ENABLE_WALLET
+#include <interfaces/wallet.h>
+#include <wallet/wallet.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -240,6 +250,66 @@ static RPCMethod getrpcinfo()
     const std::string path = LogInstance().m_file_path.utf8string();
     UniValue log_path(UniValue::VSTR, path);
     result.pushKV("logpath", std::move(log_path));
+
+    return result;
+}
+    };
+}
+
+static RPCMethod getrpcwhitelist()
+{
+    return RPCMethod{"getrpcwhitelist",
+                "Returns whitelisted RPCs for the current user.",
+                {},
+                RPCResult{
+                    RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::OBJ_DYN, "methods", "List of RPCs that the user is allowed to call",
+                        {
+                            {RPCResult::Type::NONE, "rpc", "Key is name of RPC method, value is null"},
+                        }},
+                        {RPCResult::Type::OBJ_DYN, "wallets", "List of wallets that the user is allowed to access",
+                        {
+                            {RPCResult::Type::NONE, "wallet_name", "Key is name of wallet, value is null"},
+                        }},
+                    }
+                },
+                RPCExamples{
+                    HelpExampleCli("getrpcwhitelist", "")
+                + HelpExampleRpc("getrpcwhitelist", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    UniValue whitelisted_rpcs(UniValue::VOBJ);
+    const std::set<std::string>& whitelist = GetWhitelistedRpcs(request.authUser);
+    for (const auto& rpc : whitelist) {
+        whitelisted_rpcs.pushKV(rpc, NullUniValue);
+    }
+
+    UniValue whitelisted_wallets(UniValue::VOBJ);
+#ifdef ENABLE_WALLET
+    std::string authorized_wallet_name;
+    const bool have_wallet_restriction = GetWalletRestrictionFromJSONRPCRequest(request, authorized_wallet_name);
+    if (have_wallet_restriction) {
+        if (authorized_wallet_name != "-") {
+            whitelisted_wallets.pushKV(authorized_wallet_name, NullUniValue);
+        }
+    } else {
+        // All wallets are allowed
+        auto node_context = util::AnyPtr<node::NodeContext>(request.context);
+        if (node_context && node_context->wallet_loader && node_context->wallet_loader->context()) {
+            for (const std::shared_ptr<wallet::CWallet>& wallet : wallet::GetWallets(*node_context->wallet_loader->context())) {
+                if (!wallet.get()) continue;
+
+                LOCK(wallet->cs_wallet);
+                whitelisted_wallets.pushKV(wallet->GetName(), NullUniValue);
+            }
+        }
+    }
+#endif
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("methods", whitelisted_rpcs);
+    result.pushKV("wallets", whitelisted_wallets);
 
     return result;
 }
@@ -612,6 +682,7 @@ static const CRPCCommand vRPCCommands[]{
     {"control", &getopenrpcinfo},
     {"control", &rpc_discover},
     {"control", &getrpcinfo},
+    {"control", &getrpcwhitelist},
     {"control", &help},
     {"control", &stop},
     {"control", &uptime},
@@ -873,7 +944,7 @@ static bool ExecuteCommands(const std::vector<const CRPCCommand*>& commands, con
     return false;
 }
 
-UniValue CRPCTable::execute(const JSONRPCRequest &request) const
+UniValue CRPCTable::execute(const std::string method, const JSONRPCRequest &request) const
 {
     // Return immediately if in warmup
     {
@@ -883,7 +954,7 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
     }
 
     // Find method
-    auto it = mapCommands.find(request.strMethod);
+    auto it = mapCommands.find(method);
     if (it != mapCommands.end()) {
         UniValue result;
         if (ExecuteCommands(it->second, request, result)) {
@@ -891,6 +962,11 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
         }
     }
     throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
+}
+
+UniValue CRPCTable::execute(const JSONRPCRequest &request) const
+{
+    return this->execute(request.strMethod, request);
 }
 
 static bool ExecuteCommand(const CRPCCommand& command, const JSONRPCRequest& request, UniValue& result, bool last_handler)

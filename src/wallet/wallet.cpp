@@ -96,6 +96,11 @@ using util::ToString;
 
 namespace wallet {
 
+/*
+ * Signal when transactions are added to wallet
+ */
+btcsignals::signal<void(const CTransactionRef& ptxn, const uint256& blockHash)> CWallet::TransactionAddedToWallet;
+
 bool AddWalletSetting(interfaces::Chain& chain, const std::string& wallet_name)
 {
     const auto update_function = [&wallet_name](common::SettingsValue& setting_value) {
@@ -1224,31 +1229,41 @@ CWalletTx* CWallet::AddToWallet(CTransactionRef tx, const TxState& state, const 
     // Notify UI of new or updated transaction
     NotifyTransactionChanged(hash, fInsertedNew ? CT_NEW : CT_UPDATED);
 
+    // Notify listeners on new wallet transaction
+    CWallet::TransactionAddedToWallet(wtx.GetTx(), TxStateSerializedBlockHash(wtx.m_state));
+
 #if HAVE_SYSTEM
     // notify an external script when a wallet transaction comes in or is updated
-    std::string strCmd = m_notify_tx_changed_script;
-
-    if (!strCmd.empty())
-    {
-        ReplaceAll(strCmd, "%s", hash.GetHex());
-        if (auto* conf = wtx.state<TxStateConfirmed>())
-        {
-            ReplaceAll(strCmd, "%b", conf->confirmed_block_hash.GetHex());
-            ReplaceAll(strCmd, "%h", ToString(conf->confirmed_block_height));
-        } else {
-            ReplaceAll(strCmd, "%b", "unconfirmed");
-            ReplaceAll(strCmd, "%h", "-1");
-        }
-#ifndef WIN32
+    if (!m_notify_tx_changed_scripts.empty()) {
+#ifdef WIN32
         // Substituting the wallet name isn't currently supported on windows
         // because windows shell escaping has not been implemented yet:
         // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-537384875
         // A few ways it could be implemented in the future are described in:
         // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-461288094
-        ReplaceAll(strCmd, "%w", ShellEscape(GetName()));
+        const std::string walletname_escaped = "wallet_name_substitution_is_not_available_on_Windows";
+#else
+        const std::string walletname_escaped = ShellEscape(GetName());
 #endif
-        std::thread t(runCommand, strCmd);
-        t.detach(); // thread runs free
+        const std::string txid_hex = hash.GetHex();
+        std::string blockhash_hex, blockheight_str;
+        if (auto* conf = wtx.state<TxStateConfirmed>()) {
+            blockhash_hex = conf->confirmed_block_hash.GetHex();
+            blockheight_str = ToString(conf->confirmed_block_height);
+        } else {
+            blockhash_hex = "unconfirmed";
+            blockheight_str = "-1";
+        }
+
+        for (std::string command : m_notify_tx_changed_scripts) {
+            ReplaceAll(command, "%s", txid_hex);
+            ReplaceAll(command, "%b", blockhash_hex);
+            ReplaceAll(command, "%h", blockheight_str);
+            ReplaceAll(command, "%w", walletname_escaped);
+
+            std::thread t(runCommand, command);
+            t.detach(); // thread runs free
+        }
     }
 #endif
 
@@ -2277,13 +2292,13 @@ bool CWallet::SignTransaction(CMutableTransaction& tx) const
     return SignTransaction(tx, coins, SIGHASH_DEFAULT, input_errors);
 }
 
-bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
+bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, std::optional<CAmount>* inputs_amount_sum) const
 {
     // Try to sign with all ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         // spk_man->SignTransaction will return true if the transaction is complete,
         // so we can exit early and return true if that happens
-        if (spk_man->SignTransaction(tx, coins, sighash, input_errors)) {
+        if (spk_man->SignTransaction(tx, coins, sighash, input_errors, inputs_amount_sum)) {
             return true;
         }
     }
@@ -2347,14 +2362,14 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, co
     return {};
 }
 
-SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const
+SigningResult CWallet::SignMessage(const MessageSignatureFormat format, const std::string& message, const CTxDestination& address, std::string& str_sig) const
 {
     SignatureData sigdata;
-    CScript script_pub_key = GetScriptForDestination(pkhash);
+    CScript script_pub_key = GetScriptForDestination(address);
     for (const auto& spk_man_pair : m_spk_managers) {
         if (spk_man_pair.second->CanProvide(script_pub_key, sigdata)) {
             LOCK(cs_wallet);  // DescriptorScriptPubKeyMan calls IsLocked which can lock cs_wallet in a deadlocking order
-            return spk_man_pair.second->SignMessage(message, pkhash, str_sig);
+            return spk_man_pair.second->SignMessage(format, message, address, str_sig);
         }
     }
     return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
@@ -2368,7 +2383,7 @@ OutputType CWallet::TransactionChangeType(const std::optional<OutputType>& chang
     }
 
     // if m_default_address_type is legacy, use legacy address as change.
-    if (m_default_address_type == OutputType::LEGACY) {
+    if (m_default_address_type == OutputType::LEGACY && GetScriptPubKeyMan(OutputType::LEGACY, /*internal=*/true)) {
         return OutputType::LEGACY;
     }
 
@@ -2835,9 +2850,8 @@ util::Result<void> CWallet::DisplayAddress(const CTxDestination& dest)
         if (signer_spk_man == nullptr) {
             continue;
         }
-        auto signer{ExternalSignerScriptPubKeyMan::GetExternalSigner()};
-        if (!signer) throw std::runtime_error(util::ErrorString(signer).original);
-        return signer_spk_man->DisplayAddress(dest, *signer);
+        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
+        return signer_spk_man->DisplayAddress(dest, signer);
     }
     return util::Error{_("There is no ScriptPubKeyManager for this address")};
 }
@@ -3199,7 +3213,7 @@ bool CWallet::LoadWalletArgs(std::shared_ptr<CWallet> wallet, const WalletContex
     }
 
     wallet->m_keypool_size = std::max(args.GetIntArg("-keypool", DEFAULT_KEYPOOL_SIZE), int64_t{1});
-    wallet->m_notify_tx_changed_script = args.GetArg("-walletnotify", "");
+    wallet->m_notify_tx_changed_scripts = args.GetArgs("-walletnotify");
     wallet->SetBroadcastTransactions(args.GetBoolArg("-walletbroadcast", DEFAULT_WALLETBROADCAST));
 
     return true;
@@ -3769,12 +3783,11 @@ void CWallet::SetupDescriptorScriptPubKeyMans()
             return true;
         })) throw std::runtime_error("Error: cannot process db transaction for descriptors setup");
     } else {
-        auto signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
-        if (!signer) throw std::runtime_error(util::ErrorString(signer).original);
+        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
 
         // TODO: add account parameter
         int account = 0;
-        UniValue signer_res = signer->GetDescriptors(account);
+        UniValue signer_res = signer.GetDescriptors(account);
 
         if (!signer_res.isObject()) throw std::runtime_error(std::string(__func__) + ": Unexpected result");
 
