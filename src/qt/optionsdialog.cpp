@@ -58,7 +58,7 @@ void setupFontOptions(QComboBox* cb, QLabel* preview)
 {
     QFont embedded_font{GUIUtil::fixedPitchFont(true)};
     QFont system_font{GUIUtil::fixedPitchFont(false)};
-    cb->addItem(QObject::tr("Embedded \"%1\"").arg(QFontInfo(embedded_font).family()), QVariant::fromValue(OptionsModel::FontChoice{OptionsModel::FontChoiceAbstract::EmbeddedFont}));
+    cb->addItem(QObject::tr("%1").arg(QFontInfo(embedded_font).family()), QVariant::fromValue(OptionsModel::FontChoice{OptionsModel::FontChoiceAbstract::EmbeddedFont}));
     cb->addItem(QObject::tr("Default system font \"%1\"").arg(QFontInfo(system_font).family()), QVariant::fromValue(OptionsModel::FontChoice{OptionsModel::FontChoiceAbstract::BestSystemFont}));
     cb->addItem(QObject::tr("Custom…"));
 
@@ -201,8 +201,15 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableWallet)
     }
 
     setupFontOptions(ui->moneyFont, ui->moneyFont_preview);
+    setupFontOptions(ui->qrFont, ui->qrFont_preview);
+#ifndef USE_QRCODE
+    ui->qrFontLabel->setVisible(false);
+    ui->qrFont->setVisible(false);
+    ui->qrFont_preview->setVisible(false);
+#endif
 
     GUIUtil::handleCloseWindowShortcut(this);
+    updateThemeColors();
 }
 
 OptionsDialog::~OptionsDialog()
@@ -240,6 +247,9 @@ void OptionsDialog::setModel(OptionsModel *_model)
 
         const auto& font_for_money = _model->data(_model->index(OptionsModel::FontForMoney, 0), Qt::EditRole).value<OptionsModel::FontChoice>();
         setFontChoice(ui->moneyFont, font_for_money);
+
+        const auto& font_for_qrcodes = _model->data(_model->index(OptionsModel::FontForQRCodes, 0), Qt::EditRole).value<OptionsModel::FontChoice>();
+        setFontChoice(ui->qrFont, font_for_qrcodes);
 
         updateDefaultProxyNets();
     }
@@ -314,6 +324,7 @@ void OptionsDialog::setMapper()
 #endif
 
     /* Display */
+    mapper->addMapping(ui->peersTabAlternatingRowColors, OptionsModel::PeersTabAlternatingRowColors);
     mapper->addMapping(ui->lang, OptionsModel::Language);
     mapper->addMapping(ui->unit, OptionsModel::DisplayUnit);
     mapper->addMapping(ui->thirdPartyTxUrls, OptionsModel::ThirdPartyTxUrls);
@@ -379,6 +390,7 @@ void OptionsDialog::on_openBitcoinConfButton_clicked()
 void OptionsDialog::on_okButton_clicked()
 {
     model->setData(model->index(OptionsModel::FontForMoney, 0), ui->moneyFont->itemData(ui->moneyFont->currentIndex()));
+    model->setData(model->index(OptionsModel::FontForQRCodes, 0), ui->qrFont->itemData(ui->qrFont->currentIndex()));
 
     mapper->submit();
     accept();
@@ -400,6 +412,15 @@ void OptionsDialog::on_showTrayIcon_stateChanged(int state)
     }
 }
 
+void OptionsDialog::changeEvent(QEvent* e)
+{
+    if (e->type() == QEvent::PaletteChange) {
+        updateThemeColors();
+    }
+
+    QWidget::changeEvent(e);
+}
+
 void OptionsDialog::togglePruneWarning(bool enabled)
 {
     ui->pruneWarning->setVisible(!ui->pruneWarning->isVisible());
@@ -407,8 +428,6 @@ void OptionsDialog::togglePruneWarning(bool enabled)
 
 void OptionsDialog::showRestartWarning(bool fPersistent)
 {
-    ui->statusLabel->setStyleSheet("QLabel { color: red; }");
-
     if(fPersistent)
     {
         ui->statusLabel->setText(tr("Client restart required to activate changes."));
@@ -442,7 +461,6 @@ void OptionsDialog::updateProxyValidationState()
     else
     {
         setOkButtonState(false);
-        ui->statusLabel->setStyleSheet("QLabel { color: red; }");
         ui->statusLabel->setText(tr("The supplied proxy address is invalid."));
     }
 }
@@ -464,6 +482,17 @@ void OptionsDialog::updateDefaultProxyNets()
 
     const auto proxy_onion = model->node().getProxy(NET_ONION);
     ui->proxyReachTor->setChecked(proxy_onion && proxy_onion->ToString() == proxyIpText);
+}
+
+void OptionsDialog::updateThemeColors()
+{
+    // Detect dark mode for color palette selection
+    const bool dark_mode = GUIUtil::isDarkMode(palette().color(backgroundRole()));
+
+    // set message warning color based on dark mode
+    const QColor warning_color = dark_mode ? QColor("#FF8080") : QColor("#FF0000");
+    ui->pruneWarning->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(warning_color.name()));
+    ui->statusLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(warning_color.name()));
 }
 
 ProxyAddressValidator::ProxyAddressValidator(QObject *parent) :
