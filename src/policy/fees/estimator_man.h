@@ -69,6 +69,9 @@ public:
     /** Flush recorded data to disk. */
     void IntervalFlush();
 
+    /** Flush recorded data to disk now (savefeeestimates RPC). Returns false if the block policy estimates could not be written. */
+    bool FlushNow();
+
     /** Flush recorded data to disk as part of shutdown sequence. */
     void ShutdownFlush();
 
