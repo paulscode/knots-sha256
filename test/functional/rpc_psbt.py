@@ -593,6 +593,20 @@ class PSBTTest(BitcoinTestFramework):
 
         wallet.unloadwallet()
 
+    def test_addresstype_legacy_with_no_legacy_change(self):
+        self.generate(self.nodes[2], 1)
+        self.log.info("Test walletcreatefundedpsbt with addresstype=legacy but no legacy change descriptors")
+        self.restart_node(2, extra_args=["-addresstype=legacy"])
+        self.connect_nodes(0, 2)
+        self.connect_nodes(1, 2)
+        self.nodes[2].createwallet(wallet_name='no_legacy_change', blank=True)
+        w = self.nodes[2].get_wallet_rpc('no_legacy_change')
+        xprv = 'tprv8ZgxMBicQKsPevADjDCWsa6DfhkVXicu8NQUzfibwX2MexVwW4tCec5mXdCW8kJwkzBRRmAay1KZya4WsehVvjTGVW6JLqiqd8DdZ4xSg52'
+        assert w.importdescriptors([{"desc": descsum_create(f'tr({xprv}/*)'), "internal": True, "timestamp":"now", 'active': True, 'range': (0,100)}])[0]['success']
+        self.nodes[0].sendtoaddress(w.getrawchangeaddress(address_type='bech32m'), 20)
+        self.generate(self.nodes[0], 6)
+        w.walletcreatefundedpsbt([], {self.nodes[0].getnewaddress():10})['psbt']
+
     def assert_change_type(self, psbtx, expected_type):
         """Assert that the given PSBT has a change output with the given type."""
 
@@ -723,8 +737,58 @@ class PSBTTest(BitcoinTestFramework):
         self.nodes[0].loadwallet(self.default_wallet_name)
 
     def run_test(self):
+
+        self.log.info("Test that PSBT can have user-provided UTXOs filled and signed")
+
+        # Create 1 parent 1 child chain from same wallet
+        psbtx_parent = self.nodes[0].walletcreatefundedpsbt([], {self.nodes[0].getnewaddress():10})['psbt']
+        processed_parent = self.nodes[0].walletprocesspsbt(psbtx_parent)
+        parent_txinfo = self.nodes[0].decoderawtransaction(processed_parent["hex"])
+        parent_txid = parent_txinfo["txid"]
+        parent_vout = 0 # just take the first output to spend
+
+        psbtx_child = self.nodes[0].createpsbt([{"txid": parent_txid, "vout": parent_vout}], {self.nodes[0].getnewaddress(): parent_txinfo["vout"][0]["value"] - Decimal("0.01")})
+
+        # Can not sign due to lack of utxo
+        res = self.nodes[0].walletprocesspsbt(psbtx_child)
+        assert not res["complete"]
+
+        prev_txs = [processed_parent["hex"]]
+        utxo_updated = self.nodes[0].utxoupdatepsbt(psbt=psbtx_child, prevtxs=prev_txs)
+        res = self.nodes[0].walletprocesspsbt(utxo_updated)
+        assert res["complete"]
+
+        # And descriptorprocesspsbt does the same
+        utxo_updated = self.nodes[0].descriptorprocesspsbt(psbt=psbtx_child, descriptors=[], prevtxs=prev_txs)
+        res = self.nodes[0].walletprocesspsbt(utxo_updated["psbt"])
+        assert res["complete"]
+
+        # Multiple inputs are ok, even if unrelated transactions included
+        prev_txs = [processed_parent["hex"], self.nodes[0].createrawtransaction([], [])]
+        utxo_updated = self.nodes[0].utxoupdatepsbt(psbt=psbtx_child, prevtxs=prev_txs)
+        res = self.nodes[0].walletprocesspsbt(utxo_updated)
+        assert res["complete"]
+
+        # If only irrelevant previous transactions are included, it's a no-op
+        prev_txs = [self.nodes[0].createrawtransaction([], [])]
+        utxo_updated = self.nodes[0].utxoupdatepsbt(psbt=psbtx_child, prevtxs=prev_txs)
+        assert_equal(utxo_updated, psbtx_child)
+        res = self.nodes[0].walletprocesspsbt(utxo_updated)
+        assert not res["complete"]
+
+        # If there's a txid collision, it's rejected
+        prev_txs = [processed_parent["hex"], processed_parent["hex"]]
+        assert_raises_rpc_error(-22, f"Duplicate txids in prev_txs {parent_txid}", self.nodes[0].utxoupdatepsbt, psbt=psbtx_child, prevtxs=prev_txs)
+
+        # Should abort safely if supplied transaction matches txid of prevout, but has insufficient outputs to match with prevout.n
+        psbtx_bad_child = self.nodes[0].createpsbt([{"txid": parent_txid, "vout": len(parent_txinfo["vout"])}], {self.nodes[0].getnewaddress(): parent_txinfo["vout"][0]["value"] - Decimal("0.01")})
+
+        prev_txs = [processed_parent["hex"]]
+        assert_raises_rpc_error(-22, f"Previous tx has too few outputs for PSBT input {parent_txid}", self.nodes[0].utxoupdatepsbt, psbt=psbtx_bad_child, prevtxs=prev_txs)
+
         # Create and fund a raw tx for sending 10 BTC
-        psbtx1 = self.nodes[0].walletcreatefundedpsbt([], {self.nodes[2].getnewaddress():10})['psbt']
+        assert_raises_rpc_error(-4, "Insufficient funds", self.nodes[0].walletcreatefundedpsbt, inputs=[], outputs={self.nodes[2].getnewaddress():1}, options={'min_conf': 201})
+        psbtx1 = self.nodes[0].walletcreatefundedpsbt(inputs=[], outputs={self.nodes[2].getnewaddress():11}, options={'min_conf': 200})['psbt']
 
         self.log.info("Test for invalid maximum transaction weights")
         dest_arg = [{self.nodes[0].getnewaddress(): 1}]
@@ -796,6 +860,7 @@ class PSBTTest(BitcoinTestFramework):
 
         # Sign the transaction but don't finalize
         processed_psbt = self.nodes[0].walletprocesspsbt(psbt=psbtx, finalize=False)
+        assert_equal(processed_psbt, self.nodes[0].walletprocesspsbt(psbtx, {"finalize": False}))
         assert "hex" not in processed_psbt
         signed_psbt = processed_psbt['psbt']
 
@@ -805,6 +870,7 @@ class PSBTTest(BitcoinTestFramework):
 
         # Alternative method: sign AND finalize in one command
         processed_finalized_psbt = self.nodes[0].walletprocesspsbt(psbt=psbtx, finalize=True)
+        assert_equal(processed_finalized_psbt, self.nodes[0].walletprocesspsbt(psbtx, {"finalize": True}))
         finalized_psbt = processed_finalized_psbt['psbt']
         finalized_psbt_hex = processed_finalized_psbt['hex']
         assert_not_equal(signed_psbt, finalized_psbt)
@@ -1020,12 +1086,14 @@ class PSBTTest(BitcoinTestFramework):
 
         # Update psbts, should only have data for one input and not the other
         psbt1 = self.nodes[1].walletprocesspsbt(psbt_orig, False, "ALL")['psbt']
+        assert_equal(psbt1, self.nodes[1].walletprocesspsbt(psbt_orig, {"sign": False, "sighashtype": "ALL"})["psbt"])
         psbt1_decoded = self.nodes[0].decodepsbt(psbt1)
         assert len(psbt1_decoded['inputs'][0].keys()) > 3
         assert len(psbt1_decoded['inputs'][1].keys()) == 3
         # Check that BIP32 path was added
         assert "bip32_derivs" in psbt1_decoded['inputs'][0]
         psbt2 = self.nodes[2].walletprocesspsbt(psbt_orig, False, "ALL", False)['psbt']
+        assert_equal(psbt2, self.nodes[2].walletprocesspsbt(psbt_orig, {"sign": False, "sighashtype": "ALL", "bip32derivs": False})["psbt"])
         psbt2_decoded = self.nodes[0].decodepsbt(psbt2)
         assert len(psbt2_decoded['inputs'][0].keys()) == 3
         assert len(psbt2_decoded['inputs'][1].keys()) > 3
@@ -1069,7 +1137,18 @@ class PSBTTest(BitcoinTestFramework):
         for psbt_in in decoded_psbt["inputs"]:
             assert_equal(psbt_in["sequence"], MAX_BIP125_RBF_SEQUENCE)
             assert "bip32_derivs" in psbt_in
-        assert_equal(decoded_psbt["fallback_locktime"], 0)
+        # Anti fee sniping (PSBTv2 carries the locktime as fallback_locktime)
+        assert 0 < decoded_psbt["fallback_locktime"] <= block_height
+
+        # Same construction for a non-signalling wallet (Core 32 dropped -walletrbf=0 from this test's node 1, the
+        # option being deprecated): replaceable=false gives the same inputs
+        unspent1 = self.nodes[1].listunspent()[0]
+        psbtx_info = self.nodes[1].walletcreatefundedpsbt([{"txid":unspent1["txid"], "vout":unspent1["vout"]}], [{self.nodes[2].getnewaddress():unspent1["amount"]+1}], block_height, {"add_inputs": True, "replaceable": False})
+        decoded_psbt = self.nodes[1].decodepsbt(psbtx_info["psbt"])
+        for psbt_in in decoded_psbt["inputs"]:
+            assert_greater_than(psbt_in["sequence"], MAX_BIP125_RBF_SEQUENCE)
+            assert "bip32_derivs" in psbt_in
+        assert_equal(decoded_psbt["fallback_locktime"], block_height)
 
         # Make sure change address wallet does not have P2SH innerscript access to results in success
         # when attempting BnB coin selection
@@ -1330,6 +1409,7 @@ class PSBTTest(BitcoinTestFramework):
 
         # After update with wallet, only needs signing
         updated = self.nodes[1].walletprocesspsbt(psbt, False, 'ALL', True)['psbt']
+        assert_equal(updated, self.nodes[1].walletprocesspsbt(psbt, {"sign": False, "sighashtype": 'ALL', "bip32derivs": True})["psbt"])
         analyzed = self.nodes[0].analyzepsbt(updated)
         assert_equal(analyzed['inputs'][0]['has_utxo'], True)
         assert_equal(analyzed['inputs'][0]['is_final'], False)
@@ -1628,11 +1708,14 @@ class PSBTTest(BitcoinTestFramework):
         # are still added to the psbt
         alt_descriptor = descsum_create(f"wpkh({get_generate_key().privkey})")
         alt_psbt = self.nodes[2].descriptorprocesspsbt(psbt=psbt, descriptors=[alt_descriptor], sighashtype="ALL")["psbt"]
+        assert_equal(alt_psbt, self.nodes[2].descriptorprocesspsbt(psbt=psbt, descriptors=[alt_descriptor], options={'sighashtype': "ALL"})["psbt"])
         decoded = self.nodes[2].decodepsbt(alt_psbt)
         test_psbt_input_keys(decoded['inputs'][0], ['witness_utxo', 'non_witness_utxo'])
 
         # Test that the psbt is not finalized and does not have bip32_derivs unless specified
         processed_psbt = self.nodes[2].descriptorprocesspsbt(psbt=psbt, descriptors=[descriptor], sighashtype="ALL", bip32derivs=True, finalize=False)
+        assert_equal(processed_psbt, self.nodes[2].descriptorprocesspsbt(psbt=psbt, descriptors=[descriptor], options={'sighashtype': "ALL", 'bip32derivs': True, 'finalize': False}))
+        assert_equal(processed_psbt, self.nodes[2].descriptorprocesspsbt(psbt, [descriptor], "ALL", True, False))
         decoded = self.nodes[2].decodepsbt(processed_psbt['psbt'])
         test_psbt_input_keys(decoded['inputs'][0], ['witness_utxo', 'non_witness_utxo', 'partial_signatures', 'bip32_derivs'])
 
@@ -1640,6 +1723,7 @@ class PSBTTest(BitcoinTestFramework):
         assert "hex" not in processed_psbt
 
         processed_psbt = self.nodes[2].descriptorprocesspsbt(psbt=psbt, descriptors=[descriptor], sighashtype="ALL", bip32derivs=False, finalize=True)
+        assert_equal(processed_psbt, self.nodes[2].descriptorprocesspsbt(psbt, [descriptor], {'sighashtype': "ALL", 'bip32derivs': False, 'finalize': True}))
         decoded = self.nodes[2].decodepsbt(processed_psbt['psbt'])
         test_psbt_input_keys(decoded['inputs'][0], ['witness_utxo', 'non_witness_utxo', 'final_scriptwitness'])
 
@@ -1651,6 +1735,8 @@ class PSBTTest(BitcoinTestFramework):
 
         self.log.info("Test descriptorprocesspsbt raises if an invalid sighashtype is passed")
         assert_raises_rpc_error(-8, "'all' is not a valid sighash parameter.", self.nodes[2].descriptorprocesspsbt, psbt=psbt, descriptors=[descriptor], sighashtype="all")
+        assert_raises_rpc_error(-8, "'all' is not a valid sighash parameter.", self.nodes[2].descriptorprocesspsbt, psbt, [descriptor], "all")
+        assert_raises_rpc_error(-8, "'all' is not a valid sighash parameter.", self.nodes[2].descriptorprocesspsbt, psbt, [descriptor], {'sighashtype': "all"})
 
         if not self.options.usecli:
             self.test_sighash_mismatch()
@@ -1658,6 +1744,7 @@ class PSBTTest(BitcoinTestFramework):
         self.test_decodepsbt_long_sighash_type()
         self.test_combinepsbt_sighash_type()
         self.test_psbt_named_parameter_handling()
+        self.test_addresstype_legacy_with_no_legacy_change()
         self.test_psbt_roundtrip()
         self.test_psbt_version()
         self.test_psbt_with_invalid_signature()

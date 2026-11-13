@@ -6,6 +6,10 @@
 #ifndef BITCOIN_POLICY_SETTINGS_H
 #define BITCOIN_POLICY_SETTINGS_H
 
+extern unsigned int g_script_size_policy_limit;
 extern unsigned int nBytesPerSigOp;
+extern unsigned int nBytesPerSigOpStrict;
+extern unsigned int g_weight_per_data_byte;
+extern bool g_reject_dead_branches;
 
 #endif // BITCOIN_POLICY_SETTINGS_H

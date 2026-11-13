@@ -42,6 +42,7 @@ add_executable(fuzz
   crypto_hkdf_hmac_sha256_l32.cpp
   crypto_poly1305.cpp
   cuckoocache.cpp
+  datacarrier_dead_branch.cpp
   dbwrapper.cpp
   decode_tx.cpp
   descriptor_parse.cpp
@@ -69,7 +70,6 @@ add_executable(fuzz
   merkleblock.cpp
   message.cpp
   miniscript.cpp
-  minisketch.cpp
   mini_miner.cpp
   muhash.cpp
   multiplication_overflow.cpp
@@ -153,10 +153,10 @@ target_link_libraries(fuzz
   core_interface
   fuzzer_interface
   test_fuzz
+  $<TARGET_NAME_IF_EXISTS:bitcoinconsensus>
   bitcoin_cli
   bitcoin_common
   bitcoin_util
-  minisketch
   leveldb
   univalue
   secp256k1
@@ -166,3 +166,12 @@ target_link_libraries(fuzz
 if(ENABLE_WALLET)
   add_subdirectory(${PROJECT_SOURCE_DIR}/src/wallet/test/fuzz wallet)
 endif()
+
+if(BUILD_BITCOINCONSENSUS_LIB)
+  target_sources(fuzz
+    PRIVATE
+      script_bitcoin_consensus.cpp
+  )
+endif()
+
+make_libbitcoinconsensus_dll_available(fuzz)

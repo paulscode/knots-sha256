@@ -12,6 +12,7 @@
 #include <common/args.h>
 #include <common/settings.h>
 #include <consensus/amount.h>
+#include <common/pcp.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
 #include <external_signer.h>
@@ -201,7 +202,10 @@ public:
         });
         args().WriteSettingsFile();
     }
-    void mapPort(bool enable) override { StartMapPort(enable); }
+    void mapPort(bool enable) override {
+        g_pcp_warn_for_unauthorized = true;
+        StartMapPort(enable);
+    }
     std::optional<Proxy> getProxy(Network net) override { return GetProxy(net); }
     size_t getNodeCount(ConnectionDirection flags) override
     {
@@ -365,6 +369,7 @@ public:
         req.params = params;
         req.strMethod = command;
         req.URI = uri;
+        req.m_wallet_restriction.clear();
         return ::tableRPC.execute(req);
     }
     std::vector<std::string> listRpcCommands() override { return ::tableRPC.listCommands(); }
@@ -373,7 +378,7 @@ public:
         LOCK(::cs_main);
         return chainman().ActiveChainstate().CoinsTip().GetCoin(output);
     }
-    TransactionError broadcastTransaction(CTransactionRef tx, CAmount max_tx_fee, std::string& err_string) override
+    TransactionError broadcastTransaction(CTransactionRef tx, const std::variant<CAmount, CFeeRate>& max_tx_fee, std::string& err_string) override
     {
         return BroadcastTransaction(*m_context,
                                     std::move(tx),
@@ -414,12 +419,19 @@ public:
     {
         return MakeSignalHandler(::uiInterface.NotifyNetworkActiveChanged.connect(fn));
     }
+    std::unique_ptr<Handler> handleNotifyNetworkLocalChanged(NotifyNetworkLocalChangedFn fn) override
+    {
+        return MakeSignalHandler(::uiInterface.NotifyNetworkLocalChanged.connect(fn));
+    }
     std::unique_ptr<Handler> handleNotifyAlertChanged(NotifyAlertChangedFn fn) override
     {
         return MakeSignalHandler(::uiInterface.NotifyAlertChanged.connect(fn));
     }
     std::unique_ptr<Handler> handleBannedListChanged(BannedListChangedFn fn) override
     {
+        if (m_context->banman) {
+            m_context->banman->EnsureSweepScheduled();
+        }
         return MakeSignalHandler(::uiInterface.BannedListChanged.connect(fn));
     }
     std::unique_ptr<Handler> handleNotifyBlockTip(NotifyBlockTipFn fn) override
@@ -442,6 +454,7 @@ public:
     }
     ArgsManager& args() { return *Assert(Assert(m_context)->args); }
     ChainstateManager& chainman() { return *Assert(m_context->chainman); }
+    CTxMemPool& mempool() override { return *Assert(m_context->mempool); }
     NodeContext* m_context{nullptr};
 };
 
@@ -576,6 +589,24 @@ public:
         LOCK(::cs_main);
         const CBlockIndex* block{chainman().ActiveChain()[height]};
         return block && ((block->nStatus & BLOCK_HAVE_DATA) != 0) && block->nTx > 0;
+    }
+    bool pruneLockExists(const std::string& name) const override
+    {
+        LOCK(cs_main);
+        auto& blockman = m_node.chainman->m_blockman;
+        return blockman.PruneLockExists(name);
+    }
+    bool updatePruneLock(const std::string& name, const node::PruneLockInfo& lock_info, bool sync) override
+    {
+        LOCK(cs_main);
+        auto& blockman = m_node.chainman->m_blockman;
+        return blockman.UpdatePruneLock(name, lock_info, sync);
+    }
+    bool deletePruneLock(const std::string& name) override
+    {
+        LOCK(cs_main);
+        auto& blockman = m_node.chainman->m_blockman;
+        return blockman.DeletePruneLock(name);
     }
     std::optional<int> findLocatorFork(const CBlockLocator& locator) override
     {
@@ -787,6 +818,9 @@ public:
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }
     void initWarning(const bilingual_str& message) override { InitWarning(message); }
     void initError(const bilingual_str& message) override { InitError(message); }
+    bool initQuestion(const bilingual_str& message, const bilingual_str& non_interactive_message, unsigned int style) override {
+        return uiInterface.ThreadSafeQuestion(message, non_interactive_message.translated, style);
+    }
     void showProgress(const std::string& title, int progress, bool resume_possible) override
     {
         ::uiInterface.ShowProgress(title, progress, resume_possible);
@@ -881,7 +915,7 @@ class BlockTemplateImpl : public BlockTemplate
 {
 public:
     explicit BlockTemplateImpl(BlockCreateOptions create_options,
-                               std::unique_ptr<CBlockTemplate> block_template,
+                               std::shared_ptr<CBlockTemplate> block_template,
                                const NodeContext& node) : m_create_options(std::move(create_options)),
                                                           m_block_template(std::move(block_template)),
                                                           m_node(node)
@@ -934,7 +968,8 @@ public:
                                                   m_block_template,
                                                   /*wait_options=*/options,
                                                   /*create_options=*/m_create_options,
-                                                  /*interrupt_wait=*/m_interrupt_wait);
+                                                  /*interrupt_wait=*/m_interrupt_wait,
+                                                  /*validation_signals=*/m_node.validation_signals.get());
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_create_options, std::move(new_template), m_node);
         return nullptr;
     }
@@ -946,7 +981,7 @@ public:
 
     const BlockCreateOptions m_create_options;
 
-    const std::unique_ptr<CBlockTemplate> m_block_template;
+    const std::shared_ptr<CBlockTemplate> m_block_template;
 
     bool m_interrupt_wait{false};
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
@@ -1006,6 +1041,7 @@ public:
                                                        chainman().ActiveChainstate(),
                                                        m_node.mempool.get(),
                                                        create_options,
+                                                       m_node.validation_signals.get(),
                                                    }.CreateNewBlock(),
                                                    m_node);
     }
@@ -1074,6 +1110,8 @@ public:
         req.context = &m_node;
         req.URI = std::move(uri);
         req.authUser = std::move(user);
+        // IPC clients (bitcoin -ipcconnect rpc) are trusted like the GUI console: no rpcauth wallet restriction applies
+        req.m_wallet_restriction.clear();
         HTTPStatusCode status;
         return ExecuteHTTPRPC(request, req, status);
     }
