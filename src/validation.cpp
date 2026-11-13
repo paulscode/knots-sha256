@@ -1038,13 +1038,18 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
+    // Outputs whose hash or key is data, for the datacarrier checks and the extra weight
+    std::vector<size_t> data_outputs(tx.vout.size(), 0);
+    if (::g_reject_fake_outputs && (m_pool.m_opts.datacarrier_fullcount || !m_pool.m_opts.accept_non_std_datacarrier || ::g_weight_per_data_byte > WITNESS_SCALE_FACTOR)) {
+        data_outputs = DataOutputBytes(tx, &m_view);
+    }
     if (m_pool.m_opts.datacarrier_fullcount || !m_pool.m_opts.accept_non_std_datacarrier) {
-        const auto dcb = DatacarrierBytes(tx, m_view);
+        const auto dcb = DatacarrierBytes(tx, m_view, data_outputs);
         if (dcb.second > 0 && !(m_pool.m_opts.accept_non_std_datacarrier || args.m_ignore_rejects.count("txn-datacarrier-nonstandard"))) {
-            return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "txn-datacarrier-nonstandard");
+            return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "txn-datacarrier-nonstandard");
         }
         if (m_pool.m_opts.datacarrier_fullcount && (!args.m_ignore_rejects.count("txn-datacarrier-exceeded")) && dcb.first + dcb.second > m_pool.m_opts.max_datacarrier_bytes.value_or(0)) {
-            return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "txn-datacarrier-exceeded");
+            return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "txn-datacarrier-exceeded");
         }
     }
 
@@ -1084,7 +1089,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // Set entry_sequence to 0 when rejectmsg_zero_mempool_entry_seq is used; this allows txs from a block
     // reorg to be marked earlier than any child txs that were already in the mempool.
     const uint64_t entry_sequence = args.m_ignore_rejects.count(rejectmsg_zero_mempool_entry_seq) ? 0 : m_pool.GetSequence();
-    int32_t extra_weight = CalculateExtraTxWeight(*ptx, m_view, ::g_weight_per_data_byte);
+    int32_t extra_weight = CalculateExtraTxWeight(*ptx, m_view, ::g_weight_per_data_byte, data_outputs);
     if (!m_subpackage.m_changeset) {
         m_subpackage.m_changeset = m_pool.GetChangeSet();
     }
@@ -1101,6 +1106,14 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     ws.m_vsize = ws.m_tx_handle->GetTxSize();
 
+    // Check actual fees and manual fee deltas before applying the automatic
+    // dust penalty. StageAddition already applied mapDeltas to the entry.
+    if (m_pool.m_opts.require_standard && !ignore_rejects.count("dust")) {
+        if (!PreCheckEphemeralTx(*ptx, m_pool.m_opts.dust_relay_feerate, ws.m_base_fees, ws.m_modified_fees, state)) {
+            return false; // state filled in by PreCheckEphemeralTx
+        }
+    }
+
     // Reduce effective fee by dust threshold for each sub-dust output
     if (m_pool.m_opts.subdustfeepenalty) {
         CAmount dust_penalty{0};
@@ -1113,13 +1126,6 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         if (dust_penalty > 0) {
             m_subpackage.m_changeset->UpdateStagedModifiedFee(ws.m_tx_handle, -dust_penalty);
             ws.m_modified_fees = SaturatingAdd(ws.m_modified_fees, -dust_penalty);
-        }
-    }
-
-    // Enforces 0-fee for dust transactions, no incentive to be mined alone
-    if (m_pool.m_opts.require_standard && !ignore_rejects.count("dust")) {
-        if (!PreCheckEphemeralTx(*ptx, m_pool.m_opts.dust_relay_feerate, ws.m_base_fees, ws.m_modified_fees, state)) {
-            return false; // state filled in by PreCheckEphemeralTx
         }
     }
 
@@ -3999,8 +4005,6 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
         to_mark_failed = disconnected_tip;
     }
 
-    m_chainman.CheckBlockIndex();
-
     {
         LOCK(cs_main);
         if (m_chain.Contains(*to_mark_failed)) {
@@ -4030,6 +4034,13 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
 
         InvalidChainFound(to_mark_failed);
     }
+
+    // Check the block index only after the block above has restored it. The
+    // disconnect loop releases cs_main between iterations, so a block that
+    // arrives in that window is absent from the candidate set precalculated
+    // before the loop, and the block above is what puts it back. Checking any
+    // earlier asserts on the very inconsistency it exists to repair.
+    m_chainman.CheckBlockIndex();
 
     // Only notify about a new block tip if the active chain was modified.
     if (pindex_was_in_chain) {
@@ -4620,8 +4631,8 @@ bool ChainstateManager::ProcessNewBlockHeaders(std::span<const CBlockHeader> hea
             const CBlockIndex& last_accepted{**ppindex};
             int64_t blocks_left{(NodeClock::now() - last_accepted.Time()) / GetConsensus().PowTargetSpacing()};
             blocks_left = std::max<int64_t>(0, blocks_left);
-            const double progress{100.0 * last_accepted.nHeight / (last_accepted.nHeight + blocks_left)};
-            LogInfo("Synchronizing blockheaders, height: %d (~%.2f%%)\n", last_accepted.nHeight, progress);
+            const int progress = last_accepted.nHeight ? static_cast<int>(1000LL * last_accepted.nHeight / (last_accepted.nHeight + blocks_left)) : 0;
+            LogInfo("Synchronizing blockheaders, height: %d (~%d.%d%%)\n", last_accepted.nHeight, progress / 10, progress % 10);
         }
     }
     return true;
@@ -4647,8 +4658,8 @@ void ChainstateManager::ReportHeadersPresync(int64_t height, int64_t timestamp)
     if (initial_download) {
         int64_t blocks_left{(NodeClock::now() - NodeSeconds{std::chrono::seconds{timestamp}}) / GetConsensus().PowTargetSpacing()};
         blocks_left = std::max<int64_t>(0, blocks_left);
-        const double progress{100.0 * height / (height + blocks_left)};
-        LogInfo("Pre-synchronizing blockheaders, height: %d (~%.2f%%)\n", height, progress);
+        const int progress = height ? static_cast<int>(1000LL * height / (height + blocks_left)) : 0;
+        LogInfo("Pre-synchronizing blockheaders, height: %d (~%d.%d%%)\n", height, progress / 10, progress % 10);
     }
 }
 
