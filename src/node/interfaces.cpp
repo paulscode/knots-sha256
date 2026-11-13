@@ -419,6 +419,10 @@ public:
     {
         return MakeSignalHandler(::uiInterface.NotifyNetworkActiveChanged.connect(fn));
     }
+    std::unique_ptr<Handler> handleNotifyNetworkLocalChanged(NotifyNetworkLocalChangedFn fn) override
+    {
+        return MakeSignalHandler(::uiInterface.NotifyNetworkLocalChanged.connect(fn));
+    }
     std::unique_ptr<Handler> handleNotifyAlertChanged(NotifyAlertChangedFn fn) override
     {
         return MakeSignalHandler(::uiInterface.NotifyAlertChanged.connect(fn));
@@ -813,6 +817,9 @@ public:
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }
     void initWarning(const bilingual_str& message) override { InitWarning(message); }
     void initError(const bilingual_str& message) override { InitError(message); }
+    bool initQuestion(const bilingual_str& message, const bilingual_str& non_interactive_message, unsigned int style) override {
+        return uiInterface.ThreadSafeQuestion(message, non_interactive_message.translated, style);
+    }
     void showProgress(const std::string& title, int progress, bool resume_possible) override
     {
         ::uiInterface.ShowProgress(title, progress, resume_possible);
@@ -907,7 +914,7 @@ class BlockTemplateImpl : public BlockTemplate
 {
 public:
     explicit BlockTemplateImpl(BlockCreateOptions create_options,
-                               std::unique_ptr<CBlockTemplate> block_template,
+                               std::shared_ptr<CBlockTemplate> block_template,
                                const NodeContext& node) : m_create_options(std::move(create_options)),
                                                           m_block_template(std::move(block_template)),
                                                           m_node(node)
@@ -960,7 +967,8 @@ public:
                                                   m_block_template,
                                                   /*wait_options=*/options,
                                                   /*create_options=*/m_create_options,
-                                                  /*interrupt_wait=*/m_interrupt_wait);
+                                                  /*interrupt_wait=*/m_interrupt_wait,
+                                                  /*validation_signals=*/m_node.validation_signals.get());
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_create_options, std::move(new_template), m_node);
         return nullptr;
     }
@@ -972,7 +980,7 @@ public:
 
     const BlockCreateOptions m_create_options;
 
-    const std::unique_ptr<CBlockTemplate> m_block_template;
+    const std::shared_ptr<CBlockTemplate> m_block_template;
 
     bool m_interrupt_wait{false};
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
@@ -1032,6 +1040,7 @@ public:
                                                        chainman().ActiveChainstate(),
                                                        m_node.mempool.get(),
                                                        create_options,
+                                                       m_node.validation_signals.get(),
                                                    }.CreateNewBlock(),
                                                    m_node);
     }
