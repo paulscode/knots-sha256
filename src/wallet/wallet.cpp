@@ -96,6 +96,11 @@ using util::ToString;
 
 namespace wallet {
 
+/*
+ * Signal when transactions are added to wallet
+ */
+btcsignals::signal<void(const CTransactionRef& ptxn, const uint256& blockHash)> CWallet::TransactionAddedToWallet;
+
 bool AddWalletSetting(interfaces::Chain& chain, const std::string& wallet_name)
 {
     const auto update_function = [&wallet_name](common::SettingsValue& setting_value) {
@@ -1226,6 +1231,9 @@ CWalletTx* CWallet::AddToWallet(CTransactionRef tx, const TxState& state, const 
 
     // Notify UI of new or updated transaction
     NotifyTransactionChanged(hash, fInsertedNew ? CT_NEW : CT_UPDATED);
+
+    // Notify listeners on new wallet transaction
+    CWallet::TransactionAddedToWallet(wtx.GetTx(), TxStateSerializedBlockHash(wtx.m_state));
 
 #if HAVE_SYSTEM
     // notify an external script when a wallet transaction comes in or is updated
