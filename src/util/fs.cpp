@@ -2,19 +2,26 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <util/check.h>
 #include <util/fs.h>
 
 #include <util/check.h>
 #include <util/syserror.h>
 
 #include <cerrno>
+#include <cstring>
 #include <string>
 
 #ifndef WIN32
 #include <fcntl.h>
 #include <unistd.h>
 #else
+#include <cstring>
+#include <fcntl.h>
+#include <io.h>
 #include <limits>
+#include <share.h>
+#include <sys/stat.h>
 #include <windows.h>
 #endif
 
@@ -22,9 +29,22 @@ namespace fsbridge {
 
 FILE *fopen(const fs::path& p, const char *mode)
 {
+    const bool exclusive{strchr(mode, 'x') != nullptr};
 #ifndef WIN32
+    Assume((!exclusive) || !strcmp(mode, "wbx"));
     return ::fopen(p.c_str(), mode);
 #else
+    if (exclusive) {
+        Assert(!strcmp(mode, "wbx"));
+        int fd;
+        if (::_wsopen_s(&fd, p.wstring().c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _SH_DENYNO, _S_IREAD | _S_IWRITE)) {
+            return nullptr;
+        }
+        FILE* fp = ::_fdopen(fd, "wb");
+        if (!fp) ::_close(fd);
+        return fp;
+    }
+
     return ::fopen(p.utf8string().c_str(), mode);
 #endif
 }

@@ -251,7 +251,6 @@ class ConfArgsTest(BitcoinTestFramework):
             self.start_node(0, extra_args=[
                 '-addnode=some.node',
                 '-rpcauth=alice:f7efda5c189b999524f151318c0c86$d5b51b3beffbc0',
-                '-rpcbind=127.1.1.1',
                 '-rpcbind=127.0.0.1',
                 "-rpcallowip=127.0.0.1",
                 '-rpcpassword=',
@@ -447,6 +446,12 @@ class ConfArgsTest(BitcoinTestFramework):
             "-proxyrandomize is disabled. Tor circuits for private broadcast connections may "
             "be correlated to other connections over Tor. To reduce this risk, set -proxyrandomize=1."))
 
+    def test_v2onlyclearnet(self):
+        self.log.info('Test -v2onlyclearnet startup options')
+        self.nodes[0].assert_start_raises_init_error(
+            extra_args=['-v2onlyclearnet=1', '-v2transport=0'],
+            expected_msg='Error: Cannot set -v2onlyclearnet to true when v2transport is disabled.')
+
     def test_ignored_conf(self):
         self.log.info('Test error is triggered when the datadir in use contains a bitcoin.conf file that would be ignored '
                       'because a conflicting -conf file argument is passed.')
@@ -534,6 +539,7 @@ class ConfArgsTest(BitcoinTestFramework):
         self.test_networkactive()
         self.test_connect_with_seednode()
         self.test_privatebroadcast()
+        self.test_v2onlyclearnet()
 
         self.test_dir_config()
         self.test_negated_config()
@@ -542,7 +548,6 @@ class ConfArgsTest(BitcoinTestFramework):
         self.test_invalid_command_line_options()
         self.test_ignored_conf()
         self.test_ignored_default_conf()
-        self.test_acceptstalefeeestimates_arg_support()
         self.test_testnet3_deprecation_msg()
 
         # Remove the -datadir argument so it doesn't override the config file

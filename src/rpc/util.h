@@ -8,6 +8,7 @@
 #include <addresstype.h>
 #include <consensus/amount.h>
 #include <policy/feerate.h>
+#include <primitives/transaction.h>
 #include <pubkey.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
@@ -133,7 +134,7 @@ std::string HelpExampleRpc(const std::string& methodname, const std::string& arg
 std::string HelpExampleRpcNamed(const std::string& methodname, const RPCArgList& args);
 
 CPubKey HexToPubKey(const std::string& hex_in);
-CTxDestination AddAndGetMultisigDestination(int required, const std::vector<CPubKey>& pubkeys, OutputType type, FlatSigningProvider& keystore, CScript& script_out);
+CTxDestination AddAndGetMultisigDestination(int required, const std::vector<CPubKey>& pubkeys, OutputType type, FlatSigningProvider& keystore, CScript& script_out, bool sort = false);
 
 UniValue DescribeAddress(const CTxDestination& dest);
 
@@ -155,6 +156,8 @@ std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, Fl
 
 //! Parse BIP32 path
 std::vector<uint32_t> ParsePathBIP32(const std::string& path);
+/** Parses a vector of transactions from a univalue array. */
+std::vector<CTransactionRef> ParseTransactionVector(const UniValue txns_param);
 
 /**
  * Serializing JSON objects depends on the outer type. Only arrays and
@@ -305,6 +308,10 @@ struct RPCArg {
      * Set oneline to get the oneline representation (less whitespace)
      */
     std::string ToStringObj(bool oneline) const;
+    /**
+     * Return the type as a string
+     */
+    std::string ToTypeString() const;
     /**
      * Return the description string, including the argument type and whether
      * the argument is required.
@@ -532,6 +539,8 @@ public:
         }
     }
     std::string ToString() const;
+    std::string ToStringArgsCli() const;
+    std::string ToString(const std::string& format) const;
     /** Return the named args that need to be converted from string to another JSON type */
     UniValue GetArgMap() const;
     /** If the supplied number of args is neither too small nor too high */
@@ -565,6 +574,9 @@ private:
  */
 void PushWarnings(const UniValue& warnings, UniValue& obj);
 void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj);
+
+bool GetWalletRestrictionFromJSONRPCRequest(const JSONRPCRequest& request, std::string& out_wallet_allowed);
+void EnsureNotWalletRestricted(const JSONRPCRequest& request);
 
 std::vector<RPCResult> ScriptPubKeyDoc();
 
