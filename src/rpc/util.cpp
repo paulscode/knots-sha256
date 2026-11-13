@@ -1401,6 +1401,23 @@ std::vector<uint32_t> ParsePathBIP32(const std::string& path)
     return out;
 }
 
+std::vector<CTransactionRef> ParseTransactionVector(const UniValue txns_param)
+{
+    std::vector<CTransactionRef> txns;
+    const UniValue& raw_transactions = txns_param.get_array();
+    txns.reserve(raw_transactions.size());
+
+    for (const auto& rawtx : raw_transactions.getValues()) {
+        CMutableTransaction mtx;
+        if (!DecodeHexTx(mtx, rawtx.get_str())) {
+            throw JSONRPCError(RPC_DESERIALIZATION_ERROR,
+                               "TX decode failed: " + rawtx.get_str() + " Make sure the prev tx has at least one input.");
+        }
+        txns.emplace_back(MakeTransactionRef(std::move(mtx)));
+    }
+    return txns;
+}
+
 /** Convert a vector of bilingual strings to a UniValue::VARR containing their original untranslated values. */
 [[nodiscard]] static UniValue BilingualStringsToUniValue(const std::vector<bilingual_str>& bilingual_strings)
 {
