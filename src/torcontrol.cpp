@@ -24,6 +24,7 @@
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/thread.h>
+#include <util/threadinterrupt.h>
 #include <util/time.h>
 
 #ifdef ENABLE_TOR_SUBPROCESS
@@ -78,6 +79,8 @@ constexpr int MAX_LINE_LENGTH = 100000;
 constexpr int MAX_LINE_COUNT = 1000;
 /** Timeout for socket operations */
 constexpr auto SOCKET_SEND_TIMEOUT = 10s;
+
+static CThreadInterrupt g_tor_interrupt;
 
 /****** Low-level TorControlConnection ********/
 
@@ -793,6 +796,10 @@ std::string TorController::LaunchTor()
             throw std::runtime_error("tor process died");
         }
         if (!m_interrupt.sleep_for(std::chrono::seconds(1))) {
+            LogDebug(BCLog::TOR, "tor: Interrupted while waiting for Tor process to make control port file");
+            m_process->kill();
+            delete m_process;
+            m_process = nullptr;
             throw std::runtime_error("interrupted");
         }
     }
