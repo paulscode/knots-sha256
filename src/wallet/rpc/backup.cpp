@@ -630,6 +630,8 @@ RPCMethod backupwallet()
                 },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
+    EnsureNotWalletRestricted(request);
+
     const std::shared_ptr<const CWallet> pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
 
@@ -680,6 +682,7 @@ RPCMethod restorewallet()
         },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
+    EnsureNotWalletRestricted(request);
 
     WalletContext& context = EnsureWalletContext(request.context);
 

@@ -1441,6 +1441,8 @@ static RPCMethod importmempool()
         RPCResult{RPCResult::Type::OBJ, "", "", std::vector<RPCResult>{}},
         RPCExamples{HelpExampleCli("importmempool", "/path/to/mempool.dat") + HelpExampleRpc("importmempool", R"("/path/to/mempool.dat")")},
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
+            EnsureNotWalletRestricted(request);
+
             const NodeContext& node{EnsureAnyNodeContext(request.context)};
 
             CTxMemPool& mempool{EnsureMemPool(node)};
