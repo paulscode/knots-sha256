@@ -70,8 +70,8 @@ std::string FormatSubVersion(const std::string& name, int nClientVersion, const 
     std::string ua = strprintf("/%s:%s%s/", name, FormatVersion(nClientVersion), comments_str);
     if (!base_name_only) {
         static const auto ua_knots = []() -> std::string {
-            const auto pos{CLIENT_BUILD.find(".knots")};
-            return "Knots:" + CLIENT_BUILD.substr(pos + 6) + "/";
+            const auto pos{CLIENT_BUILD.find(".knots-sha256.")};
+            return "KnotsSHA256:" + CLIENT_BUILD.substr(pos + 14) + "/";
         }();
         ua += ua_knots;
     }

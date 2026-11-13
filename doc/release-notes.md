@@ -1,583 +1,424 @@
-v32.1 Release Notes
-===================
+Bitcoin Knots SHA256 32.1.knots-sha256.20261113rc1 Release Notes
+====================================================================
 
-Due to last-minute issues, 32.0, although tagged, was never
-fully announced or released.
+**This is a release candidate.** Please test it and report problems before the final release.
 
-Bitcoin Core version 32.1 is now available from:
+Bitcoin Knots SHA256 version 32.1.knots-sha256.20261113rc1 is now available from:
 
-  <https://bitcoincore.org/bin/bitcoin-core-32.1/>
+  <https://github.com/paulscode/knots-sha256/releases/tag/v32.1.knots-sha256.20261113rc1>
 
-This release includes new features, various bug fixes and performance
-improvements, as well as updated translations.
+Please report problems at <https://github.com/paulscode/knots-sha256/issues>.
 
-Please report bugs using the issue tracker at GitHub:
+This release is based on Bitcoin Core 32.1
+(<https://bitcoincore.org/en/releases/32.1/>) with the Bitcoin Knots patch series
+inherited from Bitcoin Knots 29.3.knots20260507 and maintained for the SHA256 (Bitcoin)
+network. Bitcoin Core 32.0 was tagged but never released, so 32.1 is the first release
+of Bitcoin Core 32; its release notes cover the whole 32 series. Coming from Knots 29.x
+means skipping three Bitcoin Core major versions, so the Bitcoin Core 30.0 and 31.0
+release notes are worth a read too: <https://bitcoincore.org/en/releases/30.0/> and
+<https://bitcoincore.org/en/releases/31.0/>.
 
-  <https://github.com/bitcoin/bitcoin/issues>
+Consensus is identical to Bitcoin Core: this node accepts every block Bitcoin Core
+accepts. It does not include BIP110 / RDTS or the BLAKE2b proof-of-work change, and it
+follows the same chain as Bitcoin Core. What differs is policy, meaning what the node
+relays and what it mines, which follows Bitcoin Knots' stricter defaults (tables
+below). Every default has a one-flag override, and `-corepolicy=1` restores Bitcoin
+Core's relay and mining policy in one step.
 
-To receive security and update notifications, please subscribe to:
-
-  <https://bitcoincore.org/en/list/announcements/join/>
-
-With the release of this new major version, versions 29.x and
-older are at "End of Life" and will no longer receive updates.
-
-In accordance with the security policy, we will in two weeks disclose:
-
-* Medium and high severity vulnerabilities fixed in 30.0. There are 3 of these.
-
-* Low severity vulnerabilities fixed in 32.1. There are 0 of these.
+The node identifies itself to peers as `/Satoshi:32.1.0/KnotsSHA256:20261113rc1/`.
 
 How to Upgrade
 ==============
 
-If you are running an older version, shut it down. Wait until it has completely
-shut down (which might take a few minutes in some cases), then run the
-installer (on Windows) or just copy over `/Applications/Bitcoin-Qt` (on macOS)
-or `bin/` and `libexec/` (on Linux).
+If you are running an older version, shut it down. Wait until it has completely shut
+down (which might take a few minutes in some cases), then run the installer (on
+Windows) or just copy over `/Applications/Bitcoin-Qt` (on macOS) or `bin/` and
+`libexec/` (on Linux).
 
-Upgrading directly from a version of Bitcoin Core that has reached its EOL is
-possible, but it might take some time if the data directory needs to be migrated. Old
-wallet versions of Bitcoin Core are generally supported.
+**From 31.2.knots-sha256.20261031 or 31.1.knots-sha256.20261018:** nothing to migrate,
+and no option is gone. Several policy defaults change (see "Policy defaults that change
+in this release"). If your `bitcoin.conf` sets one of them, your setting stays in force.
+In particular, a `datacarriercost=1` line keeps the old data cost of 1; remove it to get
+the new default of 2. The Umbrel and StartOS packages raise a stored 1 to 2 once when
+they update; set 1 again afterwards if you want it, and it stays.
+
+If you are coming from 31.1 and did not yet do the `getprioritisedtransactions` check
+from the 31.2 notes, do it once: any entry you did not create with
+`prioritisetransaction` is a leftover of a 31.1 bug.
+
+### Which Knots release are you upgrading from?
+
+Check with `bitcoind -version` (or Help, About in the GUI). Two different releases
+are called 29.3, and only one of them is pre-RDTS.
+
+- **29.3.knots20260507 or earlier:** your data directory works as it is. Read the
+  rest of this section for options and wallets.
+- **A release ending in `.knots20260508`** (29.3.knots20260508, 29.4, 29.4.1,
+  29.4.2, and later 29.x releases with that ending): these enforce BIP110 (RDTS),
+  and 29.4.1 and 29.4.2 also use BLAKE2b.
+  - From 29.4.1 or 29.4.2 (BLAKE2b), or any later release that uses BLAKE2b: start
+    with a **fresh data directory** and copy your wallets across. Their data
+    directory holds BLAKE2b blocks, which this release cannot load.
+  - From 29.4, or if you ever ran `invalidateblock` to leave the Bitcoin chain: the
+    data directory records Bitcoin's block 961,632 as invalid. This release checks for
+    that when it starts and, if it finds it, stops with a message saying so. Start it
+    once with `-reindex` (not `-reindex-chainstate`, which keeps that record), or use
+    a fresh data directory. A pruned node downloads the whole chain again either way.
+  - From 29.3.knots20260508 without that record: nothing to do. The node moves back
+    to the Bitcoin chain by itself (the BIP110 branch it followed is 8 blocks long).
+  - Wallet transactions made on the RDTS or BLAKE2b chain after the split (block
+    961,632, 2026-08-08) are not on the Bitcoin chain. They will show as unconfirmed
+    and the wallet will try to rebroadcast them; `abandontransaction` frees their
+    inputs.
+
+### Options that are gone (coming from Knots 29.x)
+
+These options no longer exist. **In `bitcoin.conf` or `bitcoin_rw.conf` they are
+ignored without any effect** (debug.log says "Ignoring unknown configuration value");
+on the command line they stop the node from starting. Either way, the setting no
+longer does anything, so check what you relied on:
+
+| option | what changed |
+|---|---|
+| `-consensusrules` | BIP110 / RDTS setting; this release has no such rules |
+| `-blockprioritysize` | the cluster mempool block builder (Bitcoin Core 31 and later) has no priority area |
+| `-maxorphantx` | orphans are limited per peer since Bitcoin Core 30; the option was removed in 31 |
+| `-paytxfee` | deprecated in Bitcoin Core 30, removed in 31 (with `settxfee` and Knots' `setfeerate`). Your wallet now estimates fees (default target 144 blocks) unless you pass `fee_rate` or set `-fallbackfee` |
+| `-upnp` | not yet available in this series (see below); `-natpmp` works |
+| `-walletimplicitsegwit` | not yet available in this series (see below) |
+| `-dblogsize`, `-flushwallet`, `-privdb`, `-swapbdbendian` | legacy wallet options, removed with the legacy wallet in Bitcoin Core 30 |
+
+The `bitcoin-wallet` tool no longer has `-descriptors`, `-legacy`, `-format` or
+`-withinternalbdb`.
+
+**Tor users:** the network name `tor` is no longer accepted; it is `onion`. Change
+`onlynet=tor` to `onlynet=onion` and `proxy=<addr>=tor` to `proxy=<addr>=onion`.
+Unlike the options above, these **stop the node from starting**, also from
+`bitcoin.conf`.
+
+`-checkpoints`, `-limitancestorsize` and `-limitdescendantsize` are still accepted
+but only print a warning; they no longer have any effect.
+
+### Wallets
+
+**Legacy (BDB) wallets must be migrated.** Bitcoin Core 30 removed the legacy wallet
+type, so a wallet created as a legacy wallet by Knots 29.x opens only after
+`migratewallet`. Back up the wallet file before migrating. Descriptor wallets need
+nothing.
+
+These wallet RPCs from Knots 29.3 are gone: `importaddress`, `importprivkey`,
+`importpubkey`, `importmulti`, `importwallet`, `dumpprivkey`, `dumpwallet`,
+`dumpmasterprivkey`, `sethdseed`, `upgradewallet`, `newkeypool`,
+`addmultisigaddress`, `getunconfirmedbalance`, `settxfee` and `setfeerate`. Use
+`importdescriptors` instead of the import calls (for a watch-only address:
+`importdescriptors '[{"desc":"addr(<address>)#<checksum>","timestamp":"now"}]'`,
+with the checksum from `getdescriptorinfo`), and `listdescriptors true` to see
+private keys. `getbalance` follows Bitcoin Core (no watch-only balance; see the
+Core 30.0 and 31.0 notes).
+
+### Coming from Bitcoin Core
+
+From Bitcoin Core 30 or later: nothing to migrate. From an older Core, the option and
+wallet notes above apply too. Expect the policy differences listed below;
+`-corepolicy=1` gives you Bitcoin Core's relay and mining policy.
 
 Compatibility
-==============
+=============
 
-Bitcoin Core is supported and tested on the following operating systems or newer:
-Linux Kernel 3.17, macOS 14, and Windows 10 (version 1903). Bitcoin
-Core should also work on most other Unix-like systems but is not as
-frequently tested on them. It is not recommended to use Bitcoin Core on
-unsupported systems.
+Built for the same platforms as Bitcoin Core 32.1 (Linux kernel 3.17, macOS 14 and
+Windows 10 version 1903, or newer). This release has been tested by this
+project on Linux x86_64. GUI builds require Qt 6.
 
 Notable changes
 ===============
 
-P2P and network changes
------------------------
+### Changes in this release (since 31.2.knots-sha256.20261031)
 
-- Tor hidden services that are created automatically by Bitcoin Core will have
-  [PoW defenses](https://tpo.pages.torproject.net/onion-services/ecosystem/technology/security/pow/)
-  enabled if the Tor daemon supports that. (#33414)
-- To reduce memory and CPU usage during periods of high transaction volume,
-  rate-limiting of outgoing transaction relay has been changed to use a global
-  backlog instead of being done on a per-peer basis. The default rate-limit
-  remains as 14 tx/s (boosted by 2.5x for outbound peers), though this can be
-  changed via the `-txsendrate` configuration option. An additional bandwidth
-  rate-limit has also been introduced at 12MB of transactions per 10 minutes,
-  with a high burst rate. The size of the global backlog and the token bucket
-  values for the rate limits can be queried via the `getnetworkinfo` RPC.
-  (#34628)
-- Fix a possible leak of the originator's IP address for transactions sent with
-  `sendrawtransaction` RPC when `-privatebroadcast=1`. When Bitcoin Core
-  connects to a peer, if that peer has been advertised to support P2P protocol
-  v2, then Bitcoin Core tries to use the v2 protocol and if that fails it
-  retries the connection using the v1 protocol. When the private broadcast is
-  about to send a transaction to an IPv4 or IPv6 peer it overrides the normal
-  proxy selection and forces the connection through the Tor proxy (and thus
-  through the Tor network, protecting the sender's IP address). However if v2
-  protocol is tried and it fails, then the v1 retry connection would be made
-  disregarding the "override proxy" request, possibly making an IPv4 or IPv6
-  direct connection. In other words, for this to happen the following must be
-  true:
-  1. An IPv4 or IPv6 address has been advertised to the sender, indicating v2
-     support.
-  2. The sender must have Tor configured.
-  3. The sender's configuration must be such that connections to IPv4 or IPv6
-     are made directly (no `-proxy=` is used for IPv4 or IPv6).
-  4. The recipient does not support v2 (the flags from 1. are bogus). (#35410)
-- The private-broadcast queue (transactions submitted via `sendrawtransaction`
-  when `-privatebroadcast` is enabled and not yet echoed back from the network)
-  is now capped at 10,000 entries. When full, new submissions are rejected. It
-  is up to the caller to inspect the queue via `getprivatebroadcastinfo` and
-  free up space when stuck via `abortprivatebroadcast`. (#35406)
-- Each transaction sent via private broadcast (`-privatebroadcast`) is limited
-  to 1,000 send attempts. After reaching the limit, broadcasting stops; call
-  `sendrawtransaction` again to retry. Transactions that reach the limit remain
-  available through `getprivatebroadcastinfo` and `abortprivatebroadcast`.
-  (#35680)
-- Support for the legacy ElGamal (type 0) encryption type when creating I2P
-  sessions is being sunset by the I2P network and will be removed from bitcoind
-  on or before v34. Nodes using I2P with versions of Bitcoin Core earlier than
-  v26.1 (PRs #29200, #29209) will soon only be able to connect to other legacy
-  ElGamal I2P peers and will be increasingly isolated from the rest of the
-  network, with a reduced anonymity set. See #35696 for details. (#35696)
-- The project is currently considering whether to drop support for CJDNS (see
-  discussion in #36041). Since its introduction in v23.0, it has not gained
-  substantial adoption amongst nodes, and there is some concern about supporting
-  a network with such a low number of peers. (#36202)
-- The CJDNS documentation was updated in #34811 to simplify the setup / peer
-  discovery process. (#36202)
-- The default maximum number of automatic peer connections (`-maxconnections`)
-  has increased from 125 to 200, providing additional inbound capacity for
-  block-relay-only peers. By default, transaction-relaying peers may use at most
-  50% of inbound connection slots. This percentage can be configured with the
-  new `-inboundrelaypercent` option, which accepts values from 0 to 100 and
-  defaults to 50. The number of automatic outbound connections is unchanged.
-  (#28463)
-- Explicitly configured `-maxconnections` values remain unchanged, but the new
-  inbound transaction-relay limit still applies. To retain the previous
-  connection limits, use `-maxconnections=125 -inboundrelaypercent=100`.
-`-maxconnections` now clamps values above 2,000 with a warning to reduce
-  crash risk at very high peer counts. (#35919)
+**Bitcoin Core 32.1.** All of Bitcoin Core's 32 changes are included; see its release
+notes. Among them: transaction relay is rate-limited through one global backlog
+(`-txsendrate`), and `-maxconnections` defaults to 200, with the added slots used for
+block-relay-only connections and at most half of the inbound slots relaying
+transactions (`-inboundrelaypercent=50`).
 
-Mempool
--------
+**Security.** This release includes the fixes for the three vulnerabilities Bitcoin Core disclosed on 2026-11-10:
+CVE-2025-62861 (a reorg could make TRUC sibling eviction corrupt the mempool, so that a mining node could not build
+block templates until restarted), CVE-2025-62859 (a peer could stall block processing with a malleated compact block)
+and CVE-2025-62860 (inbound Tor connections could receive `-whitelist` permissions). Our 31.x releases already
+contained them too. With the default `-mempooltruc=accept` the first cannot occur at all, because TRUC sibling eviction
+does not run.
 
-- mempoolfullrbf=1 behaviour has been the default since v28 and the argument has
-  been removed since v29 subsequently. The `getmempoolinfo` RPC stops returning
-  the deprecated `fullrbf` key in the response unless the user requests it via
-  the `-deprecatedrpc=fullrbf` node argument. Also, the `bip125-replaceable` key
-  is removed from the mempool RPCs responses (because it, too, has been
-  deprecated since v29) unless the user requests it via `-deprecatedrpc=bip125`
-  node argument. Affected mempool RPCs are `getrawmempool`,
-  `getmempoolancestors`, `getmempooldescendants`, and `getmempoolentry`.
-  (#34911)
+#### Policy defaults that change in this release
 
-Updated RPCs
-------------
+| option | 31.2 | 32.1 | why | to restore the old behaviour |
+|---|---|---|---|---|
+| `-datacarriercost` | 1 | **2** | each data byte now counts as at least 2 virtual bytes (was 1), at admission and for mining order, eviction and fee bumping | `-datacarriercost=1` |
+| `-acceptunknownwitness` | 1 | **0** | outputs to witness versions 2 to 16, or to witness v1 programs that are neither taproot nor a pay-to-anchor, have no use before a soft fork defines one, and carry data that no filter examines. They are refused as `scriptpubkey-unknown-witnessversion`; this includes sends from the built-in wallet to such addresses. After a future soft fork that defines one, payments to it relay only once an update ships or the option is set | `-acceptunknownwitness=1` or `-corepolicy=1` |
+| `-datacarrierunprovenkeys` | 0 | **1** | multisig keys that no signature proves (beyond ten per script), and odd-sized pushes in key slots, count as 33 data bytes each against `-datacarriersize`. A seven-day survey of the Bitcoin chain found no genuine multisig spend that it refuses | `-datacarrierunprovenkeys=0` |
+| `-datacarrierdroppeditems` | (new) | **1** | witness items that a script drops without using them count as data | `-datacarrierdroppeditems=0` |
+| `-fakeoutputtext` | (new) | **1** | an output whose hash or key is all printable text counts as data | `-fakeoutputtext=0` |
+| `-maxconnections` | 125 | **200** | Bitcoin Core 32's default (see above) | `-maxconnections=125 -inboundrelaypercent=100` |
+| `-dbcache` | RAM-adaptive (Knots) | **Bitcoin Core's**: 1 GiB with 4 GiB of RAM or more (64-bit builds), else 450 MiB | performance only | `-dbcache=<MiB>` |
 
-- `createpsbt`, `walletcreatefundedpsbt`, `converttopsbt`, and `psbtbumpfee`
-  will now default to creating version 2 PSBTs. An optional `psbt_version`
-  argument is added to these RPCs which allows specifying the version of PSBT to
-  create. (#21283)
-- 'taproot' has been removed from 'getdeploymentinfo' because its historical
-  activation height is no longer used anywhere in the codebase. Applications
-  that rely on `deployments.taproot` to detect Taproot support should either
-  assume Taproot to be always active (since Bitcoin Core v24.0), or check for
-  `TAPROOT` in the `script_flags` array returned by `getdeploymentinfo` (since
-  Bitcoin Core v31.0). (#26201)
-- Bitcoin Core now reports a debug message explaining why transaction inputs are
-  non-standard. This information is now returned in the responses of the
-  transaction-sending RPCs `submitpackage`, `sendrawtransaction`, and
-  `testmempoolaccept`, and is also logged to `debug.log` (if `mempoolrej` +
-  debug category is enabled) when such transactions are received over the P2P
-  network. This does not change the existing error code
-  `bad-txns-nonstandard-inputs`, but instead adds additional debug information
-  to it. (#29060)
-- The `dumptxoutset` RPC now supports writing to a named pipe on UNIX-like
-  systems (see mkfifo(1) and mkfifo(3) man pages). This allows the raw UTXO set
-  data to be consumed directly by another process (e.g., the
-  `contrib/utxo-tools/utxo_to_sqlite.py` conversion script) without first
-  writing it to disk. (#31560)
-- Mempool RPCs (`getrawmempool`, `getmempoolentry`, `testmempoolaccept`,
-  `submitpackage`) now include an additional field `vsize_adjusted` (which is
-  the sigop-adjusted virtual size used for policy) and `vsize_bip141` (which
-  represents the raw BIP141 virtual size). While `vsize` is marked as
-  DEPRECATED, it was previously erroneously described as the BIP 141 vsize, but
-  is actually sigops-adjusted vsize. Use `vsize_bip141` to actually get that
-  behavior or switch to the explicit `vsize_adjusted` for retained behavior.
-  (#32800)
-- `getrawtransaction` RPC now includes an additional field `vsize_adjusted`,
-  which is the sigop-adjusted virtual size if the transaction is in the mempool.
-  (#32800)
-- The `getblockchaininfo` RPC now exposes progress for background validation if
-  the `assumeutxo` feature is used. Once a node has synced from snapshot to tip,
-  `verificationprogress` returns 1.0 and `initialblockdownload` false even
-  though the node may still be validating blocks in the background. A new
-  object, `backgroundvalidation`, provides details about the snapshot being
-  validated, including snapshot height, number of blocks processed, best block
-  hash, chainwork, median time, and verification progress. (#33259)
-- `getbalances` now includes a `nonmempool` field under `mine`, reporting the
-  net balance of wallet transactions that are not in the mempool (e.g. due to
-  too low a feerate, too many unconfirmed ancestors, or a too-large `OP_RETURN`
-  output). This value is always negative, and is typically an over-estimate
-  since it accounts for coins being spent but not for change outputs returning
-  to the wallet (which are also outside the mempool). Without this field, funds
-  involved in non-mempool transactions could appear to go missing from the
-  wallet balance. (#33671)
-- The `estimatesmartfee` RPC now combines two fee rate estimators: the existing
-  block policy fee rate estimator and a new mempool fee rate estimator. (#34075)
-- The new mempool fee rate estimator produces conservative and economical fee
-  rate estimates from the current contents of the mempool. It only produces a
-  fee rate estimate when recent blocks indicate a healthy mempool, and falls
-  back to the higher of the minimum relay fee rate and the current mempool
-  minimum fee rate when the mempool is too sparse. Its statistics are persisted
-  to `fees/mempool_policy_estimator.dat` and reloaded on startup.
-  `estimatesmartfee` returns the lower of the two fee rate estimators' results,
-  so the mempool fee rate estimator can only lower the block policy fee rate
-  estimate. (#34075)
-- `estimatesmartfee` accepts an `options` object with `fee_rate_estimator`.
-  Recognized values are `"auto"` (the default, combined behavior described
-  above), `"block_policy"` (use only the block policy fee rate estimator), and
-  `"mempool_policy"` (use only the mempool fee rate estimator). All unknown
-  values are rejected. Users who want the previous behavior can
-  select the block policy fee rate estimator explicitly. (#34075)
-- The options object also accepts `verbosity`. A verbosity of `2` or higher also
-  returns `mempool_health_statistics`. (#34075)
-- When `fee_rate_estimator` is `"auto"` and the estimate succeeds, the response
-  also includes an `estimator` field identifying which fee rate estimator
-  produced the result. (#34075)
-- Block policy fee estimator data is now stored in
-  `fees/block_policy_estimates.dat`. If the new file does not exist, the legacy
-  `fee_estimates.dat` file is moved to the new path during startup. If both
-  files exist, the legacy file is removed. (#34075)
-- Wallet fee rate estimation uses the default combined estimate. (#34075)
+`-corepolicy=1` resets the first five to Bitcoin Core's behaviour.
 
-- The `-deprecatedrpc=startingheight` configuration option has been removed. The
-  `getpeerinfo` RPC no longer returns the `startingheight` field, which was
-  previously deprecated in v31.0. (#34796)
-- The `migratewallet` RPC now gives the option to not load the descriptor wallet
-  after migrating it from a legacy wallet. This will now allow pruned nodes to
-  migrate a wallet out of sync below the pruning height. Note that to use the
-  new wallet it must be loaded to a full node anyway. (#35266)
-- The `getprivatebroadcastinfo` and `abortprivatebroadcast` RPCs now return an
-  error `-32601`, "Method not found", when `-privatebroadcast` is not enabled at
-  startup. (#35267)
-- `gettransaction`, `listtransactions`, and `listsinceblock` now have an
-  `alternate_wtxids` field which lists the wtxids of all transactions that have
-  the same txid. When there is only one known witness variant the field is an
-  empty array, analogous to `walletconflicts` and `mempoolconflicts`. (#35501)
-- `getprivatebroadcastinfo` now reports an `attempts_remaining` field for each
-  transaction. (#35680)
-- `getnetworkinfo` now reports the `asmap_version` if `-asmap` is in use. The
-  version is the hash of the asmap data and can be verified against the hash of
-  the raw asmap data file that also gets attested in the
-  [asmap-data](https://github.com/bitcoin-core/asmap-data) repository with
-  `sha256sum`. (#36249)
+#### New spam filters (from Bitcoin Knots and an outside review)
 
-Changes to wallet related RPCs can be found in the Wallet section below.
+All on by default and refused as `txn-datacarrier-nonstandard` once the data passes
+`-datacarriersize`; each is switched off by its own option or by `-corepolicy=1`:
 
-New RPCs
---------
+- **`-rejectfakeoutputs`** (knots#389, default 1): outputs whose hash or key is data
+  (text, or runs of one repeated byte) count as data carrier bytes. Its dust-run rule
+  sits behind `-datacarrierdustruns` (default 0), because a Lightning commitment with
+  three or more equal in-flight HTLCs has the same layout. During the soak this caught
+  a payment burned to a "key hash" spelling out a web address.
+- **`-datacarrierdroppeditems`** and **`-fakeoutputtext`** (see the table above).
+- **Token messages** (knots#489): JSON and Omni token messages are refused under
+  `-rejecttokens` (`tokens-json`, `tokens-omni`).
 
-- A new `exportasmap` RPC writes the ASMap data embedded at build time to a
-  file. (#33920)
-- A new `getopenrpcinfo` RPC returns a machine-readable OpenRPC 1.4.1
-  description of the RPCs available on the running node, including their
-  parameters and result schemas. The new `rpc.discover` method provides the same
-  public document using OpenRPC’s standard service discovery method. To include
-  hidden commands and arguments, call `getopenrpcinfo` with `show_hidden=true`.
-  (#34683)
+LND's taproot revocation leaf (knots#487) now relays within `-datacarriersize`. At our
+42 bytes one such input per transaction relays; a justice transaction sweeping two
+revoked commitments at once is refused (`-datacarriersize=83` relays two).
 
-Build System
-------------
+#### Miners
 
-- The next major release is planned to drop support for building Bitcoin Core on
-  Windows with MSVC, once clang-cl support is ready. See
-  [#36153](https://github.com/bitcoin/bitcoin/issues/36153).
-- The undocumented `BITCOIN_GENBUILD_NO_GIT` environment variable is no longer
-  required and has been removed. The build system now automatically detects when
-  it is being built from a source archive or as a subproject of a git-aware
-  parent project and skips git metadata fetching. Users who need to disable git
-  execution explicitly can still do so by configuring with
-  `-DCMAKE_DISABLE_FIND_PACKAGE_Git=ON`. (#32220)
+- A data-carrying transaction near the end of a template must fit with its data cost,
+  as in 31.x and Bitcoin Knots (Bitcoin Core 32 fits by real weight). The block's real
+  weight is still what is capped.
+- IPC mining clients cannot override `-blockmaxsize`, `-blockmaxweight` or
+  `-blockmintxfee` per request (Bitcoin Core 32's IPC schema); RPC `getblocktemplate`
+  still can. Out-of-range per-request weight and reserved values now return an error
+  instead of being clamped (Bitcoin Core 32); a per-request `blockmaxsize` is still
+  clamped to the valid range.
 
-Updated settings
-----------------
+#### Wallet
 
-- The `bip125-replaceable` key in the wallet transaction RPCs such as
-  `listtransactions`, `listsinceblock`, and `gettransaction` is marked as
-  deprecated. Users still have the option to retrieve this key by passing the
-  `-deprecatedrpc=bip125` startup option. Also, the `-walletrbf` startup option
-  has been marked as deprecated and will be fully removed in the next release.
-  Using this option emits a warning in the logs. (#34917)
-- The `libevent` logging category has been removed. Configurations like
-  `-debug=libevent` or `-debugexclude=libevent` will log a deprecation warning
-  and be ignored. These configurations will result in an error in a future
-  release.
-- A new configuration option `-rpcmaxconnections` (default `16`) limits the
-  number of simultaneously connected HTTP clients to the server. The application
-  will now attempt to reserve file descriptors for the HTTP server sockets. If
-  your system has limited resources, consider using a lower setting.
-- A new `mining` logging category has been added, enabled with `-debug=mining`.
-  The `CreateNewBlock(): block weight: ...` line, previously logged on every
-  block template build regardless of logging configuration, is now logged only
-  when this category is enabled. `getblocktemplate` and Mining IPC users are
-  encouraged to enable it to see this log and future mining log.
+- With the data cost of 2, a transaction with an OP_RETURN output needs 1 sat per
+  *policy* vbyte (`vsize_adjusted` in the mempool RPCs), which the built-in wallet does
+  not add: pay a little above the minimum, or run with `-datacarriercost=1`.
 
-Changes to GUI or wallet related settings can be found in the GUI or Wallet section below.
+#### Network
 
-New settings
-------------
+- `-v2onlyclearnet` (knots#454) now also disconnects inbound v1 (unencrypted) peers on
+  IPv4/IPv6 (local and private addresses are exempt), and can be used with `-listen`.
+  In 31.2 it only stopped outbound v1 connections. Without a `-bind=...=onion`
+  listener the node assumes that inbound connections on its first `-bind` came
+  through Tor; under `-v2onlyclearnet` it now checks their source address, so a
+  clearnet v1 peer cannot pass as an onion one.
 
-- Block validation can now prefetch input prevouts from the chainstate database
-  in parallel while connecting blocks, speeding up validation when prevouts need
-  to be read from disk. A new `-prevoutfetchthreads=<n>` option controls the
-  number of prefetch worker threads. The default is 8 threads, up to a maximum
-  of 16; set it to 0 to disable parallel prefetching. (#35295)
+#### GUI
 
-Tools and Utilities
--------------------
+- Warnings (such as an expiring release or unknown new rules) show on every tab
+  instead of only on the overview (knots#301).
+- The RPC console stays on its wallet (knots#344); dates follow the locale (knots#336).
 
-- CLI -addrinfo now returns the full set of known addresses. In previous
-  versions (v22.0 - v30.0) the set of returned addresses was filtered for
-  quality and recency. This was changed since it does not match the logic for
-  selecting peers to connect to, which does not filter. Note: CLI -addrinfo now
-  requires bitcoind v26.0 or later, as it uses the getaddrmaninfo RPC
-  internally. Users querying older, unmaintained node versions would need to use
-  an older bitcoin-cli version. (#26988)
-- A new `bitcoin-util getchainparams` command returns hardcoded details about
-  the selected chain. (#35610)
+#### Fixes from Bitcoin Knots
 
-Wallet
-------
+- `dumptxoutset` takes its type from `bitcoin-cli`, and a rollback with a format but no
+  type works (knots#472); positional and named RPC options mix correctly (knots#471).
+- A Tor the node started is stopped, and not waited on, at shutdown (knots#462, #464).
+- A wallet descriptor range can no longer overflow (knots#458).
+- After a failed seek or a short read or write, block and undo files no longer keep a
+  stale file position (knots#491), and preallocating space in a block file no longer
+  lets buffered data land in the wrong place. 32-bit builds seek correctly in files
+  larger than 2 GiB.
+- `bitcoind -help` and `-version` no longer touch the data directory, and
+  `contrib/devtools/gen-bitcoin-conf.sh` no longer uses the default data directory.
+- The deprecated `vsize` field of the mempool RPCs is the policy size, including the
+  data cost (use `vsize_bip141` for BIP 141 vsize, `vsize_adjusted` for the policy size).
 
-- A new RPC `addhdkey` is added which allows a BIP 32 extended key to be added
-  to the wallet without needing to import it as part of a separate descriptor.
-  This key will not be used to produce any output scripts unless it is
-  explicitly imported as part of a separate descriptor independent of the
-  `addhdkey` RPC. (#29136)
-- A new `exportwatchonlywallet` RPC creates a watchonly wallet file from an
-  existing descriptor wallet. The exported file contains the wallet's public
-  descriptors (with derived key caches where needed), transactions, and address
-  book data, but no private keys. It can be imported on another node using the
-  existing `restorewallet` RPC. (#32489)
-- The [Offline Signing Tutorial](/doc/offline-signing-tutorial.md) has been
-  updated to use `exportwatchonlywallet` for setting up the online watch-only
-  wallet, replacing the previous manual descriptor import workflow. (#32489)
-- A new `derivehdkey` RPC is available to obtain an xpub or xprv for a
-  derivation path with at least one hardened step from an HD key known to the
-  wallet. This can be used to coordinate a multisig setup, where each signer
-  shares an xpub using a different derivation path than the default
-  single-signature descriptors. The example in `doc/multisig-tutorial.md` is
-  updated to use this RPC. (#32784)
-- The `fee_reason` field returned by wallet transaction creation RPCs now
-  reports the reason the wallet selected the fee rate ("Fee Rate Estimator",
-  "Mempool Min Fee", "User Specified Fee", "Fallback fee" or
-  "Minimum Required Fee") instead of the block policy fee rate estimator's
-  internal threshold details. Those details remain available in the block
-  policy fee rate estimator debug log. (#34075)
-- Wallet names that are relative paths including `..` and `.` elements, and
-  wallets named `/` are no longer allowed. Any users that depended on this
-  behavior can instead use absolute paths to their wallet or move their wallet
-  to a safer path. (#34544)
-- The `send` and `sendall` RPCs are no longer marked as experimental. (#35601)
-- The `fundrawtransaction` RPC no longer accepts a boolean as the second
-  positional argument. This silent no-op fallback was removed and the argument
-  is now fully type checked. Passing a boolean will raise an error. (#35836)
-- On non-Windows systems, an authenticated RPC caller allowed to create wallets
-  could execute arbitrary commands as the node process account when
-  `-walletnotify` was configured, by crafting a wallet name with regex
-  replacement characters. Wallet notification placeholder replacement now treats
-  wallet names literally. (#36048)
-- The `removeprunedfunds` RPC has been deprecated and will be removed in the
-  next major release. In order to continue using it, `bitcoind` must be started
-  with the `-deprecatedrpc=removeprunedfunds` option. (#35605)
+Bitcoin Core 32.1 already contains several fixes that Bitcoin Knots carries as patches
+(a `getblockfrompeer` crash, a reindex deadlock at startup, `dumptxoutset` rollback
+without invalidating blocks); they are in this release through Bitcoin Core.
 
-GUI changes
------------
+#### Robustness
 
-- A menu action has been added to allow creating a watchonly wallet file from an
-  existing descriptor wallet. This option mirrors the `exportwatchonlywallet`
-  RPC - the exported file can be imported to another node using the Restore
-  Wallet menu action. (gui#872)
-- The "Enable Replace-By-Fee" checkbox has been removed from the Send tab, and
-  the send confirmation dialog no longer states whether a transaction signals
-  BIP 125 replaceability. Transactions created in the GUI now follow the wallet's
-  `-walletrbf` setting, which defaults to signalling replaceability and is
-  deprecated in this release (see Updated settings). (gui#936)
-- The migrate wallet option now allows to disable wallet loading after
-  migrating. It is useful in case the node is pruned and the wallet was created
-  before the pruned height. (gui#953)
-- The GUI is now built with Qt 6.8.4. (#35709)
+- The data-carrier analyses only read scripts that the spent output commits to, so a
+  peer can no longer make them do costly work on invalid transactions.
+- `-datacarriercost` outside 0 to 1000 is a startup error.
+- Prune locks no longer wrap on a reorg to genesis.
+- `-spkreuse=conflict`'s chained rejection can no longer be ignored into an
+  inconsistent mempool, and it also holds between the transactions of a package
+  (`txn-spk-reused-package`). A package's cluster size limit can no longer be ignored in
+  `testmempoolaccept`.
+- `-corepolicy` now gives Bitcoin Core's own legacy-sigop limit (2500) instead of none.
 
-Mining
-------
+#### Lightning operators
 
-- The IPC mining interface now rejects out-of-range block template options
-  instead of silently clamping them, such as oversized reserved block weight or
-  coinbase sigops limits. (#33966)
-- The `-blockmaxweight` startup option is now rejected when it is lower than
-  `-blockreservedweight`, instead of being silently clamped. (#33966)
+- Every BOLT 3 and LND simple-taproot spend relays at the defaults (tested), except an
+  LND justice transaction that sweeps two revocation leaves at once (see knots#487
+  above). LDK zero-fee commitment channels whose anchor carries sub-dust value need
+  `-permitephemeral=anchor,dust` (`send` is not needed, and would also admit
+  non-anchor dust).
 
+### Policy defaults that differ from Bitcoin Core
 
-IPC Interface
--------------
+Options that both Bitcoin Core and this release have, with different defaults.
+`-corepolicy=1` sets all of these to Bitcoin Core's values:
 
-- `BlockTemplate.submitSolution` now returns `reason` and `debug` rejection
-  details in addition to the boolean result. Clients must regenerate IPC
-  bindings from the updated `mining.capnp` schema to use the new method. The
-  previous `@7` method now returns an error directing clients to update.
-  (#34672)
-- `BlockTemplate.submitSolution` now reports duplicate blocks as failures with
-  `reason="duplicate"`, matching `Mining.submitBlock`, instead of returning
-  success for duplicate submissions. (#34672)
+| option | Bitcoin Core 32.1 | this release | what it does |
+|---|---|---|---|
+| `-datacarriersize` | 100000 | 42 | largest data payload relayed or mined (bytes) |
+| `-minrelaytxfee` | 0.000001 | 0.00001 | lowest fee rate relayed (1 sat/vB) |
+| `-incrementalrelayfee` | 0.000001 | 0.00001 | fee bump needed to replace or evict (1 sat/vB) |
+| `-blockmintxfee` | 0.00000001 | 0.00001 | lowest fee rate put in a block template |
+| `-blockmaxweight` | 4000000 | 1200000 | block template size (weight) |
+| `-permitbaremultisig` | 1 | 0 | relay bare multisig outputs |
+| `-blockreconstructionextratxn` | 100 | 32768 | extra transactions kept for compact block reconstruction |
 
-Logging
--------
+`-acceptnonstdtxn` (default 0 in both) can also be set on mainnet here; Bitcoin Core
+allows it only on test networks.
 
-- BIP 9 bits 5 to 28 inclusive are now ignored for soft fork signaling, as per
-  BIP 323. We won't warn about unknown deployments when receiving blocks that
-  set any of those bits in their version. (#34779)
+Options this release adds on top of Bitcoin Core, with their defaults. Those marked
+with * are set to Bitcoin Core's behaviour by `-corepolicy=1`; the others already
+behave like Bitcoin Core by default, or have no Core equivalent:
 
-REST API
---------
+| option | default | what it does |
+|---|---|---|
+| `-corepolicy` | 0 | set to 1 to use Bitcoin Core's policy defaults |
+| `-datacarriermultiple` * | 0 | 0: at most one OP_RETURN output per transaction (as in Knots 29.3); 1: several, within `-datacarriersize` |
+| `-datacarriercost` * | 2 | virtual bytes charged per byte of data, at admission and for mining, eviction and fee bumping (`-corepolicy=1` sets 0.25, Bitcoin Core's witness discount) |
+| `-datacarrierfullcount` * | 1 | apply `-datacarriersize` to every data-carrying method, not only OP_RETURN |
+| `-acceptnonstddatacarrier` * | 0 | relay data hidden in non-OP_RETURN scripts |
+| `-rejectparasites` * | 1 | reject CAT-21 transactions (inscription envelopes are refused by `-acceptnonstddatacarrier=0`) |
+| `-rejecttokens` * | 1 | reject known token protocols (Runes, OLGA stamps, Counterparty, JSON and Omni token messages) |
+| `-rejectbpub` * | 1 | reject files hidden in multisig keys (BPUB) |
+| `-rejectdeadbranches` * | 1 | count data in script branches that can never run |
+| `-rejectfakeoutputs` * | 1 | count output hashes and keys that are data as data |
+| `-datacarrierdustruns` | 0 | with `-rejectfakeoutputs`, also count runs of equal dust outputs as data |
+| `-datacarrierunprovenkeys` * | 1 | count multisig keys no signature proves as data |
+| `-datacarrierdroppeditems` * | 1 | count witness items a script drops unused as data |
+| `-fakeoutputtext` * | 1 | count output hashes and keys that are all printable text as data |
+| `-acceptunknownwitness` * | 0 | relay transactions paying to future witness versions |
+| `-permitbarepubkey` * | 0 | relay bare pubkey (P2PK) outputs |
+| `-permitbaredatacarrier` * | 0 | relay transactions whose only outputs are OP_RETURN |
+| `-permitbareanchor` | 1 | relay anchor-only transactions |
+| `-permitephemeral` * | anchor,-send,-dust | which ephemeral outputs are relayed |
+| `-maxscriptsize` * | 1650 | largest script (including witness) relayed (bytes) |
+| `-maxtxlegacysigops` * | 2500 | legacy signature-operation limit per transaction |
+| `-bytespersigopstrict` * | 20 | strict bytes-per-sigop accounting |
+| `-blockmaxsize` * | 300000 | block template size (serialized bytes) |
+| `-subdustfeepenalty` * | 1 | dust outputs reduce a transaction's effective fee |
+| `-mempoolreplacement` | fee,-optin | replacement policy: full RBF, as in Bitcoin Core; `fee,optin` honours opt-in signalling instead |
+| `-mempoolfullrbf` | 1 | older alias of `-mempoolreplacement` |
+| `-mempooltruc` * | accept | `accept`: v3 (TRUC) transactions are relayed like any other, but TRUC's topology limits are not enforced (Bitcoin Core enforces them; `enforce` matches Core, `reject` refuses v3) |
+| `-dustdynamic` | off | dynamic dust threshold |
+| `-minrelaycoinblocks` | 0 | coin-age relay floor |
+| `-minrelaymaturity` | 0 | input-maturity relay floor |
+| `-spkreuse` * | allow | relay transactions that reuse addresses |
+| `-blockreconstructionextratxnsize` * | 10 | memory cap for the extra-transaction pool (MB) |
+| `-softwareexpiry` | 1857151480 | see "Software expiry" below |
 
-- REST responses now include `Cache-Control` headers to guide intermediary
-  caches. Immutable responses such as block binary and hex data, block parts,
-  block filters, spent transaction outputs, and block-specific deployment info
-  are marked cacheable for one day. Responses that can change with active chain
-  or node state, as well as errors, are marked `no-store`. (#34794)
+Other defaults that differ from Bitcoin Core (not changed by `-corepolicy`):
 
-Low-level changes
-=================
+| option | Bitcoin Core 32.1 | this release |
+|---|---|---|
+| `-dbbatchsize` | 33554432 | 67108864 |
+| `-peerbloomfilters` | 0 | localhost only |
+| `-txconfirmtarget` | 6 | 144 (wallet fee target, blocks) |
 
-Indexes
--------
+Other options carried from Bitcoin Knots (no policy effect): `-confrw`, `-lowmem`,
+`-pruneduringinit`, `-statsenable`, `-statsmaxmemorytarget`, `-torexecute`,
+`-uaappend`, `-uaspoof`, `-v2onlyclearnet`, `-feefilter`, `-dbfilesize`,
+`-rpcauthfile`, `-signetblocktime`, `-guisettingsdir`, and the `-zmqpub*wallettx`
+notifications. `-blockfilterindex` also accepts `v0`, a filter type from Bitcoin
+Knots, besides Bitcoin Core's `basic`.
 
-- The transaction index (`-txindex`) now stores less data on disk; a fully
-  rebuilt index takes less than half the space. The index is backwards
-  compatible, so existing users will not see the space saving unless the index
-  is recreated. To do so, stop the node, delete the `<datadir>/indexes/txindex`
-  directory, and restart; rebuilding can take up to a few hours depending on
-  hardware. Progress can be monitored using the `getindexinfo` RPC. Once
-  rebuilt, the index can no longer be read by previous releases, so downgrading
-  will rebuild it again in the old format. When downgrading permanently, delete
-  the `<datadir>/indexes/txindex` directory first, since previous releases do
-  not reclaim the space used by entries in the new format. (#35531)
-- The transaction output spender index (`-txospenderindex`) now uses less disk
-  space. Existing indexes remain compatible and no action is required. To
-  reclaim the space for data indexed before upgrading, stop the node, delete the
-  `<datadir>/indexes/txospenderindex/` directory, and restart with
-  `-txospenderindex` enabled to rebuild it. (#35634, #35568)
+### Changes compared with Bitcoin Knots 29.3.knots20260507
 
-RPC
----
+- `-datacarriersize` defaults to 42 bytes (40 bytes of data), Knots' long-standing
+  default before 29.2.
+- `-datacarriercost` defaults to 2 (Knots: 1).
+- `-acceptunknownwitness` defaults to 0 (Knots: 1).
+- `-datacarrierunprovenkeys`, `-datacarrierdroppeditems` and `-fakeoutputtext` are
+  options of this release, on by default.
+- One OP_RETURN output per transaction stays the default, as in 29.3, now as an
+  option: `-datacarriermultiple=1` allows several within `-datacarriersize`.
+- `-rejecttokens` is on by default.
+- `-dbcache` and `-maxconnections` follow Bitcoin Core 32.
+- Checkpoints are gone, as in Bitcoin Core 30 and later.
+- The block priority area (`-blockprioritysize`) is gone; the cluster mempool block
+  builder replaced the code it relied on.
+- The legacy (BDB) wallet and the RPCs listed under "Wallets" are gone.
+- GUI builds require Qt 6, as in Bitcoin Core 31 and later.
+- An expired node no longer rejects block headers: expiry never changes which blocks
+  the node accepts (see "Software expiry").
+- Fixed: a node that stopped uncleanly (power cut, crash) within about an hour after
+  finishing its initial sync could fail to start again without
+  `-reindex-chainstate`. The chainstate sync after initial block download now writes
+  the block index first.
+- Fixed: "Reset options" in the GUI could delete `bitcoin_rw.conf` without the
+  backup it promises. It now keeps the file and tells you when the backup cannot be
+  made, and settings are only ever replaced by a completely written copy.
+- New: the node refuses to start on a data directory that records Bitcoin's block
+  at the BIP110 split (961,632) as invalid, as Bitcoin Knots 29.4 or `invalidateblock`
+  leave it, and says how to recover (see "How to Upgrade"). This is a startup check:
+  it does not change which blocks the node accepts.
+- Fixed: a negative `-softwareexpiry` showed an "expired" warning; like 0, it turns
+  expiry off.
+- `libbitcoinconsensus` on Linux exports only its API functions.
 
-- Libevent has been replaced with a custom HTTP server (#35182). Certain HTTP
-  edge cases will observe different behavior to be more RFC-compliant:
-  - Stricter enforcement of maximum headers size (8192 bytes)
-  - Reject requests with whitespace in header field-names
-  - "Line Folding" is rejected (whitespace at start of a header line)
-  - Tolerate `%` at the end of requested URLs
-  - Multiple "Content-Length" headers with different values are rejected
-- Clients attempting to connect from addresses not allowed by the `-rpcallowip`
-  option (or its default, `localhost`) will now be immediately disconnected
-  instead of receiving a `403 Forbidden`. (#35592)
+Not yet in this series: UPnP (`-upnp`; NAT-PMP via `-natpmp` works), the GUI dialog
+for settings kept in `bitcoin_rw.conf`, `importaddress` for descriptor wallets (use
+`importdescriptors`, see "Wallets"), and `-walletimplicitsegwit`.
+
+### Binaries
+
+- Linux (x86_64, aarch64, riscv64), Windows (x86_64) and macOS (x86_64, arm64), built
+  reproducibly with Guix, using the same toolchain and macOS SDK as Bitcoin Core's
+  own builds. 32-bit ARM (`arm-linux-gnueabihf`) is built but not published until its
+  tests can run on that architecture.
+- The release also includes `libbitcoinconsensus`, which Bitcoin Core no longer
+  ships.
+- **Nothing is code-signed by Apple or Microsoft.** Every file is covered by the
+  signed `SHA256SUMS` instead (see "Verifying this release"); verify first.
+  - **macOS:** remove the download quarantine and sign the files yourself (ad hoc, no
+    Apple account needed). On Apple Silicon macOS refuses to run unsigned programs
+    at all, so this step is required there:
+    `xattr -dr com.apple.quarantine Bitcoin-Qt.app && codesign --force --deep -s - Bitcoin-Qt.app`
+    For the command-line tarball, run the same two commands on the extracted folder
+    (`xattr -dr com.apple.quarantine <folder>` and
+    `codesign --force -s - <folder>/bin/* <folder>/libexec/* <folder>/lib/*.dylib`).
+  - **Windows:** SmartScreen warns about the unsigned installer; choose "More info",
+    then "Run anyway".
+- The Windows installer's default folder is Bitcoin Core's (`Program Files\Bitcoin`);
+  choose another folder to keep both. On macOS the app has Bitcoin Core's name and
+  bundle identifier (`Bitcoin-Qt.app`), so copying it to Applications replaces
+  Bitcoin Core's app. Data directories are not touched either way.
+
+### Software expiry
+
+This release has a built-in expiry at 2028-11-06 19:24 UTC (POSIX time 1857151480),
+with a warning from 2028-10-09.
+
+- At the expiry time a running node shows an error and its `getblocktemplate` RPC
+  stops working, but the node keeps running and validating.
+- After that it **will not start again**, so an unattended node fails to come back
+  after its next restart. Upgrade before then.
+- To override, set `-softwareexpiry=0` (no expiry) or a later POSIX timestamp. The
+  value is a number of seconds, not a date: `-softwareexpiry=2029-01-01` is read as
+  the number 2029 and makes the node refuse to start.
+- Expiry never changes which blocks the node accepts.
+
+### Consensus
+
+Consensus-identical to Bitcoin Core 32.1. Accepted consensus divergences: none.
+
+Verifying this release
+======================
+
+`SHA256SUMS` is signed by FF76 D484 3EBD 7FA0 6D92  DC0C B8AB 7B8E 7E28 0E1A (Paul Lamb).
+Public key: <https://paulscode.com/.well-known/paulscode.asc>
+
+    gpg --verify SHA256SUMS.asc SHA256SUMS && sha256sum --ignore-missing -c SHA256SUMS
+
+The source tarball is the one the binaries were built from, made by the reproducible
+Guix build (as Bitcoin Core publishes it). `guix-noncodesigned.SHA256SUMS` lists the
+hash of every file that build produced; building the tagged commit with
+`contrib/guix/guix-build` should give you the same hashes.
 
 Credits
 =======
 
-Thanks to everyone who directly contributed to this release:
-
-- 0xb10c
-- Adam Andrews
-- Alexander Wiederin
-- Alfonso Roman Zubeldia
-- ameen-alam
-- amisha
-- Amiti Uttarwar
-- Andreas Kouloumos
-- Andrew Toth
-- Anthony Towns
-- Anthropic Security
-- Antoine Poinsot
-- ArvinFarrelP
-- Ava Chow
-- azuchi
-- benthecarman
-- Ben Woosley
-- Bicaru20
-- b-l-u-e
-- Bortlesboat
-- Brandon Odiwuor
-- Bruno Garcia
-- CaesarCoder
-- Chandra Pratap
-- codeabysss
-- Cory Fields
-- Craig Raw
-- crStiv
-- csjones
-- cyb3ralbert
-- Daniela Brozzoni
-- Daniel Pfeifer
-- Danny van Heumen
-- David Gumberg
-- deadmanoz
-- dergoegge
-- ekzyis
-- Enoch Azariah
-- Eugene Siegel
-- Evan Sultanik
-- Fabian Jahr
-- fanquake
-- frankomosh
-- Gloria Zhao
-- Greg Sanders
-- Guillermo Fernandes
-- GuTS805
-- Hao Xu
-- Hennadii Stepanov
-- Henry Romp
-- Hodlinator
-- HouseOfHufflepuff
-- ImMike
-- ismaelsadeeq
-- janb84
-- jeanpablojp
-- Jean-Philippe Aumasson
-- joaonevess
-- Jon Atack
-- jpk68
-- jrakibi
-- junbyjun1238
-- Kanan
-- kevkevinpal
-- Kyle 🐆
-- l0rinc
-- Laxman Acharya
-- littleyier
-- Luke Dashjr
-- maflcko
-- marcofleon
-- Martin Zumsande
-- Matias Furszyfer
-- Matthew Zipkin
-- Max Edwards
-- Mccalabrese
-- Memetic Money
-- Michael Dietz
-- Muhammad
-- Murch
-- Musa Haruna
-- naiyoma
-- nebula-21
-- nervana21
-- Novo
-- optout
-- Pablo Martin
-- Peter Zafonte
-- Philips Ucheolisah .N
-- Pieter Wuille
-- Pol Espinasa
-- pseudoramdom
-- pythcoiner
-- Renato Britto
-- rkrux
-- Rob Hamilton
-- Robin David
-- Roqqit
-- Ruslan Kasheparov
-- Russell Yanofsky
-- rustaceanrob
-- Sanjana2906
-- satsfy
-- sayed nabhan
-- Sebastian Falbesoner
-- Sebastian van Staa
-- sedited
-- seduless
-- shaurya2k06
-- Shrey
-- Shuvam Pandey
-- Sjors Provoost
-- stickies-v
-- stratospher
-- stringintech
-- taboger
-- takeshikurosawaa
-- Thomas
-- Torkel Rogstad
-- Vasil Dimov
-- vicjuma
-- ViniciusCestarii
-- w0xlt
-- Will Clark
-- winterrdog
-- xyzconstant
-- Yancy
-- yuvicc
-
-As well as to everyone that helped with translations on
-[Transifex](https://explore.transifex.com/bitcoin/bitcoin/).
+Bitcoin Knots SHA256 is built on the work of the Bitcoin Core developers and of
+Luke Dashjr and the Bitcoin Knots contributors, whose patches are carried here with
+their original authorship.
