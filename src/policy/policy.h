@@ -65,6 +65,8 @@ inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP_STRICT{20};
 inline constexpr unsigned int DEFAULT_WEIGHT_PER_DATA_BYTE{1};
 /** Default for -rejecttokens */
 inline constexpr bool DEFAULT_REJECT_TOKENS{false};
+/** Default for -subdustfeepenalty */
+inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{false};
 
 // NOTE: Changes to these three require manually adjusting doc in init.cpp
 /** Default for -permitephemeral=send */
