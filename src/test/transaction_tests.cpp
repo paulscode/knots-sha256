@@ -1787,6 +1787,17 @@ BOOST_AUTO_TEST_CASE(bpub_bytes)
 
 BOOST_AUTO_TEST_CASE(tx_DataOutputBytes)
 {
+    const bool prev_dust_runs{g_datacarrier_dust_runs};
+    BOOST_CHECK(!DEFAULT_DATACARRIER_DUST_RUNS);
+    {
+        // Off by default: three P2WSH outputs at one dust value are not data on their own (an HTLC layout)
+        g_datacarrier_dust_runs = false;
+        CMutableTransaction run;
+        for (unsigned char c : {1, 2, 3}) run.vout.emplace_back(400, CScript() << OP_0 << std::vector<unsigned char>(32, c ^ 0x5a));
+        for (auto& o : run.vout) for (size_t k{0}; k < 32; ++k) o.scriptPubKey[2 + k] = static_cast<unsigned char>(k * 37 + o.scriptPubKey[2] * 11);
+        for (const size_t b : DataOutputBytes(CTransaction{run})) BOOST_CHECK_EQUAL(b, 0U);
+    }
+    g_datacarrier_dust_runs = true;  // the cases below include the dust-run rule (-datacarrierdustruns=1)
     // Block 965,224, tx f93ee9d2a8d6fc0dce7889732d8e288ca64dacfe4c94c6cd76eb85037daea09c:
     // an "ACME" payload in four P2WSH outputs at 330 sat (OLGA framing with a
     // different magic), then a taproot and two P2WPKH change outputs.
@@ -2024,6 +2035,7 @@ BOOST_AUTO_TEST_CASE(tx_DataOutputBytes)
     const auto bare_view{DataOutputBytes(CTransaction{t}, &bare_coins)};
     BOOST_CHECK_EQUAL_COLLECTIONS(bare_view.begin(), bare_view.end(), bare_no_view.begin(), bare_no_view.end());
     BOOST_CHECK(DatacarrierBytes(CTransaction{t}, bare_coins, bare_view) == DatacarrierBytes(CTransaction{t}, bare_coins, bare_no_view));
+    g_datacarrier_dust_runs = prev_dust_runs;
 }
 
 BOOST_AUTO_TEST_SUITE_END()
