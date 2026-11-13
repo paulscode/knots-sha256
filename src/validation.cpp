@@ -1633,7 +1633,9 @@ MempoolAcceptResult MemPoolAccept::AcceptSingleTransactionInternal(const CTransa
             ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-spends-conflicting-tx", *err_string);
             return MempoolAcceptResult::Failure(ws.m_state);
         }
-        if (has_policy_conflict && !args.m_ignore_rejects.count("txn-spk-reused-chained")) {
+        // Not ignorable: the conflicting ancestor would be removed while this transaction stays, leaving it spending
+        // a coin that exists nowhere (an inconsistent mempool that breaks block templates)
+        if (has_policy_conflict) {
             ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "txn-spk-reused-chained");
             return MempoolAcceptResult::Failure(ws.m_state);
         }
@@ -1758,6 +1760,24 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
         m_viewmempool.PackageAddTransaction(ws.m_ptx);
     }
 
+    // -spkreuse=conflict across the package: PreChecks compared each transaction's scripts with the mempool only, and
+    // the other members are not in it yet. A script may be created by one member and spent by another (an ordinary
+    // chain), but not created twice or spent twice; a single transaction doing the same is refused as reuse
+    // (questions-20261106 #2).
+    if (SpkReuseMode != SRM_ALLOW && !args.m_ignore_rejects.count("txn-spk-reused")) {
+        std::map<uint160, int> used;
+        for (const Workspace& ws : workspaces) {
+            for (const auto& [hash, spk_state] : ws.m_tx_handle->mapSPK) {
+                int& seen = used[hash];
+                if (seen & spk_state) {
+                    package_state.Invalid(PackageValidationResult::PCKG_POLICY, "txn-spk-reused-package");
+                    return PackageMempoolAcceptResult(package_state, {});
+                }
+                seen |= spk_state;
+            }
+        }
+    }
+
     // At this point we have all in-mempool parents, and we know every transaction's vsize.
     // Run the TRUC checks on the package.
     if (m_pool.m_opts.truc_policy == TRUCPolicy::Enforce) {
@@ -1801,8 +1821,9 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
         return PackageMempoolAcceptResult(package_state, std::move(results));
     }
 
-    // Check if the transactions would exceed the cluster size limit.
-    if (!args.m_ignore_rejects.count("package-mempool-limits") && !m_subpackage.m_changeset->CheckMemPoolPolicyLimits()) {
+    // Check if the transactions would exceed the cluster size limit. Not ignorable, as for a single transaction: an
+    // oversized cluster in the graph is never valid (questions-20261106 #3).
+    if (!m_subpackage.m_changeset->CheckMemPoolPolicyLimits()) {
         package_state.Invalid(PackageValidationResult::PCKG_POLICY, "too-large-cluster", "");
         return PackageMempoolAcceptResult(package_state, std::move(results));
     }
@@ -3308,7 +3329,10 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
         // Prune locks that began around the tip should be moved backward so they get a chance to reorg
         const uint64_t max_height_first{static_cast<uint64_t>(pindexDelete->nHeight - 1)};
         for (auto& prune_lock : m_blockman.m_prune_locks) {
+            // An unset lock (UINT64_MAX) stays unset, and one at height 0 cannot move further back (it would wrap and
+            // release everything)
             if (prune_lock.second.height_first < max_height_first) continue;
+            if (prune_lock.second.height_first == std::numeric_limits<uint64_t>::max() || prune_lock.second.height_first == 0) continue;
 
             --prune_lock.second.height_first;
             LogDebug(BCLog::PRUNE, "%s prune lock moved back to %d\n", prune_lock.first, prune_lock.second.height_first);

@@ -70,5 +70,6 @@ other consensus and policy rules, each of the following conditions are met:
 * Full replace-by-fee is the default policy as of **v28.0** ([PR #30493](https://github.com/bitcoin/bitcoin/pull/30493)).
 
 * The incremental relay feerate default is 0.1sat/vB ([PR #33106](https://github.com/bitcoin/bitcoin/pull/33106)).
+  Bitcoin Knots SHA256 keeps 1 sat/vB (`-incrementalrelayfee`; `-corepolicy` sets 0.1).
 
 * Feerate diagram policy enabled in conjunction with switch to cluster mempool as of **v31.0**.
