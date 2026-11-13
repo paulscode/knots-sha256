@@ -351,14 +351,18 @@ void BlockAssembler::addChunks()
         }
 
         int64_t chunk_sig_ops = 0;
-        int64_t chunk_weight = 0;
+        int64_t chunk_policy_weight = 0;
         for (const auto& tx : selected_transactions) {
             chunk_sig_ops += tx.get().GetSigOpCost();
-            chunk_weight += tx.get().GetTxWeight();
+            // Fit with the -datacarriercost weight, as Knots and 31.2 did: a chunk that carries data needs room for
+            // its data cost too, so data does not fill the last slots of a template more cheaply than it is ordered
+            // (decisions/0025, P4). The sigop adjustment stays out, as Core 32 fixed (5be248341a): it is no price of
+            // data. The block still accumulates and caps real weight (AddToBlock), so no consensus limit is exceeded.
+            chunk_policy_weight += SaturatingAdd(int64_t{tx.get().GetTxWeight()}, int64_t{std::max(0, tx.get().GetExtraWeight())});
         }
 
         // Check to see if this chunk will fit.
-        if (!TestChunkBlockLimits(chunk_weight, chunk_sig_ops) || !TestChunkTransactions(selected_transactions)) {
+        if (!TestChunkBlockLimits(chunk_policy_weight, chunk_sig_ops) || !TestChunkTransactions(selected_transactions)) {
             // This chunk won't fit, so we skip it and will try the next best one.
             m_mempool->SkipBuilderChunk();
             ++nConsecutiveFailed;
