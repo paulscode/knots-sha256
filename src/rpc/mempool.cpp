@@ -29,6 +29,7 @@
 #include <rpc/protocol.h>
 #include <rpc/request.h>
 #include <rpc/mempool.h>
+#include <rpc/rawtransaction_util.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
@@ -146,9 +147,6 @@ static RPCMethod sendrawtransaction()
 
             const CFeeRate max_raw_tx_fee_rate{ParseFeeRate(self.Arg<UniValue>("maxfeerate"))};
 
-            int64_t virtual_size = GetVirtualTransactionSize(*tx);
-            CAmount max_raw_tx_fee = max_raw_tx_fee_rate.GetFee(virtual_size);
-
             std::string err_string;
             AssertLockNotHeld(cs_main);
             NodeContext& node = EnsureAnyNodeContext(request.context);
@@ -167,7 +165,7 @@ static RPCMethod sendrawtransaction()
             const TransactionError err = BroadcastTransaction(node,
                                                               tx,
                                                               err_string,
-                                                              max_raw_tx_fee,
+                                                              max_raw_tx_fee_rate,
                                                               method,
                                                               /*wait_callback=*/true);
             if (TransactionError::OK != err) {
@@ -756,6 +754,100 @@ static RPCMethod maxmempool()
     };
 }
 
+static RPCMethod listmempooltransactions()
+{
+    return RPCMethod{"listmempooltransactions",
+        "Returns all transactions in the mempool. Can be filtered by mempool_sequence\n"
+        "\nAllows for syncing with current mempool entries via polling (not zmq).",
+        {
+            {"start_sequence", RPCArg::Type::NUM, RPCArg::Default{0}, "The mempool_sequence to start the results to. Defaults to 0 (zero, all transactions)."},
+            {"verbose", RPCArg::Type::BOOL, RPCArg::Default{false}, "True for a json object, false for array of transaction ids"},
+        },
+        {
+            RPCResult{"for verbose = false",
+                RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "mempool_sequence", "The current max mempool sequence value."},
+                    {RPCResult::Type::ARR, "txs", "",
+                    {
+                        {RPCResult::Type::OBJ, "", "",
+                        {
+                            {RPCResult::Type::NUM, "entry_sequence", "The mempool sequence value for this transaction entry."},
+                            {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
+                        }},
+                    }},
+                }},
+            RPCResult{"for verbose = true",
+                RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "mempool_sequence", "The current max mempool sequence value."},
+                    {RPCResult::Type::ARR, "txs", "",
+                    {
+                        {RPCResult::Type::OBJ, "", "",
+                        {
+                         Cat<std::vector<RPCResult>>(
+                            {
+                                {RPCResult::Type::NUM, "entry_sequence", "The mempool sequence value for this transaction entry."},
+                            },
+                            TxDoc({.txid_field_doc="The transaction id of the mempool transaction"})),
+                        }},
+                    }},
+                }},
+        },
+        RPCExamples{
+            HelpExampleCli("listmempooltransactions", "true")
+            + HelpExampleRpc("listmempooltransactions", "true")
+        },
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+        {
+            uint64_t start_mempool_sequence = 0;
+            if (!request.params[0].isNull()) {
+                start_mempool_sequence = request.params[0].getInt<uint64_t>();
+            }
+
+            bool fVerbose = false;
+            if (!request.params[1].isNull())
+                fVerbose = request.params[1].get_bool();
+
+            return MempoolTxsToJSON(EnsureAnyMemPool(request.context), fVerbose, start_mempool_sequence);
+        },
+    };
+}
+
+UniValue MempoolTxsToJSON(const CTxMemPool& pool, bool verbose, uint64_t sequence_start)
+{
+    uint64_t mempool_sequence;
+
+    LOCK(pool.cs);
+    mempool_sequence = pool.GetSequence();
+
+    UniValue o(UniValue::VOBJ);
+    o.pushKV("mempool_sequence", mempool_sequence);
+
+    UniValue a(UniValue::VARR);
+    for (const CTxMemPoolEntry& e : pool.mapTx) {
+        UniValue txentry(UniValue::VOBJ);
+
+        // We skip anything not requested.
+        if (e.GetSequence() < sequence_start)
+            continue;
+
+        txentry.pushKV("entry_sequence", e.GetSequence());
+
+        if (verbose) {
+            // We could also calculate fees etc for this transaction, but yolo.
+            TxToUniv(e.GetTx(), /*block_hash=*/uint256::ZERO, /*entry=*/txentry, /*include_hex=*/false);
+        } else {
+            txentry.pushKV("txid", e.GetTx().GetHash().ToString());
+        }
+
+        a.push_back(txentry);
+    }
+
+    o.pushKV("txs", a);
+    return o;
+}
+
 static RPCMethod getrawmempool()
 {
     return RPCMethod{
@@ -1038,7 +1130,7 @@ static RPCMethod gettxspendingprevout()
         },
         RPCExamples{
             HelpExampleCli("gettxspendingprevout", "\"[{\\\"txid\\\":\\\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\\\",\\\"vout\\\":3}]\"")
-            + HelpExampleRpc("gettxspendingprevout", "\"[{\\\"txid\\\":\\\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\\\",\\\"vout\\\":3}]\"")
+            + HelpExampleRpc("gettxspendingprevout", "[{\"txid\":\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\",\"vout\":3}]")
             + HelpExampleCliNamed("gettxspendingprevout", {{"outputs", "[{\"txid\":\"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0\",\"vout\":3}]"}, {"return_spending_tx", true}})
         },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -1423,8 +1515,8 @@ static std::vector<RPCResult> OrphanDescription()
         RPCResult{RPCResult::Type::STR_HEX, "txid", "The transaction hash in hex"},
         RPCResult{RPCResult::Type::STR_HEX, "wtxid", "The transaction witness hash in hex"},
         RPCResult{RPCResult::Type::NUM, "bytes", "The serialized transaction size in bytes"},
-        RPCResult{RPCResult::Type::NUM, "vsize", "(DEPRECATED) use vsize_bip141 instead. The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
-        RPCResult{RPCResult::Type::NUM, "vsize_bip141", "The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
+        RPCResult{RPCResult::Type::NUM, "vsize", "(DEPRECATED) use vsize_bip141 instead. The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted. CAUTION: Since orphan transactions are missing input data, this can be incorrect!"},
+        RPCResult{RPCResult::Type::NUM, "vsize_bip141", "The virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted. CAUTION: Since orphan transactions are missing input data, this can be incorrect!"},
         RPCResult{RPCResult::Type::NUM, "weight", "The transaction weight as defined in BIP 141."},
         RPCResult{RPCResult::Type::ARR, "from", "",
         {
@@ -1439,8 +1531,9 @@ static UniValue OrphanToJSON(const node::TxOrphanage::OrphanInfo& orphan)
     o.pushKV("txid", orphan.tx->GetHash().ToString());
     o.pushKV("wtxid", orphan.tx->GetWitnessHash().ToString());
     o.pushKV("bytes", orphan.tx->ComputeTotalSize());
-    o.pushKV("vsize", GetVirtualTransactionSize(*orphan.tx));
-    o.pushKV("vsize_bip141", GetVirtualTransactionSize(*orphan.tx));
+    // orphans are not in the mempool: sigop cost unknown, BIP141 vsize
+    o.pushKV("vsize", GetVirtualTransactionSize(*orphan.tx, 0, 0));
+    o.pushKV("vsize_bip141", GetVirtualTransactionSize(*orphan.tx, 0, 0));
     o.pushKV("weight", GetTransactionWeight(*orphan.tx));
     UniValue from(UniValue::VARR);
     for (const auto fromPeer: orphan.announcers) {
@@ -1758,6 +1851,7 @@ void RegisterMempoolRPCCommands(CRPCTable& t)
         {"blockchain", &maxmempool},
         {"hidden", &getorphantxs},
         {"rawtransactions", &submitpackage},
+        {"rawtransactions", &listmempooltransactions},
     };
     for (const auto& c : commands) {
         t.appendCommand(c.name, &c);
