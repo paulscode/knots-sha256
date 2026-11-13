@@ -480,7 +480,7 @@ static RPCMethod disconnectnode()
                 "\nStrictly one out of 'address' and 'nodeid' can be provided to identify the node.\n"
                 "\nTo disconnect by nodeid, either set 'address' to the empty string, or call using the named 'nodeid' argument only.\n",
                 {
-                    {"address", RPCArg::Type::STR, RPCArg::DefaultHint{"fallback to nodeid"}, "The IP address/port of the node"},
+                    {"address", RPCArg::Type::STR, RPCArg::DefaultHint{"fallback to nodeid"}, "The IP address/port of the node or subnet"},
                     {"nodeid", RPCArg::Type::NUM, RPCArg::DefaultHint{"fallback to address"}, "The node ID (see getpeerinfo for node IDs)"},
                 },
                 RPCResult{RPCResult::Type::NONE, "", ""},
@@ -501,7 +501,20 @@ static RPCMethod disconnectnode()
 
     if (address && !node_id) {
         /* handle disconnect-by-address */
-        success = connman.DisconnectNode(*address);
+        const bool only_subnet{address->find('/') != std::string::npos};
+        if (only_subnet) {
+            success = false;
+        } else {
+            success = connman.DisconnectNode(*address);
+        }
+        if (!success) {
+            const CSubNet subnet = LookupSubNet(std::string{*address});
+            if (subnet.IsValid()) {
+                success = connman.DisconnectNode(subnet);
+            } else if (only_subnet) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid subnet");
+            }
+        }
     } else if (node_id && (!address || address->empty())) {
         /* handle disconnect-by-id */
         success = connman.DisconnectNode(*node_id);
