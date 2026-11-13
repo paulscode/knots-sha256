@@ -603,9 +603,21 @@ std::optional<bool> ArgsManager::GetBoolArg(const std::string& strArg) const
 
 std::optional<bool> SettingToBool(const common::SettingsValue& value)
 {
-    if (value.isNull()) return std::nullopt;
-    if (value.isBool()) return value.get_bool();
-    return InterpretBool(value.get_str());
+    switch (value.getType()) {
+        case UniValue::VNULL:
+            return std::nullopt;
+        case UniValue::VBOOL:
+            return value.get_bool();
+        case UniValue::VOBJ:
+        case UniValue::VARR:
+            // Throws an exception
+            value.get_str();
+            assert(false);
+        case UniValue::VSTR:
+        case UniValue::VNUM:
+            return InterpretBool(value.getValStr());
+    }
+    assert(false);
 }
 
 bool SettingToBool(const common::SettingsValue& value, bool fDefault)
@@ -715,10 +727,10 @@ void ArgsManager::AddArg(const std::string& name, const std::string& help, unsig
     }
 }
 
-void ArgsManager::AddHiddenArgs(const std::vector<std::string>& names)
+void ArgsManager::AddHiddenArgs(const std::vector<std::string>& names, unsigned int flags)
 {
     for (const std::string& name : names) {
-        AddArg(name, "", ArgsManager::ALLOW_ANY, OptionsCategory::HIDDEN);
+        AddArg(name, "", flags, OptionsCategory::HIDDEN);
     }
 }
 
@@ -851,8 +863,8 @@ bool HelpRequested(const ArgsManager& args)
 
 void SetupHelpOptions(ArgsManager& args)
 {
-    args.AddArg("-help", "Print this help message and exit (also -h or -?)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    args.AddHiddenArgs({"-h", "-?"});
+    args.AddArg("-help", "Print this help message and exit (also -h or -?)", ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
+    args.AddHiddenArgs({"-h", "-?"}, ArgsManager::DISALLOW_NEGATION);
 }
 
 std::string HelpMessageGroup(const std::string &message) {

@@ -33,11 +33,11 @@ inline constexpr int DEFAULT_MINRELAYMATURITY{0};
 /** Default for -mempoolreplacement; must update docs in init.cpp manually */
 inline constexpr RBFPolicy DEFAULT_MEMPOOL_RBF_POLICY{RBFPolicy::Always};
 /** Default for -mempooltruc; must update docs in init.cpp manually */
-inline constexpr TRUCPolicy DEFAULT_MEMPOOL_TRUC_POLICY{TRUCPolicy::Enforce};
+inline constexpr TRUCPolicy DEFAULT_MEMPOOL_TRUC_POLICY{TRUCPolicy::Accept};
 /** Whether to fall back to legacy V1 serialization when writing mempool.dat */
 inline constexpr bool DEFAULT_PERSIST_V1_DAT{false};
 /** Default for -acceptnonstddatacarrier */
-inline constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{true};
+inline constexpr bool DEFAULT_ACCEPT_NON_STD_DATACARRIER{false};
 /** Default for -acceptnonstdtxn */
 inline constexpr bool DEFAULT_ACCEPT_NON_STD_TXN{false};
 /** Default for -acceptunknownwitness */
@@ -89,6 +89,7 @@ struct MemPoolOptions {
     bool permit_bare_multisig{DEFAULT_PERMIT_BAREMULTISIG};
     bool reject_parasites{DEFAULT_REJECT_PARASITES};
     bool reject_tokens{DEFAULT_REJECT_TOKENS};
+    bool subdustfeepenalty{DEFAULT_SUBDUSTFEEPENALTY};
     bool accept_non_std_datacarrier{DEFAULT_ACCEPT_NON_STD_DATACARRIER};
     bool require_standard{true};
     bool acceptunknownwitness{DEFAULT_ACCEPTUNKNOWNWITNESS};

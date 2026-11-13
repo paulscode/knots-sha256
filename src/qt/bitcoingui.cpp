@@ -7,6 +7,7 @@
 #include <qt/bitcoingui.h>
 
 #include <qt/bitcoinunits.h>
+#include <qt/blockview.h>
 #include <qt/clientmodel.h>
 #include <qt/createwalletdialog.h>
 #include <qt/guiconstants.h>
@@ -657,6 +658,14 @@ void BitcoinGUI::createMenuBar()
     window_menu->addAction(m_show_netwatch_action);
     window_menu->addAction(showMempoolStatsAction);
 
+    auto show_blockview_action = new QAction(tr("Block &Visualizer"), this);
+    window_menu->addAction(show_blockview_action);
+    connect(show_blockview_action, &QAction::triggered, [this] {
+        auto blockview = new GuiBlockView(platformStyle, m_network_style);
+        blockview->setClientModel(clientModel);
+        GUIUtil::bringToFront(blockview);
+    });
+
     window_menu->addSeparator();
     for (RPCConsole::TabTypes tab_type : rpcConsole->tabs()) {
         QAction* tab_action = window_menu->addAction(rpcConsole->tabTitle(tab_type));
@@ -1035,7 +1044,7 @@ void BitcoinGUI::aboutClicked()
         return;
 
     auto dlg = new HelpMessageDialog(this, /*about=*/true);
-    GUIUtil::ShowModalDialogAsynchronously(dlg);
+    GUIUtil::ShowModalDialogAsynchronously(dlg, Qt::NonModal);
 }
 
 void BitcoinGUI::showNetWatch()
@@ -1217,7 +1226,7 @@ void BitcoinGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
     dlg->setCurrentTab(tab);
     dlg->setClientModel(clientModel);
     dlg->setModel(clientModel->getOptionsModel());
-    GUIUtil::ShowModalDialogAsynchronously(dlg);
+    GUIUtil::ShowModalDialogAsynchronously(dlg, Qt::NonModal);
 }
 
 void BitcoinGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVerificationProgress, SyncType synctype, SynchronizationState sync_state)
@@ -1302,6 +1311,10 @@ void BitcoinGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVer
 
         progressBarLabel->setVisible(true);
         progressBar->setFormat(tr("%1 behind").arg(timeBehindText));
+        const auto min_width = GUIUtil::TextWidth(progressBar->fontMetrics(), progressBar->format() + "00");
+        if (progressBar->minimumWidth() < min_width) {
+            progressBar->setMinimumWidth(min_width);
+        }
         progressBar->setMaximum(1000000000);
         progressBar->setValue(nVerificationProgress * 1000000000.0 + 0.5);
         progressBar->setVisible(true);

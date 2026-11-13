@@ -454,6 +454,7 @@ public:
     }
     ArgsManager& args() { return *Assert(Assert(m_context)->args); }
     ChainstateManager& chainman() { return *Assert(m_context->chainman); }
+    CTxMemPool& mempool() override { return *Assert(m_context->mempool); }
     NodeContext* m_context{nullptr};
 };
 
@@ -914,7 +915,7 @@ class BlockTemplateImpl : public BlockTemplate
 {
 public:
     explicit BlockTemplateImpl(BlockCreateOptions create_options,
-                               std::unique_ptr<CBlockTemplate> block_template,
+                               std::shared_ptr<CBlockTemplate> block_template,
                                const NodeContext& node) : m_create_options(std::move(create_options)),
                                                           m_block_template(std::move(block_template)),
                                                           m_node(node)
@@ -967,7 +968,8 @@ public:
                                                   m_block_template,
                                                   /*wait_options=*/options,
                                                   /*create_options=*/m_create_options,
-                                                  /*interrupt_wait=*/m_interrupt_wait);
+                                                  /*interrupt_wait=*/m_interrupt_wait,
+                                                  /*validation_signals=*/m_node.validation_signals.get());
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_create_options, std::move(new_template), m_node);
         return nullptr;
     }
@@ -979,7 +981,7 @@ public:
 
     const BlockCreateOptions m_create_options;
 
-    const std::unique_ptr<CBlockTemplate> m_block_template;
+    const std::shared_ptr<CBlockTemplate> m_block_template;
 
     bool m_interrupt_wait{false};
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
@@ -1039,6 +1041,7 @@ public:
                                                        chainman().ActiveChainstate(),
                                                        m_node.mempool.get(),
                                                        create_options,
+                                                       m_node.validation_signals.get(),
                                                    }.CreateNewBlock(),
                                                    m_node);
     }

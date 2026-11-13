@@ -25,6 +25,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using util::SplitString;
@@ -257,15 +258,21 @@ static bool InitRPCAuthentication()
         std::optional<fs::perms> cookie_perms{std::nullopt};
         auto cookie_perms_arg{gArgs.GetArg("-rpccookieperms")};
         if (cookie_perms_arg) {
-            auto perm_opt = InterpretPermString(*cookie_perms_arg);
-            if (!perm_opt) {
-                LogError("Invalid -rpccookieperms=%s; must be one of 'owner', 'group', or 'all'.", *cookie_perms_arg);
-                return false;
+            if (*cookie_perms_arg == "0") {
+                cookie_perms = std::nullopt;
+            } else if (cookie_perms_arg->empty() || *cookie_perms_arg == "1") {
+                // leave at default
+            } else {
+                auto perm_opt = InterpretPermString(*cookie_perms_arg);
+                if (!perm_opt) {
+                    LogError("Invalid -rpccookieperms=%s; must be one of 'owner', 'group', or 'all'.", *cookie_perms_arg);
+                    return false;
+                }
+                cookie_perms = *perm_opt;
             }
-            cookie_perms = *perm_opt;
         }
 
-        switch (GenerateAuthCookie(cookie_perms, user, pass)) {
+        switch (GenerateAuthCookie(std::make_pair(cookie_perms, bool(cookie_perms_arg)), user, pass)) {
         case AuthCookieResult::Error:
             return false;
         case AuthCookieResult::Disabled:
@@ -387,4 +394,21 @@ void StopHTTPRPC()
     if (g_wallet_init_interface.HasWalletSupport()) {
         UnregisterHTTPHandler("/wallet/", false);
     }
+}
+
+std::set<std::string> GetWhitelistedRpcs(const std::string& user_name)
+{
+    if (auto it = g_rpc_whitelist.find(user_name); it != g_rpc_whitelist.end()) {
+        return it->second;
+    }
+    if (g_rpc_whitelist_default) {
+        return std::set<std::string>();
+    }
+
+    // Build a list of every method
+    std::set<std::string> allowed_methods;
+    for (const auto& method_name : tableRPC.listCommands()) {
+        allowed_methods.insert(method_name);
+    }
+    return allowed_methods;
 }

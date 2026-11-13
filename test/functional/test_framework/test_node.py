@@ -162,6 +162,12 @@ class TestNode():
                 self.ipc_socket_path = Path(self.ipc_tmp_dir.name) / "node.sock"
                 self.args.append(f"-ipcbind=unix:{self.ipc_socket_path}")
 
+        if self.version is None:
+            self.args += [
+                "-corepolicy",
+                "-softwareexpiry=0",
+            ]
+
         if self.version_is_at_least(190000):
             self.args.append("-logthreadnames")
         if self.version_is_at_least(219900):
@@ -615,6 +621,12 @@ class TestNode():
         assert_equal(type(expected_msgs), list)
         assert_equal(type(unexpected_msgs), list)
         remaining_expected = list(expected_msgs)
+
+        if not self.debug_log_path.exists():
+            # File must exist for this to work
+            os.makedirs(self.debug_log_path.parent, exist_ok=True)
+            with open(self.debug_log_path, mode='a', encoding='utf-8'):
+                pass
 
         time_end = time.time() + timeout * self.timeout_factor
         prev_size = self.debug_log_size(encoding="utf-8")  # Must use same encoding that is used to read() below

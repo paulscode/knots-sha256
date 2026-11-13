@@ -589,7 +589,7 @@ static RPCMethod getblockfrompeer()
         "Returns an empty JSON object if the request was successfully scheduled.",
         {
             {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The block hash to try to fetch"},
-            {"peer_id", RPCArg::Type::NUM, RPCArg::Optional::NO, "The peer to fetch it from (see getpeerinfo for peer IDs)"},
+            {"peer_id|nodeid", RPCArg::Type::NUM, RPCArg::Optional::NO, "The peer to fetch it from (see getpeerinfo for peer IDs)"},
         },
         RPCResult{RPCResult::Type::OBJ, "", /*optional=*/false, "", {}},
         RPCExamples{
@@ -1048,10 +1048,10 @@ static RPCMethod getblock()
 {
     return RPCMethod{
         "getblock",
-        "If verbosity is 0, returns a string that is serialized, hex-encoded data for block 'hash'.\n"
-                "If verbosity is 1, returns an Object with information about block <hash>.\n"
-                "If verbosity is 2, returns an Object with information about block <hash> and information about each transaction.\n"
-                "If verbosity is 3, returns an Object with information about block <hash> and information about each transaction, including prevout information for inputs (only for unpruned blocks in the current best chain).\n",
+        "If verbosity is 0, returns a string that is serialized, hex-encoded data about block <hash>.\n"
+                "If verbosity is 1, returns a JSON object with information about block <hash>.\n"
+                "If verbosity is 2, returns a JSON object with information about block <hash> and information about each transaction.\n"
+                "If verbosity is 3, returns a JSON object with information about block <hash> and information about each transaction, including prevout information for inputs (only for unpruned blocks in the current best chain).\n",
                 {
                     {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The block hash"},
                     {"verbosity|verbose", RPCArg::Type::NUM, RPCArg::Default{1}, "0 for hex-encoded data, 1 for a JSON object, 2 for JSON object with transaction data, and 3 for JSON object with transaction data including prevout information for inputs",
@@ -1348,6 +1348,10 @@ static RPCMethod pruneblockchain()
     if (heightParam < 0) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Negative block height.");
     }
+    if (heightParam == 0) {
+        // Nothing to do here
+        return uint64_t(0);
+    }
 
     // Height value more than a billion is too high to be a block height, and
     // too low to be a block time (corresponds to timestamp from Sep 2001).
@@ -1602,12 +1606,13 @@ static RPCMethod gettxout()
             RPCResult{"Otherwise", RPCResult::Type::OBJ, "", "", {
                 {RPCResult::Type::STR_HEX, "bestblock", "The hash of the block at the tip of the chain"},
                 {RPCResult::Type::NUM, "confirmations", "The number of confirmations"},
+                {RPCResult::Type::NUM, "confirmations_assumed", /*optional=*/true, "The number of unverified confirmations (eg, in an assumed-valid UTXO set)"},
                 {RPCResult::Type::STR_AMOUNT, "value", "The transaction value in " + CURRENCY_UNIT},
                 {RPCResult::Type::OBJ, "scriptPubKey", "", {
                     {RPCResult::Type::STR, "asm", "Disassembly of the output script"},
                     {RPCResult::Type::STR, "desc", "Inferred descriptor for the output"},
                     {RPCResult::Type::STR_HEX, "hex", "The raw output script bytes, hex-encoded"},
-                    {RPCResult::Type::STR, "type", "The type, eg pubkeyhash"},
+                    {RPCResult::Type::STR, "type", "The type (one of: " + GetAllOutputTypes() + ")"},
                     {RPCResult::Type::STR, "address", /*optional=*/true, "The Bitcoin address (only if a well-defined address exists)"},
                 }},
                 {RPCResult::Type::BOOL, "coinbase", "Coinbase or not"},
@@ -1654,7 +1659,13 @@ static RPCMethod gettxout()
     if (coin->nHeight == MEMPOOL_HEIGHT) {
         ret.pushKV("confirmations", 0);
     } else {
-        ret.pushKV("confirmations", pindex->nHeight - coin->nHeight + 1);
+        const CBlockIndex* assumed_base{active_chainstate.SnapshotBase()};
+        if (assumed_base && coin->nHeight < assumed_base->nHeight) {
+            ret.pushKV("confirmations", 0);
+            ret.pushKV("confirmations_assumed", (int64_t)(pindex->nHeight - coin->nHeight + 1));
+        } else {
+            ret.pushKV("confirmations", pindex->nHeight - coin->nHeight + 1);
+        }
     }
     ret.pushKV("value", ValueFromAmount(coin->out.nValue));
     UniValue o(UniValue::VOBJ);
@@ -1803,6 +1814,7 @@ static void SoftForkDescPushBack(const CBlockIndex* blockindex, UniValue& softfo
     if (info.stats.has_value()) {
         UniValue statsUV(UniValue::VOBJ);
         statsUV.pushKV("period", info.stats->period);
+        statsUV.pushKV("period_start", blockindex->nHeight + 1 - info.stats->elapsed);
         statsUV.pushKV("elapsed", info.stats->elapsed);
         statsUV.pushKV("count", info.stats->count);
         if (info.stats->threshold > 0 || info.stats->possible) {
@@ -1956,6 +1968,7 @@ const std::vector<RPCResult> RPCHelpForDeployment{
         {RPCResult::Type::OBJ, "statistics", /*optional=*/true, "numeric statistics about signalling for a softfork (only for \"started\" and \"locked_in\" status)",
         {
             {RPCResult::Type::NUM, "period", "the length in blocks of the signalling period"},
+            {RPCResult::Type::NUM, "period_start", "height of the first block of this signalling period"},
             {RPCResult::Type::NUM, "threshold", /*optional=*/true, "the number of blocks with the version bit set required to activate the feature (only for \"started\" status)"},
             {RPCResult::Type::NUM, "elapsed", "the number of blocks elapsed since the beginning of the current period"},
             {RPCResult::Type::NUM, "count", "the number of blocks with the version bit set in the current period"},
@@ -3556,22 +3569,23 @@ static RPCMethod dumptxoutset()
         "For deep rollbacks, make sure to use no RPC timeout (bitcoin-cli -rpcclienttimeout=0) as it may take several minutes.",
         {
             {"path", RPCArg::Type::STR, RPCArg::Optional::NO, "Path to the output file. If relative, will be prefixed by datadir."},
-            {"type", RPCArg::Type::STR, RPCArg::Default(""), "The type of snapshot to create. Can be \"latest\" to create a snapshot of the current UTXO set or \"rollback\" to temporarily roll back the state of the node to a historical block before creating the snapshot of a historical UTXO set. This parameter can be omitted if a separate \"rollback\" named parameter is specified indicating the height or hash of a specific historical block. If \"rollback\" is specified and separate \"rollback\" named parameter is not specified, this will roll back to the latest valid snapshot block that can currently be loaded with loadtxoutset."},
-            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+            {"type|format", {RPCArg::Type::STR, RPCArg::Type::ARR}, RPCArg::Default(""), "The type of snapshot to create. Can be \"latest\" to create a snapshot of the current UTXO set or \"rollback\" to temporarily roll back the state of the node to a historical block before creating the snapshot of a historical UTXO set. This parameter can be omitted if a separate \"rollback\" named parameter is specified indicating the height or hash of a specific historical block. If \"rollback\" is specified and separate \"rollback\" named parameter is not specified, this will roll back to the latest valid snapshot block that can currently be loaded with loadtxoutset."},
+            {"options|show_header", {RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Type::BOOL}, RPCArg::Optional::OMITTED, "",
                 {
                     {"format", RPCArg::Type::ARR, RPCArg::DefaultHint{"compact serialized format"},
                                                 "If no argument is provided, a compact binary serialized format is used; otherwise only requested items "
                                                 "available below are written in ASCII format (if an empty array is provided, all items are written in ASCII).",
                                                 ascii_args,
-                                                RPCArgOptions{.oneline_description="format"}},
+                                                RPCArgOptions{.oneline_description="format", .also_positional = true}},
                     {"rollback", RPCArg::Type::NUM, RPCArg::Optional::OMITTED,
                         "Height or hash of the block to roll back to before creating the snapshot. Note: The further this number is from the tip, the longer this process will take. Consider setting a higher -rpcclienttimeout value in this case.",
                     RPCArgOptions{.skip_type_check = true, .type_str = {"", "string or numeric"}}},
                     {"in_memory", RPCArg::Type::BOOL, RPCArg::Default{false}, "If true, the temporary UTXO-set database used during rollback is kept entirely in memory. This can significantly speed up the process but requires sufficient free RAM (over 10 GB on mainnet)."},
-                    {"show_header", RPCArg::Type::BOOL, RPCArg::Default{true}, "Whether to include the header line in non-serialized (ASCII) mode"},
-                    {"separator", RPCArg::Type::STR, RPCArg::Default{","}, "Field separator to use in non-serialized (ASCII) mode"},
+                    {"show_header", RPCArg::Type::BOOL, RPCArg::Default{true}, "Whether to include the header line in non-serialized (ASCII) mode", RPCArgOptions{.also_positional = true}},
+                    {"separator", RPCArg::Type::STR, RPCArg::Default{","}, "Field separator to use in non-serialized (ASCII) mode", RPCArgOptions{.also_positional = true}},
                 },
             },
+            {"separator", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "", RPCArgOptions{.hidden=true}},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -3599,8 +3613,44 @@ static RPCMethod dumptxoutset()
     NodeContext& node = EnsureAnyNodeContext(request.context);
     const CBlockIndex* tip{WITH_LOCK(::cs_main, return node.chainman->ActiveChain().Tip())};
     const CBlockIndex* target_index{nullptr};
-    const auto snapshot_type{self.Arg<std::string_view>("type")};
-    const UniValue options{request.params[2].isNull() ? UniValue::VOBJ : request.params[2]};
+    std::string snapshot_type;
+    UniValue options{request.params[2].isObject() ? request.params[2] : UniValue::VOBJ};
+
+    const UniValue& hr_format = [&]() -> const UniValue& {
+        if (options["format"].isNull() && request.params[1].isArray()) {
+            // Knots 0.20.0-28.1 compatibility
+            snapshot_type = "latest";
+            return request.params[1];
+        }
+        snapshot_type = std::string{self.Arg<std::string_view>("type")};
+        return options["format"];
+    }();
+    const bool is_human_readable = !hr_format.isNull();
+    const bool show_header = [&] {
+        if (!options["show_header"].isNull()) {  // only possible of options is an Object
+            return options["show_header"].get_bool();
+        }
+        if (is_human_readable && request.params[2].isBool()) {
+            // Knots 0.20.0-28.1 compatibility
+            return request.params[2].get_bool();
+        }
+        if (!request.params[2].isNull()) request.params[2].get_obj();  // type check skipped earlier
+        return true;
+    }();
+    const auto separator = [&] {
+        const bool null_separator_in_options{options["separator"].isNull()};
+        if (null_separator_in_options && is_human_readable && request.params[3].isStr()) {
+            return MakeByteSpan(request.params[3].get_str());
+        }
+        if (!request.params[3].isNull()) {
+            throw std::runtime_error(self.ToString());
+        }
+        if (null_separator_in_options) {
+            return MakeByteSpan(",").first(1);
+        }
+        return MakeByteSpan(options["separator"].get_str());
+    }();
+
     if (options.exists("rollback")) {
         if (!snapshot_type.empty() && snapshot_type != "rollback") {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Invalid snapshot type \"%s\" specified with rollback option", snapshot_type));
@@ -3618,12 +3668,9 @@ static RPCMethod dumptxoutset()
     }
 
     // handle optional ASCII parameters
-    const bool is_human_readable = !options["format"].isNull();
-    const bool show_header = options["show_header"].isNull() || options["show_header"].get_bool();
-    const auto separator = options["separator"].isNull() ? MakeByteSpan(",").first(1) : MakeByteSpan(options["separator"].get_str());
     std::vector<std::pair<std::string, coinascii_cb_t>> requested;
     if (is_human_readable) {
-        const auto& arr = options["format"].get_array();
+        const auto& arr = hr_format.get_array();
         const std::unordered_map<std::string, coinascii_cb_t> ascii_map(std::begin(ascii_types), std::end(ascii_types));
         for (size_t i = 0; i < arr.size(); ++i) {
             const auto it = ascii_map.find(arr[i].get_str());
@@ -4190,6 +4237,47 @@ return RPCMethod{
     };
 }
 
+static RPCMethod getblockfileinfo()
+{
+    return RPCMethod{
+            "getblockfileinfo",
+            "Retrieves information about a certain block file.",
+            {
+                {"file_number", RPCArg::Type::NUM, RPCArg::Optional::NO, "block file number"},
+            },
+            RPCResult{
+                    RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::NUM, "blocks_num", "the number of blocks stored in the file"},
+                        {RPCResult::Type::NUM, "lowest_block", "the height of the lowest block inside the file"},
+                        {RPCResult::Type::NUM, "highest_block", "the height of the highest block inside the file"},
+                        {RPCResult::Type::NUM, "data_size", "the number of used bytes in the block file"},
+                        {RPCResult::Type::NUM, "undo_size", "the number of used bytes in the undo file"},
+                    }
+            },
+            RPCExamples{ HelpExampleCli("getblockfileinfo", "0") },
+            [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
+                NodeContext& node = EnsureAnyNodeContext(request.context);
+
+                int block_num = request.params[0].getInt<int>();
+                if (block_num < 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid block number");
+
+                LOCK(::cs_main);
+                const kernel::CBlockFileInfo* info = node.chainman->m_blockman.GetBlockFileInfo(block_num);
+                if (!info) throw JSONRPCError(RPC_INVALID_PARAMETER, "block file not found");
+
+                UniValue result(UniValue::VOBJ);
+                result.pushKV("blocks_num", info->nBlocks);
+                result.pushKV("lowest_block", info->nHeightFirst);
+                result.pushKV("highest_block", info->nHeightLast);
+                result.pushKV("data_size", info->nSize);
+                result.pushKV("undo_size", info->nUndoSize);
+
+                return result;
+            }
+    };
+}
+
 static RPCMethod getblocklocations()
 {
     return RPCMethod{"getblocklocations",
@@ -4293,6 +4381,7 @@ void RegisterBlockchainRPCCommands(CRPCTable& t)
         {"blockchain", &dumptxoutset},
         {"blockchain", &loadtxoutset},
         {"blockchain", &getchainstates},
+        {"hidden", &getblockfileinfo},
         {"hidden", &invalidateblock},
         {"hidden", &reconsiderblock},
         {"blockchain", &waitfornewblock},

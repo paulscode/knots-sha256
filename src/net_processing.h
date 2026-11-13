@@ -40,10 +40,10 @@ class Warnings;
 /** Whether transaction reconciliation protocol should be enabled by default. */
 inline constexpr bool DEFAULT_TXRECONCILIATION_ENABLE{false};
 inline constexpr size_t BLOCK_RECONSTRUCTION_EXTRA_TXN_PER_TXN_SIZE_LIMIT{100000};
-inline constexpr size_t DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN_SIZE{std::numeric_limits<size_t>::max()};
+inline constexpr size_t DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN_SIZE{10000000};
 /** Default number of non-mempool transactions to keep around for block reconstruction. Includes
     orphan, replaced, and rejected transactions. */
-inline constexpr uint32_t DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN{100};
+inline constexpr uint32_t DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN{32768};
 /** Default maximum per-second rate for sending transaction inventory to peers. */
 inline constexpr unsigned int DEFAULT_TX_SEND_RATE{14};
 inline constexpr bool DEFAULT_PEERBLOOMFILTERS = false;

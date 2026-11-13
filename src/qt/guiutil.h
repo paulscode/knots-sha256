@@ -13,6 +13,7 @@
 
 #include <QApplication>
 #include <QEvent>
+#include <QFont>
 #include <QHeaderView>
 #include <QItemDelegate>
 #include <QLabel>
@@ -22,6 +23,7 @@
 #include <QProgressBar>
 #include <QString>
 #include <QTableView>
+#include <Qt>
 
 #include <cassert>
 #include <chrono>
@@ -68,6 +70,8 @@ namespace GUIUtil
 
     // Return a monospace font
     QFont fixedPitchFont(bool use_embedded_font = false);
+
+    QString fontToCss(const QFont& font);
 
     // Set up widget for address
     void setupAddressWidget(QValidatedLineEdit *widget, QWidget *parent);
@@ -442,7 +446,7 @@ namespace GUIUtil
     /**
      * Shows a QDialog instance asynchronously, and deletes it on close.
      */
-    void ShowModalDialogAsynchronously(QDialog* dialog);
+    void ShowModalDialogAsynchronously(QDialog* dialog, Qt::WindowModality modality=Qt::ApplicationModal);
 
     inline bool IsEscapeOrBack(int key)
     {
