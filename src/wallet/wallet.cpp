@@ -96,6 +96,11 @@ using util::ToString;
 
 namespace wallet {
 
+/*
+ * Signal when transactions are added to wallet
+ */
+btcsignals::signal<void(const CTransactionRef& ptxn, const uint256& blockHash)> CWallet::TransactionAddedToWallet;
+
 bool AddWalletSetting(interfaces::Chain& chain, const std::string& wallet_name)
 {
     const auto update_function = [&wallet_name](common::SettingsValue& setting_value) {
@@ -1224,31 +1229,41 @@ CWalletTx* CWallet::AddToWallet(CTransactionRef tx, const TxState& state, const 
     // Notify UI of new or updated transaction
     NotifyTransactionChanged(hash, fInsertedNew ? CT_NEW : CT_UPDATED);
 
+    // Notify listeners on new wallet transaction
+    CWallet::TransactionAddedToWallet(wtx.GetTx(), TxStateSerializedBlockHash(wtx.m_state));
+
 #if HAVE_SYSTEM
     // notify an external script when a wallet transaction comes in or is updated
-    std::string strCmd = m_notify_tx_changed_script;
-
-    if (!strCmd.empty())
-    {
-        ReplaceAll(strCmd, "%s", hash.GetHex());
-        if (auto* conf = wtx.state<TxStateConfirmed>())
-        {
-            ReplaceAll(strCmd, "%b", conf->confirmed_block_hash.GetHex());
-            ReplaceAll(strCmd, "%h", ToString(conf->confirmed_block_height));
-        } else {
-            ReplaceAll(strCmd, "%b", "unconfirmed");
-            ReplaceAll(strCmd, "%h", "-1");
-        }
-#ifndef WIN32
+    if (!m_notify_tx_changed_scripts.empty()) {
+#ifdef WIN32
         // Substituting the wallet name isn't currently supported on windows
         // because windows shell escaping has not been implemented yet:
         // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-537384875
         // A few ways it could be implemented in the future are described in:
         // https://github.com/bitcoin/bitcoin/pull/13339#issuecomment-461288094
-        ReplaceAll(strCmd, "%w", ShellEscape(GetName()));
+        const std::string walletname_escaped = "wallet_name_substitution_is_not_available_on_Windows";
+#else
+        const std::string walletname_escaped = ShellEscape(GetName());
 #endif
-        std::thread t(runCommand, strCmd);
-        t.detach(); // thread runs free
+        const std::string txid_hex = hash.GetHex();
+        std::string blockhash_hex, blockheight_str;
+        if (auto* conf = wtx.state<TxStateConfirmed>()) {
+            blockhash_hex = conf->confirmed_block_hash.GetHex();
+            blockheight_str = ToString(conf->confirmed_block_height);
+        } else {
+            blockhash_hex = "unconfirmed";
+            blockheight_str = "-1";
+        }
+
+        for (std::string command : m_notify_tx_changed_scripts) {
+            ReplaceAll(command, "%s", txid_hex);
+            ReplaceAll(command, "%b", blockhash_hex);
+            ReplaceAll(command, "%h", blockheight_str);
+            ReplaceAll(command, "%w", walletname_escaped);
+
+            std::thread t(runCommand, command);
+            t.detach(); // thread runs free
+        }
     }
 #endif
 
@@ -1625,10 +1640,22 @@ void CWallet::transactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRe
 void CWallet::blockConnected(const ChainstateRole& role, const interfaces::BlockInfo& block)
 {
     if (role.historical) {
+        // Background validation of an assumeutxo snapshot: remember how far it got, nothing else to scan here
+        LOCK(cs_wallet);
+        m_background_validation_height = block.height;
         return;
     }
     assert(block.data);
     LOCK(cs_wallet);
+
+    if (!role.validated) {
+        // Assumed-valid chainstate: blocks above the snapshot are not yet validated from genesis
+        if (m_background_validation_height == -1) {
+            m_background_validation_height = 0;
+        }
+    } else {
+        m_background_validation_height = -1;
+    }
 
     // Update the best block in memory first. This will set the best block's height, which is
     // needed by MarkConflicted.
@@ -3180,7 +3207,7 @@ bool CWallet::LoadWalletArgs(std::shared_ptr<CWallet> wallet, const WalletContex
     }
 
     wallet->m_keypool_size = std::max(args.GetIntArg("-keypool", DEFAULT_KEYPOOL_SIZE), int64_t{1});
-    wallet->m_notify_tx_changed_script = args.GetArg("-walletnotify", "");
+    wallet->m_notify_tx_changed_scripts = args.GetArgs("-walletnotify");
     wallet->SetBroadcastTransactions(args.GetBoolArg("-walletbroadcast", DEFAULT_WALLETBROADCAST));
 
     return true;
@@ -3463,6 +3490,17 @@ bool CWallet::IsTxImmatureCoinBase(const CWalletTx& wtx) const
 
     // note GetBlocksToMaturity is 0 for non-coinbase tx
     return GetTxBlocksToMaturity(wtx) > 0;
+}
+
+bool CWallet::IsTxAssumed(const CWalletTx& wtx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
+{
+    AssertLockHeld(cs_wallet);
+    if (GetBackgroundValidationHeight() == -1) return false;
+    if (auto* conf = wtx.state<TxStateConfirmed>()) {
+        int height{conf->confirmed_block_height};
+        return height > GetBackgroundValidationHeight();
+    }
+    return false;
 }
 
 bool CWallet::IsLocked() const

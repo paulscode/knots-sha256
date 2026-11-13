@@ -32,6 +32,8 @@
 /* Define if external signer support is enabled */
 #cmakedefine ENABLE_EXTERNAL_SIGNER 1
 
+#cmakedefine ENABLE_TOR_SUBPROCESS 1
+
 /* Define to 1 to enable tracepoints for Userspace, Statically Defined Tracing
    */
 #cmakedefine ENABLE_TRACING 1
@@ -90,6 +92,8 @@
 
 /* Define this symbol to build code that uses getauxval */
 #cmakedefine HAVE_STRONG_GETAUXVAL 1
+
+#cmakedefine HAVE_LINUX_SYSINFO 1
 
 /* Define this symbol if the BSD sysctl() is available */
 #cmakedefine HAVE_SYSCTL 1
