@@ -16,6 +16,12 @@ Policy
   data with the new `-datacarrierdustruns` option, which is off by default: a
   Lightning commitment with three or more equal in-flight HTLCs has the same
   layout, and refusing it could block a force close.
-- The new `-fakeoutputtext` option (default: 0) also counts an output whose
-  hash or key is all printable text as data, such as JSON token messages
-  hidden in P2WSH programs.
+- The new `-fakeoutputtext` option (default: 1, reset by `-corepolicy`) also
+  counts an output whose hash or key is all printable text as data, such as
+  JSON token messages hidden in P2WSH programs.
+- The new `-datacarrierdroppeditems` option (default: 1, reset by
+  `-corepolicy`) counts items of a spent stack that the script removes without
+  reading them (`OP_DROP`, `OP_2DROP`, `OP_NIP`) as data carrier bytes, so a
+  spend that carries data in items its script throws away is rejected with
+  `txn-datacarrier-nonstandard`. Items the script reads, such as signatures
+  and hash preimages, are not counted.

@@ -9,7 +9,7 @@ channels, P2WSH) and LND's simple taproot channels (tapscript), is funded and sp
 LDK's zero-fee commitment packages; each is put to testmempoolaccept (submitpackage) on:
 
   0  our defaults (-corepolicy=0)
-  1  defaults + -datacarrierdroppeditems=1 -fakeoutputtext=1
+  1  defaults + -datacarrierdroppeditems=1 -fakeoutputtext=1 (both our defaults since decisions/0028; kept explicit)
   2  defaults + -datacarrierunprovenkeys=1 (knots#422 knob)
   3  defaults + -bytespersigopstrict=51 (-acceptunknownwitness=0 is our default since decisions/0025)
   4  -corepolicy=1 (Core's policy, the reference)

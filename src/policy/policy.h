@@ -74,11 +74,11 @@ inline constexpr bool DEFAULT_REJECT_FAKE_OUTPUTS{true};
  *  Lightning force close with several equal in-flight HTLCs) */
 inline constexpr bool DEFAULT_DATACARRIER_DUST_RUNS{false};
 /** Default for -datacarrierdroppeditems: count spent-stack items a script removes without reading as data */
-inline constexpr bool DEFAULT_DATACARRIER_DROPPED_ITEMS{false};
+inline constexpr bool DEFAULT_DATACARRIER_DROPPED_ITEMS{true}; // decisions/0025 item 3, 0028: on after its mainnet survey
 /** -datacarrierdroppeditems: work (origins copied) one input may cost before all its spent items count as data */
 inline constexpr size_t DROPPED_ITEMS_WORK_LIMIT{100'000};
 /** Default for -fakeoutputtext: with -rejectfakeoutputs, a program that is all printable text is data */
-inline constexpr bool DEFAULT_FAKE_OUTPUT_TEXT{false};
+inline constexpr bool DEFAULT_FAKE_OUTPUT_TEXT{true}; // decisions/0025 item 4, 0028: on after its mainnet survey
 /** Default for -subdustfeepenalty */
 inline constexpr bool DEFAULT_SUBDUSTFEEPENALTY{true};
 

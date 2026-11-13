@@ -29,8 +29,8 @@ class DataCarrierDroppedItemsTest(BitcoinTestFramework):
         self.num_nodes = 4
         self.setup_clean_chain = True
         self.extra_args = [
-            ["-corepolicy=0"],                                                            # 0: our defaults (both off)
-            ["-corepolicy=0", "-datacarrierdroppeditems=1", "-fakeoutputtext=1"],         # 1: both on
+            ["-corepolicy=0", "-datacarrierdroppeditems=0", "-fakeoutputtext=0"],         # 0: both turned off
+            ["-corepolicy=0"],                                                            # 1: our defaults (both on, decisions/0028)
             ["-corepolicy=0", "-datacarrierdroppeditems=1", "-acceptnonstddatacarrier=1", "-datacarriersize=83"],  # 2: counted in the budget
             [],                                                                           # 3: the framework's -corepolicy turns it off
         ]
