@@ -1686,8 +1686,9 @@ BOOST_AUTO_TEST_CASE(addlocal_onlynet_externalip)
     BOOST_CHECK(!AddLocal(addr_onion, LOCAL_BIND));
     BOOST_CHECK(!IsLocal(addr_onion));
 
-    BOOST_CHECK(!AddLocal(addr_onion, LOCAL_MANUAL));
-    BOOST_CHECK(!IsLocal(addr_onion));
+    // Knots: Tor addresses are accepted even when Tor is not reachable outbound (a private -torexecute Tor has no SOCKS)
+    BOOST_CHECK(AddLocal(addr_onion, LOCAL_MANUAL));
+    BOOST_CHECK(IsLocal(addr_onion));
 
     // Whereas AddLocal for -externalip should succeed.
     BOOST_CHECK(AddLocal(addr_onion, LOCAL_MANUAL, /*add_even_if_unreachable=*/true));
