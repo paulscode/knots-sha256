@@ -403,7 +403,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
 
         const auto txToNonStd1_res = ::ValidateInputsStandardness(CTransaction(txToNonStd1), coins);
         BOOST_CHECK(txToNonStd1_res.IsInvalid());
-        BOOST_CHECK_EQUAL(txToNonStd1_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
+        BOOST_CHECK_EQUAL(txToNonStd1_res.GetRejectReason(), "bad-txns-input-scriptcheck-sigops");
         BOOST_CHECK_EQUAL(txToNonStd1_res.GetDebugMessage(), "p2sh redeemscript sigops exceed limit (input 0: 16 > 15)");
 
         BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(txToNonStd1), coins), 16U);
@@ -421,7 +421,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
 
         const auto txToNonStd2_res = ::ValidateInputsStandardness(CTransaction(txToNonStd2), coins);
         BOOST_CHECK(txToNonStd2_res.IsInvalid());
-        BOOST_CHECK_EQUAL(txToNonStd2_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
+        BOOST_CHECK_EQUAL(txToNonStd2_res.GetRejectReason(), "bad-txns-input-scriptcheck-sigops");
         BOOST_CHECK_EQUAL(txToNonStd2_res.GetDebugMessage(), "p2sh redeemscript sigops exceed limit (input 0: 20 > 15)");
         BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(txToNonStd2), coins), 20U);
     }
@@ -437,7 +437,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
 
         const auto txToNonStd2_no_scriptSig_res = ::ValidateInputsStandardness(CTransaction(txToNonStd2_no_scriptSig), coins);
         BOOST_CHECK(txToNonStd2_no_scriptSig_res.IsInvalid());
-        BOOST_CHECK_EQUAL(txToNonStd2_no_scriptSig_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
+        BOOST_CHECK_EQUAL(txToNonStd2_no_scriptSig_res.GetRejectReason(), "bad-txns-input-scriptcheck-missing");
         BOOST_CHECK_EQUAL(txToNonStd2_no_scriptSig_res.GetDebugMessage(), "input 0 P2SH redeemscript missing");
         BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(txToNonStd2_no_scriptSig), coins), 0U);
     }
@@ -454,7 +454,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
 
         const auto txToNonStd3_res = ::ValidateInputsStandardness(CTransaction(txToNonStd3), coins);
         BOOST_CHECK(txToNonStd3_res.IsInvalid());
-        BOOST_CHECK_EQUAL(txToNonStd3_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
+        BOOST_CHECK_EQUAL(txToNonStd3_res.GetRejectReason(), "bad-txns-input-script-unknown");
         BOOST_CHECK_EQUAL(txToNonStd3_res.GetDebugMessage(), "input 0 script unknown");
     }
 
@@ -469,10 +469,14 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
         txToNonStd4.vin[0].prevout.hash = txFrom.GetHash();
         txToNonStd4.vin[0].scriptSig = op_return_script;
 
+        // Knots rejects it in IsStandardTx, before the inputs are evaluated
+        std::string reason4;
+        BOOST_CHECK(!IsStandardTx(CTransaction(txToNonStd4), reason4));
+        BOOST_CHECK_EQUAL(reason4, "scriptsig-not-pushonly");
         const auto txToNonStd4_res = ::ValidateInputsStandardness(CTransaction(txToNonStd4), coins);
-        BOOST_CHECK(txToNonStd4_res.IsInvalid());
-        BOOST_CHECK_EQUAL(txToNonStd4_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
-        BOOST_CHECK_EQUAL(txToNonStd4_res.GetDebugMessage(), "p2sh scriptsig malformed (input 0: OP_RETURN was encountered)");
+        // Knots: a non-push-only scriptSig is rejected earlier (IsStandardTx: scriptsig-not-pushonly); unless that is
+        // explicitly ignored, the redeem script is not evaluated here
+        BOOST_CHECK(txToNonStd4_res.IsValid());
     }
 
     // TxoutType::WITNESS_UNKNOWN
@@ -486,7 +490,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
         txWitnessUnknown.vin[0].prevout.hash = txFrom.GetHash();
         const auto txWitnessUnknown_res = ::ValidateInputsStandardness(CTransaction(txWitnessUnknown), coins);
         BOOST_CHECK(txWitnessUnknown_res.IsInvalid());
-        BOOST_CHECK_EQUAL(txWitnessUnknown_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
+        BOOST_CHECK_EQUAL(txWitnessUnknown_res.GetRejectReason(), "bad-txns-input-witness-unknown");
         BOOST_CHECK_EQUAL(txWitnessUnknown_res.GetDebugMessage(), "input 0 witness program is undefined");
     }
 }
