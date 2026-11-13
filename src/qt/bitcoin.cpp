@@ -87,6 +87,7 @@ static void RegisterMetaTypes()
     // Register typedefs (see https://doc.qt.io/qt-5/qmetatype.html#qRegisterMetaType)
     // IMPORTANT: if CAmount is no longer a typedef use the normal variant above (see https://doc.qt.io/qt-5/qmetatype.html#qRegisterMetaType-1)
     qRegisterMetaType<CAmount>("CAmount");
+    qRegisterMetaType<CTransactionRef>("CTransactionRef");
     qRegisterMetaType<size_t>("size_t");
 
     qRegisterMetaType<std::function<void()>>("std::function<void()>");
@@ -495,6 +496,7 @@ int GuiMain(int argc, char* argv[])
     /// 1. Basic Qt initialization (not dependent on parameters or configuration)
     Q_INIT_RESOURCE(bitcoin);
     Q_INIT_RESOURCE(bitcoin_locale);
+    Q_INIT_RESOURCE(font);
 
 #if defined(QT_QPA_PLATFORM_ANDROID)
     QApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
