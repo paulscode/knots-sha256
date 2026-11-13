@@ -144,7 +144,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "sweepprivkeys", 0, "options" },
     { "sweepprivkeys", 0, "privkeys" },
     { "scantxoutset", 1, "scanobjects" },
-    { "dumptxoutset", 1, "format" },
+    { "dumptxoutset", 1, "format", ParamFormat::JSON_OR_STRING },
     { "dumptxoutset", 2, "format" },
     { "dumptxoutset", 2, "show_header" },
     { "createmultisig", 0, "nrequired" },
