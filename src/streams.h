@@ -397,7 +397,10 @@ class AutoFile
 protected:
     std::FILE* m_file;
     Obfuscation m_obfuscation;
-    std::optional<int64_t> m_position;
+    /** The file's position, or nullopt until position() can ask the file for it */
+    mutable std::optional<int64_t> m_position;
+    /** The cached position, looked up from the file first when it is not known (after a failure cleared it) */
+    std::optional<int64_t> position() const;
     bool m_was_written{false};
 
 public:
