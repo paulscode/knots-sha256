@@ -581,7 +581,6 @@ static RPCMethod getblockfrompeer()
     return RPCMethod{
         "getblockfrompeer",
         "Attempt to fetch block from a given peer.\n\n"
-        "We must have the header for this block, e.g. using submitheader.\n"
         "The block will not have any undo data which can limit the usage of the block data in a context where the undo data is needed.\n"
         "Subsequent calls for the same block may cause the response from the previous peer to be ignored.\n"
         "Peers generally ignore requests for a stale block that they never fully verified, or one that is more than a month old.\n"
@@ -608,22 +607,20 @@ static RPCMethod getblockfrompeer()
 
     const CBlockIndex* const index = WITH_LOCK(cs_main, return chainman.m_blockman.LookupBlockIndex(block_hash););
 
-    if (!index) {
-        throw JSONRPCError(RPC_MISC_ERROR, "Block header missing");
-    }
-
+#if 0
     // Fetching blocks before the node has syncing past their height can prevent block files from
     // being pruned, so we avoid it if the node is in prune mode.
     if (chainman.m_blockman.IsPruneMode() && index->nHeight > WITH_LOCK(chainman.GetMutex(), return chainman.ActiveTip()->nHeight)) {
         throw JSONRPCError(RPC_MISC_ERROR, "In prune mode, only blocks that the node has already synced previously can be fetched from a peer");
     }
+#endif
 
-    const bool block_has_data = WITH_LOCK(::cs_main, return index->nStatus & BLOCK_HAVE_DATA);
+    const bool block_has_data = index && WITH_LOCK(::cs_main, return index->nStatus & BLOCK_HAVE_DATA);
     if (block_has_data) {
         throw JSONRPCError(RPC_MISC_ERROR, "Block already downloaded");
     }
 
-    if (const auto res{peerman.FetchBlock(peer_id, *index)}; !res) {
+    if (const auto res{peerman.FetchBlock(peer_id, block_hash, index)}; !res) {
         throw JSONRPCError(RPC_MISC_ERROR, res.error());
     }
     return UniValue::VOBJ;
@@ -1051,10 +1048,10 @@ static RPCMethod getblock()
 {
     return RPCMethod{
         "getblock",
-        "If verbosity is 0, returns a string that is serialized, hex-encoded data for block 'hash'.\n"
-                "If verbosity is 1, returns an Object with information about block <hash>.\n"
-                "If verbosity is 2, returns an Object with information about block <hash> and information about each transaction.\n"
-                "If verbosity is 3, returns an Object with information about block <hash> and information about each transaction, including prevout information for inputs (only for unpruned blocks in the current best chain).\n",
+        "If verbosity is 0, returns a string that is serialized, hex-encoded data about block <hash>.\n"
+                "If verbosity is 1, returns a JSON object with information about block <hash>.\n"
+                "If verbosity is 2, returns a JSON object with information about block <hash> and information about each transaction.\n"
+                "If verbosity is 3, returns a JSON object with information about block <hash> and information about each transaction, including prevout information for inputs (only for unpruned blocks in the current best chain).\n",
                 {
                     {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The block hash"},
                     {"verbosity|verbose", RPCArg::Type::NUM, RPCArg::Default{1}, "0 for hex-encoded data, 1 for a JSON object, 2 for JSON object with transaction data, and 3 for JSON object with transaction data including prevout information for inputs",
@@ -1351,6 +1348,10 @@ static RPCMethod pruneblockchain()
     if (heightParam < 0) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Negative block height.");
     }
+    if (heightParam == 0) {
+        // Nothing to do here
+        return uint64_t(0);
+    }
 
     // Height value more than a billion is too high to be a block height, and
     // too low to be a block time (corresponds to timestamp from Sep 2001).
@@ -1605,12 +1606,13 @@ static RPCMethod gettxout()
             RPCResult{"Otherwise", RPCResult::Type::OBJ, "", "", {
                 {RPCResult::Type::STR_HEX, "bestblock", "The hash of the block at the tip of the chain"},
                 {RPCResult::Type::NUM, "confirmations", "The number of confirmations"},
+                {RPCResult::Type::NUM, "confirmations_assumed", /*optional=*/true, "The number of unverified confirmations (eg, in an assumed-valid UTXO set)"},
                 {RPCResult::Type::STR_AMOUNT, "value", "The transaction value in " + CURRENCY_UNIT},
                 {RPCResult::Type::OBJ, "scriptPubKey", "", {
                     {RPCResult::Type::STR, "asm", "Disassembly of the output script"},
                     {RPCResult::Type::STR, "desc", "Inferred descriptor for the output"},
                     {RPCResult::Type::STR_HEX, "hex", "The raw output script bytes, hex-encoded"},
-                    {RPCResult::Type::STR, "type", "The type, eg pubkeyhash"},
+                    {RPCResult::Type::STR, "type", "The type (one of: " + GetAllOutputTypes() + ")"},
                     {RPCResult::Type::STR, "address", /*optional=*/true, "The Bitcoin address (only if a well-defined address exists)"},
                 }},
                 {RPCResult::Type::BOOL, "coinbase", "Coinbase or not"},
@@ -1657,7 +1659,13 @@ static RPCMethod gettxout()
     if (coin->nHeight == MEMPOOL_HEIGHT) {
         ret.pushKV("confirmations", 0);
     } else {
-        ret.pushKV("confirmations", pindex->nHeight - coin->nHeight + 1);
+        const CBlockIndex* assumed_base{active_chainstate.SnapshotBase()};
+        if (assumed_base && coin->nHeight < assumed_base->nHeight) {
+            ret.pushKV("confirmations", 0);
+            ret.pushKV("confirmations_assumed", (int64_t)(pindex->nHeight - coin->nHeight + 1));
+        } else {
+            ret.pushKV("confirmations", pindex->nHeight - coin->nHeight + 1);
+        }
     }
     ret.pushKV("value", ValueFromAmount(coin->out.nValue));
     UniValue o(UniValue::VOBJ);
@@ -1806,6 +1814,7 @@ static void SoftForkDescPushBack(const CBlockIndex* blockindex, UniValue& softfo
     if (info.stats.has_value()) {
         UniValue statsUV(UniValue::VOBJ);
         statsUV.pushKV("period", info.stats->period);
+        statsUV.pushKV("period_start", blockindex->nHeight + 1 - info.stats->elapsed);
         statsUV.pushKV("elapsed", info.stats->elapsed);
         statsUV.pushKV("count", info.stats->count);
         if (info.stats->threshold > 0 || info.stats->possible) {
@@ -1959,6 +1968,7 @@ const std::vector<RPCResult> RPCHelpForDeployment{
         {RPCResult::Type::OBJ, "statistics", /*optional=*/true, "numeric statistics about signalling for a softfork (only for \"started\" and \"locked_in\" status)",
         {
             {RPCResult::Type::NUM, "period", "the length in blocks of the signalling period"},
+            {RPCResult::Type::NUM, "period_start", "height of the first block of this signalling period"},
             {RPCResult::Type::NUM, "threshold", /*optional=*/true, "the number of blocks with the version bit set required to activate the feature (only for \"started\" status)"},
             {RPCResult::Type::NUM, "elapsed", "the number of blocks elapsed since the beginning of the current period"},
             {RPCResult::Type::NUM, "count", "the number of blocks with the version bit set in the current period"},
@@ -4193,6 +4203,47 @@ return RPCMethod{
     };
 }
 
+static RPCMethod getblockfileinfo()
+{
+    return RPCMethod{
+            "getblockfileinfo",
+            "Retrieves information about a certain block file.",
+            {
+                {"file_number", RPCArg::Type::NUM, RPCArg::Optional::NO, "block file number"},
+            },
+            RPCResult{
+                    RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::NUM, "blocks_num", "the number of blocks stored in the file"},
+                        {RPCResult::Type::NUM, "lowest_block", "the height of the lowest block inside the file"},
+                        {RPCResult::Type::NUM, "highest_block", "the height of the highest block inside the file"},
+                        {RPCResult::Type::NUM, "data_size", "the number of used bytes in the block file"},
+                        {RPCResult::Type::NUM, "undo_size", "the number of used bytes in the undo file"},
+                    }
+            },
+            RPCExamples{ HelpExampleCli("getblockfileinfo", "0") },
+            [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
+                NodeContext& node = EnsureAnyNodeContext(request.context);
+
+                int block_num = request.params[0].getInt<int>();
+                if (block_num < 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid block number");
+
+                LOCK(::cs_main);
+                const kernel::CBlockFileInfo* info = node.chainman->m_blockman.GetBlockFileInfo(block_num);
+                if (!info) throw JSONRPCError(RPC_INVALID_PARAMETER, "block file not found");
+
+                UniValue result(UniValue::VOBJ);
+                result.pushKV("blocks_num", info->nBlocks);
+                result.pushKV("lowest_block", info->nHeightFirst);
+                result.pushKV("highest_block", info->nHeightLast);
+                result.pushKV("data_size", info->nSize);
+                result.pushKV("undo_size", info->nUndoSize);
+
+                return result;
+            }
+    };
+}
+
 static RPCMethod getblocklocations()
 {
     return RPCMethod{"getblocklocations",
@@ -4296,6 +4347,7 @@ void RegisterBlockchainRPCCommands(CRPCTable& t)
         {"blockchain", &dumptxoutset},
         {"blockchain", &loadtxoutset},
         {"blockchain", &getchainstates},
+        {"hidden", &getblockfileinfo},
         {"hidden", &invalidateblock},
         {"hidden", &reconsiderblock},
         {"blockchain", &waitfornewblock},

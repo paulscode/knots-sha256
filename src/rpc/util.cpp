@@ -773,7 +773,7 @@ std::vector<std::pair<std::string, bool>> RPCMethod::GetArgNames() const
 size_t RPCMethod::GetParamIndex(std::string_view key) const
 {
     auto it{std::find_if(
-        m_args.begin(), m_args.end(), [&key](const auto& arg) { return arg.GetName() == key;}
+        m_args.begin(), m_args.end(), [&key](const auto& arg) { return arg.GetFirstName() == key;}
     )};
 
     CHECK_NONFATAL(it != m_args.end());  // TODO: ideally this is checked at compile time
@@ -1425,6 +1425,23 @@ std::vector<uint32_t> ParsePathBIP32(const std::string& path)
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid BIP32 keypath");
     }
     return out;
+}
+
+std::vector<CTransactionRef> ParseTransactionVector(const UniValue txns_param)
+{
+    std::vector<CTransactionRef> txns;
+    const UniValue& raw_transactions = txns_param.get_array();
+    txns.reserve(raw_transactions.size());
+
+    for (const auto& rawtx : raw_transactions.getValues()) {
+        CMutableTransaction mtx;
+        if (!DecodeHexTx(mtx, rawtx.get_str())) {
+            throw JSONRPCError(RPC_DESERIALIZATION_ERROR,
+                               "TX decode failed: " + rawtx.get_str() + " Make sure the prev tx has at least one input.");
+        }
+        txns.emplace_back(MakeTransactionRef(std::move(mtx)));
+    }
+    return txns;
 }
 
 /** Convert a vector of bilingual strings to a UniValue::VARR containing their original untranslated values. */
