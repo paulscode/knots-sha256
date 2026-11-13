@@ -13,6 +13,7 @@
 #include <script/script.h>
 #include <test/util/common.h>
 #include <test/util/setup_common.h>
+#include <test/util/transaction_utils.h>
 #include <test/util/txmempool.h>
 #include <validation.h>
 
@@ -20,6 +21,18 @@
 
 
 BOOST_AUTO_TEST_SUITE(txvalidation_tests)
+
+std::optional<std::pair<std::string, CTransactionRef>> SingleTRUCChecks(const CTxMemPool& pool, const CTransactionRef& ptx, const std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef>& mempool_parents, const std::set<Txid>& direct_conflicts, int64_t vsize)
+{
+    std::string dummy;
+    return SingleTRUCChecks(pool, ptx, dummy, dummy, empty_ignore_rejects, mempool_parents, direct_conflicts, vsize);
+}
+
+std::optional<std::string> PackageTRUCChecks(const CTxMemPool& pool, const CTransactionRef& ptx, int64_t vsize, const Package& package, const std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef>& mempool_parents)
+{
+    std::string dummy;
+    return PackageTRUCChecks(pool, ptx, vsize, dummy, dummy, empty_ignore_rejects, package, mempool_parents);
+}
 
 /**
  * Ensure that the mempool won't accept coinbase transactions.
