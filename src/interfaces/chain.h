@@ -15,6 +15,7 @@
 #include <util/result.h>
 #include <util/time.h>
 
+#include <any>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -405,6 +406,8 @@ class ChainClient
 {
 public:
     virtual ~ChainClient() = default;
+
+    virtual void assignContextHACK(std::any&) {};
 
     //! Register rpcs.
     virtual void registerRpcs() = 0;
