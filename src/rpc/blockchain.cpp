@@ -3,6 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <bitcoin-build-config.h> // IWYU pragma: keep
+
 #include <rpc/blockchain.h>
 #include <rpc/register.h> // IWYU pragma: associated
 
@@ -28,6 +30,7 @@
 #include <interfaces/mining.h>
 #include <interfaces/types.h>
 #include <kernel/coinstats.h>
+#include <key_io.h>
 #include <logging/timer.h>
 #include <net.h>
 #include <net_processing.h>
@@ -43,6 +46,7 @@
 #include <rpc/protocol.h>
 #include <rpc/rawtransaction_util.h>
 #include <rpc/request.h>
+#include <policy/settings.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
@@ -50,6 +54,7 @@
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/signingprovider.h>
+#include <script/sign.h>
 #include <serialize.h>
 #include <span.h>
 #include <streams.h>
@@ -70,6 +75,17 @@
 #include <util/string.h>
 #include <util/syserror.h>
 #include <util/time.h>
+#include <validation.h>
+
+#ifdef ENABLE_WALLET
+#include <interfaces/wallet.h>
+#include <wallet/coincontrol.h>
+#include <wallet/fees.h>
+#include <wallet/rpc/util.h>
+#include <wallet/types.h>
+#include <wallet/wallet.h>
+#endif
+
 #include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
@@ -642,6 +658,196 @@ static RPCMethod getblockhash()
     };
 }
 
+#ifdef ENABLE_WALLET
+bool FindScriptPubKey(std::atomic<int>& scan_progress, const std::atomic<bool>& should_abort, int64_t& count, CCoinsViewCursor* cursor, const std::set<CScript>& needles, std::map<COutPoint, Coin>& out_results, std::function<void()>& interruption_point);
+
+static RPCMethod sweepprivkeys()
+{
+    return RPCMethod{"sweepprivkeys",
+        "Sends bitcoins controlled by private key to specified destinations.\n",
+        {
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::NO, "",
+                {
+                    {"privkeys", RPCArg::Type::ARR, RPCArg::Optional::NO, "An array of WIF private key(s)",
+                        {
+                            {"privkey", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, ""},
+                        },
+                        },
+
+                    {"label", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Label for received bitcoins"},
+                },
+                RPCArgOptions{.oneline_description="options"}},
+        },
+        RPCResult{RPCResult::Type::STR_HEX, "", "The transaction id."},
+        RPCExamples{""},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node = EnsureAnyNodeContext(request.context);
+
+    JSONRPCRequest wallet_req = request;
+    CHECK_NONFATAL(node.wallet_loader && node.wallet_loader->context());
+    node.wallet_loader->assignContextHACK(wallet_req.context);
+    std::shared_ptr<wallet::CWallet> const wallet = wallet::GetWalletForJSONRPCRequest(wallet_req);
+    if (!wallet) return NullUniValue;
+    wallet::CWallet* const pwallet = wallet.get();
+
+    // NOTE: It isn't safe to sweep-and-send in a single action, since this would leave the send missing from the transaction history
+
+    // Parse options
+    std::set<CScript> needles;
+    wallet::CCoinControl coin_control;
+    FlatSigningProvider temp_keystore;
+    CMutableTransaction tx;
+    std::string label;
+    CAmount total_in = 0;
+    for (const std::string& optname : request.params[0].getKeys()) {
+        const UniValue& optval = request.params[0][optname];
+        if (optname == "privkeys") {
+            const UniValue& privkeys_a = optval.get_array();
+            for (size_t privkey_i = 0; privkey_i < privkeys_a.size(); ++privkey_i) {
+                const UniValue& privkey_wif = privkeys_a[privkey_i];
+                std::string wif_secret = privkey_wif.get_str();
+                CKey key = DecodeSecret(wif_secret);
+                if (!key.IsValid()) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid private key encoding");
+                CPubKey pubkey = key.GetPubKey();
+                CHECK_NONFATAL(key.VerifyPubKey(pubkey));
+
+                temp_keystore.keys[pubkey.GetID()] = key;
+                temp_keystore.pubkeys[pubkey.GetID()] = pubkey;
+                CKeyID address = pubkey.GetID();
+                CScript script = GetScriptForDestination(PKHash(address));
+                if (!script.empty()) {
+                    needles.insert(script);
+                }
+                script = GetScriptForRawPubKey(pubkey);
+                if (!script.empty()) {
+                    needles.insert(script);
+                }
+                if (pubkey.IsCompressed()) {
+                    CScript p2wpkh_script = GetScriptForDestination(WitnessV0KeyHash(pubkey));
+                    if (!p2wpkh_script.empty()) {
+                        needles.insert(p2wpkh_script);
+                    }
+                    script = GetScriptForDestination(ScriptHash(p2wpkh_script));
+                    if (!script.empty()) {
+                        needles.insert(script);
+                        temp_keystore.scripts[CScriptID(p2wpkh_script)] = p2wpkh_script;
+                    }
+                    auto tap_tweak = XOnlyPubKey(pubkey).CreateTapTweak(nullptr);
+                    if (tap_tweak) {
+                        WitnessV1Taproot output_key{tap_tweak->first};
+                        needles.insert(GetScriptForDestination(output_key));
+                        TaprootBuilder builder;
+                        builder.Finalize(XOnlyPubKey(pubkey));
+                        temp_keystore.tr_trees[output_key] = builder;
+                    }
+                }
+            }
+        } else if (optname == "label") {
+            label = wallet::LabelFromValue(optval.get_str());
+        } else {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Unrecognised option '%s'", optname));
+        }
+    }
+
+    std::unique_ptr<wallet::ReserveDestination> reservedest;
+    CTxDestination dest;
+    {
+        LOCK(pwallet->cs_wallet);
+
+        // Reserve the key we will be using
+        reservedest.reset(new wallet::ReserveDestination(pwallet, pwallet->TransactionChangeType(pwallet->m_default_change_type, std::vector<wallet::CRecipient>())));
+        auto op_dest = reservedest->GetReservedDestination(false);
+        if (!op_dest) {
+            throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, util::ErrorString(op_dest).original);
+        }
+        dest = *op_dest;
+    }
+
+    // Scan UTXO set for inputs
+    std::vector<CTxOut> input_txos;
+    {
+        // Collect all possible inputs
+        std::map<COutPoint, Coin> coins;
+        {
+            std::unique_ptr<CCoinsViewCursor> pcursor;
+            {
+                ChainstateManager& chainman = EnsureAnyChainman(request.context);
+                LOCK(cs_main);
+                if (node.mempool) {
+                    node.mempool->FindScriptPubKey(needles, coins);
+                }
+                Chainstate& active_chainstate = chainman.ActiveChainstate();
+                active_chainstate.ForceFlushStateToDisk();
+                pcursor = std::unique_ptr<CCoinsViewCursor>(active_chainstate.CoinsDB().Cursor());
+                CHECK_NONFATAL(pcursor);
+            }
+            std::atomic<int> scan_progress;
+            const std::atomic<bool> should_abort{false};
+            int64_t count;
+            if (!FindScriptPubKey(scan_progress, should_abort, count, pcursor.get(), needles, coins, node.rpc_interruption_point)) {
+                throw JSONRPCError(RPC_MISC_ERROR, "UTXO FindScriptPubKey failed");
+            }
+        }
+
+        // Add them as inputs to the transaction, and count the total value
+        for (auto& it : coins) {
+            const COutPoint& outpoint = it.first;
+            const Coin& coin = it.second;
+            const CTxOut& txo = coin.out;
+            tx.vin.emplace_back(outpoint.hash, outpoint.n);
+            input_txos.push_back(txo);
+            total_in += txo.nValue;
+        }
+    }
+
+    if (total_in == 0) {
+        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "No value to sweep");
+    }
+
+    tx.vout.emplace_back(total_in, GetScriptForDestination(dest));
+
+    while (true) {
+        if (IsDust(tx.vout[0], pwallet->chain().relayDustFee())) {
+            throw JSONRPCError(RPC_VERIFY_REJECTED, "Swept value would be dust");
+        }
+        PrecomputedTransactionData txdata;
+        txdata.Init(tx, std::vector<CTxOut>(input_txos.begin(), input_txos.end()), true);
+        for (size_t input_index = 0; input_index < tx.vin.size(); ++input_index) {
+            const auto& utxo = input_txos[input_index];
+            SignatureData sig_data;
+            MutableTransactionSignatureCreator creator(tx, input_index, utxo.nValue, &txdata, {.sighash_type = SIGHASH_ALL});
+            if (!ProduceSignature(temp_keystore, creator, utxo.scriptPubKey, sig_data)) {
+                throw JSONRPCError(RPC_MISC_ERROR, "Failed to sign");
+            }
+            UpdateInput(tx.vin.at(input_index), sig_data);
+        }
+        int64_t tx_vsize = GetVirtualTransactionSize(CTransaction(tx));
+        CAmount fee_needed = GetMinimumFee(GetMinimumFeeRate(*wallet, coin_control), tx_vsize);
+        const CAmount total_out = tx.vout[0].nValue;
+        if (fee_needed <= total_in - total_out) {
+            break;
+        }
+        tx.vout[0].nValue = total_in - fee_needed;
+    }
+
+    CTransactionRef final_tx(MakeTransactionRef(std::move(tx)));
+    pwallet->SetAddressBook(dest, label, wallet::AddressPurpose::RECEIVE);
+
+    std::string err_string;
+    const node::TransactionError err = BroadcastTransaction(node, final_tx, err_string, pwallet->m_default_max_tx_fee, node::TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL, /*wait_callback=*/true);
+    if (node::TransactionError::OK != err) {
+        pwallet->DelAddressBook(dest);
+        throw JSONRPCTransactionError(err, err_string);
+    }
+    reservedest->KeepDestination();
+
+    return final_tx->GetHash().GetHex();
+},
+    };
+}
+#endif // ENABLE_WALLET
+
 static RPCMethod getblockheader()
 {
     return RPCMethod{
@@ -949,6 +1155,167 @@ std::optional<int> GetPruneHeight(const BlockManager& blockman, const CChain& ch
 
     // Block before the first unpruned block is the last pruned block.
     return CHECK_NONFATAL(first_unpruned.pprev)->nHeight;
+}
+
+static RPCMethod listprunelocks()
+{
+    return RPCMethod{"listprunelocks",
+        "Returns a list of pruning locks.",
+        {},
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::ARR, "prune_locks", "",
+                {
+                    {RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::STR, "id", "A unique identifier for the lock"},
+                        {RPCResult::Type::STR, "desc", "A description of the lock's purpose"},
+                        {RPCResult::Type::ARR_FIXED, "height", "Range of blocks prevented from being pruned",
+                        {
+                            {RPCResult::Type::NUM, "height_first", "Height of first block that may not be pruned"},
+                            {RPCResult::Type::NUM, "height_last", "Height of last block that may not be pruned (omitted if unbounded)"},
+                        }},
+                        {RPCResult::Type::BOOL, "temporary", "Indicates the lock will not remain after a restart of the node"},
+                    }},
+                }},
+            }
+        },
+        RPCExamples{
+            HelpExampleCli("listprunelocks", "")
+          + HelpExampleRpc("listprunelocks", "")
+        },
+    [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node = EnsureAnyNodeContext(request.context);
+    ChainstateManager& chainman = EnsureChainman(node);
+    Chainstate& active_chainstate = chainman.ActiveChainstate();
+
+    UniValue locks_uv(UniValue::VARR);
+    {
+        LOCK(::cs_main);
+        BlockManager * const blockman = &active_chainstate.m_blockman;
+        for (const auto& prune_lock : blockman->m_prune_locks) {
+            UniValue prune_lock_uv(UniValue::VOBJ);
+            const auto& lock_info = prune_lock.second;
+            prune_lock_uv.pushKV("id", prune_lock.first);
+            prune_lock_uv.pushKV("desc", lock_info.desc);
+            UniValue heights_uv(UniValue::VARR);
+            heights_uv.push_back(lock_info.height_first);
+            if (lock_info.height_last < std::numeric_limits<uint64_t>::max()) {
+                heights_uv.push_back(lock_info.height_last);
+            }
+            prune_lock_uv.pushKV("height", heights_uv);
+            prune_lock_uv.pushKV("temporary", lock_info.temporary);
+            locks_uv.push_back(prune_lock_uv);
+        }
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("prune_locks", locks_uv);
+    return result;
+},
+    };
+}
+
+static RPCMethod setprunelock()
+{
+    return RPCMethod{"setprunelock",
+        "Manipulate pruning locks.",
+        {
+            {"id", RPCArg::Type::STR, RPCArg::Optional::NO, "The unique id of the manipulated prune lock (or \"*\" if deleting all)"},
+            {"lock_info", RPCArg::Type::OBJ, RPCArg::Optional::NO, "An object describing the desired lock",
+                {
+                    {"desc", RPCArg::Type::STR, RPCArg::Optional::NO, "Description of the lock"},
+                    {"height", RPCArg::Type::RANGE, RPCArg::DefaultHint("deletes the lock"), "The range of block heights to prevent pruning"},
+                    {"sync", RPCArg::Type::BOOL, RPCArg::Default(false), "If true, success indicates the lock change was stored to disk (if non-temporary). If false, it is possible for a subsequent node crash to lose the lock."},
+                    {"temporary", RPCArg::Type::BOOL, RPCArg::Default(false), "If true, the lock will not persist across node restart."},
+                },
+            },
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::BOOL, "success", "Whether the change was successful"},
+            }},
+        RPCExamples{
+            HelpExampleCli("setprunelock", "\"test\" \"{\\\"desc\\\": \\\"Just a test\\\", \\\"height\\\": [0,100]}\"")
+          + HelpExampleCli("setprunelock", "\"test-2\" \"{\\\"desc\\\": \\\"Second RPC-created prunelock test\\\", \\\"height\\\": [100]}\"")
+          + HelpExampleRpc("setprunelock", "\"test\", {\"desc\": \"Just a test\", \"height\": [0,100]}")
+        },
+    [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node = EnsureAnyNodeContext(request.context);
+    ChainstateManager& chainman = EnsureChainman(node);
+    Chainstate& active_chainstate = chainman.ActiveChainstate();
+
+    const auto& lock_info_json = request.params[1];
+    RPCTypeCheckObj(lock_info_json,
+        {
+            {"desc", UniValueType(UniValue::VSTR)},
+            {"height", UniValueType()}, // will be checked below
+            {"sync", UniValueType(UniValue::VBOOL)},
+            {"temporary", UniValueType(UniValue::VBOOL)},
+        },
+        /*fAllowNull=*/ true, /*fStrict=*/ true);
+
+    const auto& lockid = request.params[0].get_str();
+
+    node::PruneLockInfo lock_info;
+
+    auto height_param = lock_info_json["height"];
+    if (!height_param.isArray()) {
+        UniValue new_height_param(UniValue::VARR);
+        new_height_param.push_back(std::move(height_param));
+        height_param = std::move(new_height_param);
+    }
+    bool success;
+    if (height_param[0].isNull() && height_param[1].isNull()) {
+        // Delete
+        LOCK(::cs_main);
+        BlockManager * const blockman = &active_chainstate.m_blockman;
+        if (lockid == "*") {
+            // Delete all
+            success = true;
+            std::vector<std::string> all_ids;
+            all_ids.reserve(blockman->m_prune_locks.size());
+            for (const auto& prune_lock : blockman->m_prune_locks) {
+                all_ids.push_back(prune_lock.first);
+            }
+            for (auto& lockid : all_ids) {
+                success |= blockman->DeletePruneLock(lockid);
+            }
+        } else {
+            success = blockman->PruneLockExists(lockid) && blockman->DeletePruneLock(lockid);
+        }
+    } else {
+        if (lockid == "*") throw JSONRPCError(RPC_INVALID_PARAMETER, "id \"*\" only makes sense when deleting");
+        if (!height_param[0].isNum()) throw JSONRPCError(RPC_TYPE_ERROR, "Invalid start height");
+        lock_info.height_first = height_param[0].getInt<uint64_t>();
+        if (!height_param[1].isNull()) {
+            if (!height_param[1].isNum()) throw JSONRPCError(RPC_TYPE_ERROR, "Invalid end height");
+            lock_info.height_last = height_param[1].getInt<uint64_t>();
+        }
+        lock_info.desc = lock_info_json["desc"].get_str();
+        if (lock_info_json["temporary"].isNull()) {
+            lock_info.temporary = false;
+        } else {
+            lock_info.temporary = lock_info_json["temporary"].get_bool();
+        }
+        bool sync = false;
+        if (!lock_info_json["sync"].isNull()) {
+            sync = lock_info_json["sync"].get_bool();
+        }
+        LOCK(::cs_main);
+        BlockManager * const blockman = &active_chainstate.m_blockman;
+        success = blockman->UpdatePruneLock(lockid, lock_info, sync);
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("success", success);
+    return result;
+},
+    };
 }
 
 static RPCMethod pruneblockchain()
@@ -1327,6 +1694,69 @@ static RPCMethod verifychain()
     Chainstate& active_chainstate = chainman.ActiveChainstate();
     return CVerifyDB(chainman.GetNotifications()).VerifyDB(
                active_chainstate, chainman.GetParams().GetConsensus(), active_chainstate.CoinsTip(), check_level, check_depth) == VerifyDBResult::SUCCESS;
+},
+    };
+}
+
+static RPCMethod scriptthreadsinfo()
+{
+    return RPCMethod{"scriptthreadsinfo",
+                "Show information about the script verification threads.\n",
+                {},
+                RPCResult{
+                    RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::BOOL, "enabled", "true if script verification threads are enabled (see setscriptthreadsenabled)."},
+                        {RPCResult::Type::NUM, "num_script_check_threads", "The total number of script verification threads, when enabled."},
+                    },
+                },
+                RPCExamples{
+                    HelpExampleCli("scriptthreadsinfo", "")
+            + HelpExampleRpc("scriptthreadsinfo", "")
+                },
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman = EnsureAnyChainman(request.context);
+    UniValue ret(UniValue::VOBJ);
+    size_t thread_count{chainman.m_script_check_queue_enabled ? chainman.GetCheckQueue().ThreadCount() : 0};
+    ret.pushKV("enabled", (bool)thread_count);
+    ret.pushKV("num_script_check_threads", (int64_t)thread_count + 1);
+    return ret;
+},
+    };
+}
+
+static RPCMethod setscriptthreadsenabled()
+{
+    return RPCMethod{"setscriptthreadsenabled",
+                "Disable/enable script verification threads, thereby reducing CPU usage on multicore systems on demand.\n"
+                "Disabling script verification threads may result in a significant slow-down during synchronisation.\n"
+                "Has no effect on single core machines or if started with -par=<-<numcores>\n",
+                {
+                    {"state", RPCArg::Type::BOOL, RPCArg::Optional::NO, "false if script verification threads should be disabled (true for re-enabling)"},
+                },
+                RPCResult{RPCResult::Type::NONE, "", ""},
+                RPCExamples{
+                    HelpExampleCli("setscriptthreadsenabled", "false")
+            + HelpExampleRpc("setscriptthreadsenabled", "false")
+                },
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman = EnsureAnyChainman(request.context);
+    LOCK(cs_main);
+
+    const bool parallel_script_checks{request.params[0].get_bool()};
+    if (parallel_script_checks) {
+        if (!chainman.GetCheckQueue().HasThreads()) {
+            throw JSONRPCError(RPC_MISC_ERROR, "Script verification threads are disabled (single core machine or -par=<-<numcores>)");
+        }
+
+        chainman.m_script_check_queue_enabled = true;
+    } else {
+        chainman.m_script_check_queue_enabled = false;
+    }
+
+    return NullUniValue;
 },
     };
 }
@@ -2256,7 +2686,6 @@ static RPCMethod getblockstats()
     };
 }
 
-namespace {
 //! Search for a given set of pubkey scripts
 bool FindScriptPubKey(std::atomic<int>& scan_progress, const std::atomic<bool>& should_abort, int64_t& count, CCoinsViewCursor* cursor, const std::set<CScript>& needles, std::map<COutPoint, Coin>& out_results, std::function<void()>& interruption_point)
 {
@@ -2286,7 +2715,6 @@ bool FindScriptPubKey(std::atomic<int>& scan_progress, const std::atomic<bool>& 
     scan_progress = 100;
     return true;
 }
-} // namespace
 
 /** RAII object to prevent concurrency issue when scanning the txout set */
 static std::atomic<int> g_scan_progress;
@@ -3007,7 +3435,7 @@ static RPCMethod getblockfilter()
         "Retrieve a BIP 157 content filter for a particular block.\n",
                 {
                     {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The hash of the block"},
-                    {"filtertype", RPCArg::Type::STR, RPCArg::Default{BlockFilterTypeName(BlockFilterType::BASIC)}, "The type name of the filter"},
+                    {"filtertype", RPCArg::Type::STR, RPCArg::Default{BlockFilterTypeName(BlockFilterType::BASIC)}, "The type name of the filter, values: " + ListBlockFilterTypes()},
                 },
                 RPCResult{
                     RPCResult::Type::OBJ, "", "",
@@ -3089,7 +3517,7 @@ public:
     TemporaryPruneLock(BlockManager& blockman, int height) : m_blockman(blockman)
     {
         LOCK(::cs_main);
-        m_blockman.UpdatePruneLock(LOCK_NAME, {height});
+        m_blockman.UpdatePruneLock(LOCK_NAME, {.desc = "dumptxoutset rollback", .height_first = static_cast<uint64_t>(height)});
         LogDebug(BCLog::PRUNE, "dumptxoutset: registered prune lock at height %d", height);
     }
     ~TemporaryPruneLock()
@@ -3762,6 +4190,77 @@ return RPCMethod{
     };
 }
 
+static RPCMethod getblocklocations()
+{
+    return RPCMethod{"getblocklocations",
+                "EXPERIMENTAL warning: this call may be removed or changed in future releases."
+                "\nReturns a JSON for the file system location of 'blockhash' block and undo data.\n"
+                "\nIt is possible to return also the locations of previous blocks, by specifying 'nblocks' > 1.\n",
+                {
+                    {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The block hash"},
+                    {"nblocks", RPCArg::Type::NUM, RPCArg::Optional::NO, "Maximum number locations to return (up to genesis block)"},
+                },
+                {
+                    RPCResult{
+                        RPCResult::Type::ARR, "", "",
+                        {
+                            {RPCResult::Type::OBJ, "", "",
+                            {
+                                {RPCResult::Type::NUM, "file", "blk*.dat/rev*.dat file index"},
+                                {RPCResult::Type::NUM, "data", "block data file offset"},
+                                {RPCResult::Type::NUM, "undo", /*optional=*/true, "undo data file offset (if exists)"},
+                                {RPCResult::Type::STR_HEX, "prev", "previous block hash"},
+                            }},
+                        }
+                    },
+                },
+                RPCExamples{
+                    HelpExampleCli("getblocklocations", "\"00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09\" 10")
+                },
+                [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
+
+    ChainstateManager& chainman = EnsureAnyChainman(request.context);
+    if (chainman.m_blockman.IsPruneMode()) {
+        throw JSONRPCError(RPC_MISC_ERROR, "Block locations are not available in prune mode");
+    }
+
+    uint256 hash(ParseHashV(request.params[0], "blockhash"));
+    size_t nblocks = request.params[1].getInt<size_t>();
+
+    const CBlockIndex* pblockindex = WITH_LOCK(cs_main, return chainman.m_blockman.LookupBlockIndex(hash));
+    if (!pblockindex) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+    }
+
+    UniValue result(UniValue::VARR);
+    do {
+        int64_t file_num;
+        uint64_t data_pos, undo_pos;
+        {
+            LOCK(::cs_main);
+            file_num = pblockindex->nFile;
+            data_pos = pblockindex->nDataPos;
+            undo_pos = pblockindex->nUndoPos;
+        }
+        UniValue location(UniValue::VOBJ);
+        location.pushKV("file", file_num);
+        location.pushKV("data", data_pos);
+        if (undo_pos) {
+            location.pushKV("undo", undo_pos);
+        }
+        if (pblockindex->pprev) {
+            location.pushKV("prev", pblockindex->pprev->GetBlockHash().GetHex());
+        } else {
+            location.pushKV("prev", uint256().GetHex());
+        }
+        result.push_back(location);
+        pblockindex = pblockindex->pprev;
+    } while (result.size() < nblocks && pblockindex);
+    return result;
+},
+    };
+}
+
 
 void RegisterBlockchainRPCCommands(CRPCTable& t)
 {
@@ -3780,8 +4279,12 @@ void RegisterBlockchainRPCCommands(CRPCTable& t)
         {"blockchain", &getdeploymentinfo},
         {"blockchain", &gettxout},
         {"blockchain", &gettxoutsetinfo},
+        {"blockchain", &listprunelocks},
+        {"blockchain", &setprunelock},
         {"blockchain", &pruneblockchain},
         {"blockchain", &verifychain},
+        {"blockchain", &scriptthreadsinfo},
+        {"blockchain", &setscriptthreadsenabled},
         {"blockchain", &preciousblock},
         {"blockchain", &scantxoutset},
         {"blockchain", &scanblocks},
@@ -3796,6 +4299,11 @@ void RegisterBlockchainRPCCommands(CRPCTable& t)
         {"blockchain", &waitforblock},
         {"blockchain", &waitforblockheight},
         {"hidden", &syncwithvalidationinterfacequeue},
+        {"hidden", &getblocklocations},
+
+#ifdef ENABLE_WALLET
+        {"wallet", &sweepprivkeys},
+#endif
     };
     for (const auto& c : commands) {
         t.appendCommand(c.name, &c);
