@@ -388,6 +388,7 @@ BASE_SCRIPTS = [
     'interface_gui.py',
     'feature_anchors.py',
     'mempool_datacarrier.py',
+    'mempool_datacarriercost_mining.py',
     'feature_coinstatsindex.py',
     'feature_coinstatsindex_compatibility.py',
     'wallet_orphanedreward.py',
