@@ -15,6 +15,7 @@
 #include <qt/clientmodel.h>
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
+#include <qt/pairingpage.h>
 #include <qt/peertablesortproxy.h>
 #include <qt/platformstyle.h>
 #ifdef ENABLE_WALLET
@@ -32,8 +33,11 @@
 
 #include <QAbstractButton>
 #include <QAbstractItemModel>
+#include <QColor>
 #include <QDateTime>
+#include <QEvent>
 #include <QFont>
+#include <QFontMetrics>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLatin1String>
@@ -43,6 +47,7 @@
 #include <QScreen>
 #include <QScrollBar>
 #include <QSettings>
+#include <QShortcut>
 #include <QString>
 #include <QStringList>
 #include <QStyledItemDelegate>
@@ -50,6 +55,7 @@
 #include <QTimer>
 #include <QVariant>
 
+#include <cassert>
 #include <chrono>
 
 using util::Join;
@@ -70,6 +76,16 @@ const struct {
     {nullptr, nullptr}
 };
 
+static const RPCConsole::ThemeColors LIGHT_THEME_COLORS = {
+    .warning = QColor("#FF0000"),
+    .userinput = QColor("#007D32")
+};
+
+static const RPCConsole::ThemeColors DARK_THEME_COLORS = {
+    .warning = QColor("#FF8080"),
+    .userinput = QColor("#45DEB5")
+};
+
 namespace {
 
 // don't add private key handling cmd's to the history
@@ -79,6 +95,7 @@ const QStringList historyFilter = QStringList()
     << "migratewallet"
     << "signmessagewithprivkey"
     << "signrawtransactionwithkey"
+    << "sweepprivkeys"
     << "walletpassphrase"
     << "walletpassphrasechange"
     << "encryptwallet";
@@ -448,6 +465,13 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
     platformStyle(_platformStyle)
 {
     ui->setupUi(this);
+    updateThemeColors();
+
+    // Default tabs are identified by their UI index
+    for (int i = ui->tabWidget->count(); i--; ) {
+        m_tabs[TabTypes(i)] = ui->tabWidget->widget(i);
+    }
+
     QSettings settings;
 #ifdef ENABLE_WALLET
     if (WalletModel::isWalletEnabled()) {
@@ -558,6 +582,8 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
 
     GUIUtil::handleCloseWindowShortcut(this);
 
+    QObject::connect(new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), ui->tab_console), &QShortcut::activated, this, &QWidget::close);
+
     updateWindowTitle();
 }
 
@@ -641,6 +667,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
     }
 
     ui->trafficGraph->setClientModel(model);
+    if (m_tab_pairing) m_tab_pairing->setClientModel(model);
     if (model && clientModel->getPeerTableModel() && clientModel->getBanTableModel()) {
         // Keep up to date with client
         setNumConnections(model->getNumConnections());
@@ -664,6 +691,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         });
 
         // set up peer table
+        clientModel->getPeerTableModel()->updatePalette();
         ui->peerWidget->setModel(model->peerTableSortProxy());
         ui->peerWidget->verticalHeader()->hide();
         ui->peerWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -671,11 +699,19 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         ui->peerWidget->setContextMenuPolicy(Qt::CustomContextMenu);
 
         if (!ui->peerWidget->horizontalHeader()->restoreState(m_peer_widget_header_state)) {
+            const QFontMetrics fm = ui->peerWidget->fontMetrics();
+            ui->peerWidget->setColumnWidth(PeerTableModel::NetNodeId, GUIUtil::TextWidth(fm, QStringLiteral("99999")));
+            ui->peerWidget->setColumnWidth(PeerTableModel::Age, GUIUtil::TextWidth(fm, GUIUtil::FormatPeerAge(NodeClock::now() - std::chrono::hours{23976 /* 999 days */})));
+            ui->peerWidget->setColumnWidth(PeerTableModel::Direction, DIRECTION_COLUMN_WIDTH);
             ui->peerWidget->setColumnWidth(PeerTableModel::Address, ADDRESS_COLUMN_WIDTH);
+            ui->peerWidget->setColumnWidth(PeerTableModel::ConnectionType, GUIUtil::TextWidth(fm, GUIUtil::ConnectionTypeToQString(ConnectionType::ADDR_FETCH /* TODO: Find the WIDEST string? */, /*prepend_direction=*/false)));
+            const auto bytesize_width = GUIUtil::TextWidth(fm, GUIUtil::formatBytes(999'000'000'000) + QStringLiteral("xx"));
+            ui->peerWidget->setColumnWidth(PeerTableModel::Network, GUIUtil::TextWidth(fm, qvariant_cast<QString>(model->peerTableSortProxy()->headerData(PeerTableModel::ColumnIndex::Network, Qt::Horizontal, Qt::DisplayRole)) /* TODO: Find the WIDEST string? */ + QStringLiteral("x")));
             ui->peerWidget->setColumnWidth(PeerTableModel::Subversion, SUBVERSION_COLUMN_WIDTH);
             ui->peerWidget->setColumnWidth(PeerTableModel::Ping, PING_COLUMN_WIDTH);
+            ui->peerWidget->setColumnWidth(PeerTableModel::Sent, bytesize_width);
+            ui->peerWidget->setColumnWidth(PeerTableModel::Received, bytesize_width);
         }
-        ui->peerWidget->horizontalHeader()->setSectionResizeMode(PeerTableModel::Age, QHeaderView::ResizeToContents);
         ui->peerWidget->horizontalHeader()->setStretchLastSection(true);
         ui->peerWidget->setItemDelegateForColumn(PeerTableModel::NetNodeId, new PeerIdViewDelegate(this));
         ui->peerWidget->setAlternatingRowColors(m_alternating_row_colors);
@@ -695,7 +731,10 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         connect(ui->peerWidget, &QTableView::customContextMenuRequested, this, &RPCConsole::showPeersTableContextMenu);
 
         // peer table signal handling - update peer details when selecting new node
-        connect(ui->peerWidget->selectionModel(), &QItemSelectionModel::selectionChanged, this, &RPCConsole::updateDetailWidget);
+        connect(ui->peerWidget->selectionModel(), &QItemSelectionModel::selectionChanged, [this] {
+            resetDetailWidget();
+            updateDetailWidget();
+        });
         connect(model->getPeerTableModel(), &QAbstractItemModel::dataChanged, [this] { updateDetailWidget(); });
 
         // set up ban table
@@ -709,7 +748,6 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
             ui->banlistWidget->setColumnWidth(BanTableModel::Address, BANSUBNET_COLUMN_WIDTH);
             ui->banlistWidget->setColumnWidth(BanTableModel::Bantime, BANTIME_COLUMN_WIDTH);
         }
-        ui->banlistWidget->horizontalHeader()->setSectionResizeMode(BanTableModel::Address, QHeaderView::ResizeToContents);
         ui->banlistWidget->horizontalHeader()->setStretchLastSection(true);
         ui->banlistWidget->setAlternatingRowColors(m_alternating_row_colors);
 
@@ -765,6 +803,15 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         thread.quit();
         thread.wait();
     }
+}
+
+void RPCConsole::addPairingTab()
+{
+    assert(!m_tab_pairing);
+    m_tab_pairing = new PairingPage(this);
+    ui->tabWidget->insertTab(1, m_tab_pairing, tr("&Pairing"));
+    m_tabs[TabTypes::PAIRING] = m_tab_pairing;
+    if (clientModel) m_tab_pairing->setClientModel(clientModel);
 }
 
 #ifdef ENABLE_WALLET
@@ -860,23 +907,8 @@ void RPCConsole::clear(bool keep_prompt)
                     platformStyle->SingleColorImage(ICON_MAPPING[i].source).scaled(QSize(consoleFontSize*2, consoleFontSize*2), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
     }
 
-    // Set default style sheet
-#ifdef Q_OS_MACOS
-    QFontInfo fixedFontInfo(GUIUtil::fixedPitchFont(/*use_embedded_font=*/true));
-#else
-    QFontInfo fixedFontInfo(GUIUtil::fixedPitchFont());
-#endif
-    ui->messagesWidget->document()->setDefaultStyleSheet(
-        QString(
-                "table { }"
-                "td.time { color: #808080; font-size: %2; padding-top: 3px; } "
-                "td.message { font-family: %1; font-size: %2; white-space:pre-wrap; } "
-                "td.cmd-request { color: #006060; } "
-                "td.cmd-error { color: red; } "
-                ".secwarning { color: red; }"
-                "b { color: #006060; } "
-            ).arg(fixedFontInfo.family(), QString("%1pt").arg(consoleFontSize))
-        );
+    // set default stylesheet
+    updateConsoleStyleSheet();
 
     static const QString welcome_message =
         /*: RPC console welcome message.
@@ -924,6 +956,12 @@ void RPCConsole::changeEvent(QEvent* e)
                 QUrl(ICON_MAPPING[i].url),
                 platformStyle->SingleColorImage(ICON_MAPPING[i].source).scaled(QSize(consoleFontSize * 2, consoleFontSize * 2), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
         }
+
+        if (clientModel && clientModel->getPeerTableModel()) {
+            clientModel->getPeerTableModel()->updatePalette();
+        }
+
+        updateThemeColors();
     }
 
     QWidget::changeEvent(e);
@@ -1160,6 +1198,15 @@ void RPCConsole::updateTrafficStats(quint64 totalBytesIn, quint64 totalBytesOut)
     ui->lblBytesOut->setText(GUIUtil::formatBytes(totalBytesOut));
 }
 
+void RPCConsole::resetDetailWidget()
+{
+    for (int row = 0; QLayoutItem * const item = ui->peerDetailsGrid->itemAtPosition(row, 1); ++row) {
+        QLabel * const value_label = qobject_cast<QLabel*>(item->widget());
+        if (!value_label) continue;
+        value_label->setText(ts.na);
+    }
+}
+
 void RPCConsole::updateDetailWidget()
 {
     const QList<QModelIndex> selected_peers = GUIUtil::getEntryData(ui->peerWidget, PeerTableModel::NetNodeId);
@@ -1192,7 +1239,8 @@ void RPCConsole::updateDetailWidget()
     ui->peerPingTime->setText(GUIUtil::formatPingTime(stats->nodeStats.m_last_ping_time));
     ui->peerMinPing->setText(GUIUtil::formatPingTime(stats->nodeStats.m_min_ping_time));
     ui->peerVersion->setText(stats->nodeStats.nVersion ? QString::number(stats->nodeStats.nVersion) : ts.na);
-    ui->peerSubversion->setText(!stats->nodeStats.cleanSubVer.empty() ? QString::fromStdString(stats->nodeStats.cleanSubVer) : ts.na);
+    // Once the version is known, show the subversion as it is (a genuinely blank one stays blank)
+    ui->peerSubversion->setText(stats->nodeStats.nVersion ? QString::fromStdString(stats->nodeStats.cleanSubVer) : ts.na);
     ui->peerConnectionType->setText(GUIUtil::ConnectionTypeToQString(stats->nodeStats.m_conn_type, /*prepend_direction=*/true));
     ui->peerTransportType->setText(QString::fromStdString(TransportTypeAsString(stats->nodeStats.m_transport_type)));
     if (stats->nodeStats.m_transport_type == TransportProtocolType::V2) {
@@ -1205,7 +1253,7 @@ void RPCConsole::updateDetailWidget()
     }
     ui->peerNetwork->setText(GUIUtil::NetworkToQString(stats->nodeStats.m_network));
     if (stats->nodeStats.m_permission_flags == NetPermissionFlags::None) {
-        ui->peerPermissions->setText(ts.na);
+        ui->peerPermissions->setText(ts.no_permissions);
     } else {
         QStringList permissions;
         for (const auto& permission : NetPermissions::ToStrings(stats->nodeStats.m_permission_flags)) {
@@ -1354,14 +1402,34 @@ void RPCConsole::showOrHideBanTableIfRequired()
     ui->banHeading->setVisible(visible);
 }
 
+std::vector<RPCConsole::TabTypes> RPCConsole::tabs() const
+{
+    std::vector<TabTypes> ret;
+    ret.reserve(m_tabs.size());
+
+    std::map<QWidget*, TabTypes> tabtype_map;
+    for (const auto& tab : m_tabs) {
+        tabtype_map[tab.second] = tab.first;
+    }
+
+    for (int i = 0; i < ui->tabWidget->count(); ++i) {
+        auto tabtype = tabtype_map.find(ui->tabWidget->widget(i));
+        if (tabtype != tabtype_map.end()) {
+            ret.push_back(tabtype->second);
+        }
+    }
+    return ret;
+}
+
 void RPCConsole::setTabFocus(enum TabTypes tabType)
 {
-    ui->tabWidget->setCurrentIndex(int(tabType));
+    ui->tabWidget->setCurrentWidget(m_tabs[tabType]);
 }
 
 QString RPCConsole::tabTitle(TabTypes tab_type) const
 {
-    return ui->tabWidget->tabText(int(tab_type));
+    const int tab_index = ui->tabWidget->indexOf(m_tabs.at(tab_type));
+    return ui->tabWidget->tabText(tab_index);
 }
 
 QKeySequence RPCConsole::tabShortcut(TabTypes tab_type) const
@@ -1370,6 +1438,7 @@ QKeySequence RPCConsole::tabShortcut(TabTypes tab_type) const
     case TabTypes::INFO: return QKeySequence(tr("Ctrl+I"));
     case TabTypes::CONSOLE: return QKeySequence(tr("Ctrl+T"));
     case TabTypes::GRAPH: return QKeySequence(tr("Ctrl+N"));
+    case TabTypes::PAIRING: return QKeySequence(QStringLiteral("Alt+5"));  // Only used in disablewallet mode - matches wallet GUI's pairing shortcut
     case TabTypes::PEERS: return QKeySequence(tr("Ctrl+P"));
     } // no default case, so the compiler can warn about missing cases
 
@@ -1390,4 +1459,68 @@ void RPCConsole::updateWindowTitle()
     const QString chainType = QString::fromStdString(Params().GetChainTypeString());
     const QString title = tr("Node window - [%1]").arg(chainType);
     this->setWindowTitle(title);
+}
+
+void RPCConsole::updateThemeColors()
+{
+    // Detect dark mode for color palette selection
+    const bool dark_mode = GUIUtil::isDarkMode(palette().color(backgroundRole()));
+
+    // Set theme colors pointer based on dark mode
+    m_theme_colors = dark_mode ? &DARK_THEME_COLORS : &LIGHT_THEME_COLORS;
+
+    // Update icons
+    if (platformStyle->getImagesOnButtons()) {
+        ui->openDebugLogfileButton->setIcon(platformStyle->SingleColorIcon(":/icons/export"));
+    }
+    ui->hidePeersDetailButton->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/remove")));
+
+    // Update console stylesheet with new colors
+    updateConsoleStyleSheet();
+}
+
+void RPCConsole::updateConsoleStyleSheet()
+{
+    assert(m_theme_colors);
+
+#ifdef Q_OS_MACOS
+    QFontInfo fixedFontInfo(GUIUtil::fixedPitchFont(/*use_embedded_font=*/true));
+#else
+    QFontInfo fixedFontInfo(GUIUtil::fixedPitchFont());
+#endif
+    ui->messagesWidget->document()->setDefaultStyleSheet(
+        QString(
+                "table { }"
+                "td.time { color: #808080; font-size: %2; padding-top: 3px; } "
+                "td.message { font-family: %1; font-size: %2; white-space:pre-wrap; } "
+                "td.cmd-request { color: %3; } "
+                "td.cmd-error { color: %4; } "
+                ".secwarning { color: %4; }"
+                "b { color: %3; } "
+            ).arg(fixedFontInfo.family(), QString("%1pt").arg(consoleFontSize), m_theme_colors->userinput.name(), m_theme_colors->warning.name())
+        );
+
+#ifdef Q_OS_MACOS
+    // On macOS, updating the stylesheet doesn't affect existing HTML content
+    // So we need to manually update the HTML similar to setFontSize()
+    QString str = ui->messagesWidget->toHtml();
+
+    // Replace any theme colors with current theme colors
+    // Check both themes since we don't know which was used previously
+    for (const auto* theme : {&LIGHT_THEME_COLORS, &DARK_THEME_COLORS}) {
+        if (theme != m_theme_colors) {
+            str.replace(QString("color:%1").arg(theme->warning.name()),
+                       QString("color:%1").arg(m_theme_colors->warning.name()));
+            str.replace(QString("color:%1").arg(theme->userinput.name()),
+                       QString("color:%1").arg(m_theme_colors->userinput.name()));
+        }
+    }
+
+    QScrollBar* scrollbar = ui->messagesWidget->verticalScrollBar();
+    int oldScrollValue = scrollbar->value();
+
+    // Set the updated HTML back
+    ui->messagesWidget->setHtml(str);
+    scrollbar->setValue(oldScrollValue);
+#endif
 }
